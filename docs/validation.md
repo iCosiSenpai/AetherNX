@@ -44,4 +44,4 @@ The initial native geometry invocation was missing the required test-executable 
 
 The pinned release assemblies and source digest changed, so the chain header is now `e25fce867fcc`. This deliberately invalidates old shader libraries: game shaders and the host must be rebuilt together on the next game build. The cleanup has not run real-game regression routes and does not establish improved game compatibility.
 
-The published branch starts with a new HorizonNative import commit rather than retaining the source project's commit authors. The previous complete history is preserved only in a local recovery bundle. Required licenses remain in the new tree.
+The published branch starts with a new HorizonNative import commit rather than retaining the source project's commit authors. The local recovery bundle, archive branch and temporary comparison copies were removed at the owner's request after the identity cleanup. The read-only external source remote and review metadata remain available for the requested monitoring. Required licenses remain in the new tree.
