@@ -27,7 +27,7 @@ enum { BLK_SHIFT = 10, BLK = 1 << BLK_SHIFT, NBLK = 256, MAX_RANGE = BLK * NBLK 
 // Ranges are rounded to host pages (16 KB) but guest memory pools are only 4 KB aligned: adjacent pools share their first / last pages, so one address can fall in several registered ranges.
 // So: "is this texture tracked" looks for a range that holds its whole span; a fault / host pre-write unprotects and stamps every range covering that page; pool destruction identifies its range by the pool's exact start mem.
 // (Previously the first range containing the address was always taken: two SMBW ASTC 6x5 textures whose pool's first page is shared with a small preceding pool were judged untracked and re-uploaded on every use, about 6 MB per frame)
-typedef struct { uintptr_t base, end, mem; _Atomic uint8_t *state; _Atomic uint64_t *gen; size_t cap; _Atomic int live; } range_t;
+typedef struct { uintptr_t base, end, mem; _Atomic uint8_t *state; _Atomic uint64_t *gen; size_t cap; _Atomic int live; _Atomic uint32_t seq; } range_t;   // seq: odd while add_range rewrites the slot
 static _Atomic(range_t *) g_blk[NBLK];
 static inline range_t *rg(int i) { return &atomic_load_explicit(&g_blk[i >> BLK_SHIFT], memory_order_acquire)[i & (BLK - 1)]; }
 static _Atomic int g_nr;
@@ -61,6 +61,18 @@ static int busy_wait(range_t *r, uintptr_t p) {
     return 1;
 }
 static int live_at(int i) { return atomic_load_explicit(&rg(i)->live, memory_order_acquire); }
+// A consistent copy of slot i for the lock-free paths (the fault handler, host pre-writes): a removed pool's slot is reused by the next pool at once, so a reader that took
+// the live flag and bounds from one pool could otherwise go on with the next pool's base and arrays, and unprotect a page of unrelated memory. The copy is taken only while
+// the slot's seq is even and unchanged; its arrays are never freed (add_range), so acting on a copy whose slot has since been removed touches only the faulting range's own pages,
+// which removal already made writable. 0: not live, or rewritten meanwhile (skipped; the reuse made its pages writable before a new range protects any)
+static int snapshot(int i, range_t *out) {
+    range_t *r = rg(i);
+    uint32_t s1 = atomic_load_explicit(&r->seq, memory_order_acquire);
+    if ((s1 & 1) || !atomic_load_explicit(&r->live, memory_order_acquire)) return 0;
+    out->base = r->base; out->end = r->end; out->mem = r->mem; out->state = r->state; out->gen = r->gen; out->cap = r->cap;
+    atomic_thread_fence(memory_order_acquire);
+    return atomic_load_explicit(&r->seq, memory_order_relaxed) == s1;
+}
 // The registered range that holds all of [a, a+len) (used for a texture's tracking / protection / dirty check)
 static range_t *find_span(uintptr_t a, size_t len) {
     int n = atomic_load(&g_nr);
@@ -93,7 +105,7 @@ static int on_fault(void *addr, int is_write, void *uc) {
     if (!is_write) return 0;
     uintptr_t a = (uintptr_t)addr; int ours = 0, n = atomic_load(&g_nr);
     for (int i = 0; i < n; i++)   // Every range sharing the page must be released: releasing only one leaves the other range's state at "protected", and later writes no longer fault and are missed
-        { range_t *r = rg(i); if (live_at(i) && a >= r->base && a < r->end) ours |= release_page(r, (a - r->base) >> g_shift, &g_faults); }
+        { range_t r; if (snapshot(i, &r) && a >= r.base && a < r.end) ours |= release_page(&r, (a - r.base) >> g_shift, &g_faults); }
     return ours;
 }
 // Unprotect pages p..q of a range with one mprotect per run of protected pages (a host write over a whole texture, e.g. WriteTexels, used to make one system call per 16 KB page:
@@ -116,10 +128,10 @@ static void prep_write(void *addr, size_t len) {
     uintptr_t a = (uintptr_t)addr, e = a + len; int n = atomic_load(&g_nr);
     if (!len) return;
     for (int i = 0; i < n; i++) {
-        range_t *r = rg(i);
-        if (!live_at(i) || e <= r->base || a >= r->end) continue;
-        uintptr_t lo = a > r->base ? a : r->base, hi = e < r->end ? e : r->end;
-        release_pages(r, (lo - r->base) >> g_shift, (hi - 1 - r->base) >> g_shift, &g_preps);
+        range_t r;
+        if (!snapshot(i, &r) || e <= r.base || a >= r.end) continue;
+        uintptr_t lo = a > r.base ? a : r.base, hi = e < r.end ? e : r.end;
+        release_pages(&r, (lo - r.base) >> g_shift, (hi - 1 - r.base) >> g_shift, &g_preps);
     }
 }
 
@@ -145,6 +157,7 @@ void nvn_dirty_add_range(const void *mem, size_t size) {
     }
     { int lv = atomic_fetch_add(&g_live, 1) + 1, pk = atomic_load(&g_live_peak); while (lv > pk && !atomic_compare_exchange_weak(&g_live_peak, &pk, lv)) {} }
     range_t *r = rg(slot);
+    atomic_fetch_add_explicit(&r->seq, 1, memory_order_acq_rel);   // odd: readers skip the slot while it is rewritten (snapshot)
     uintptr_t base = (uintptr_t)mem & ~(g_pg - 1), end = ((uintptr_t)mem + size + g_pg - 1) & ~(g_pg - 1);
     size_t np = (end - base) >> g_shift;
     _Atomic uint8_t *state = r->state;
@@ -158,6 +171,7 @@ void nvn_dirty_add_range(const void *mem, size_t size) {
         memset((void *)state, 0, np); memset((void *)gen, 0, np * sizeof *gen);
     }
     r->base = base; r->end = end; r->mem = (uintptr_t)mem; r->state = state; r->gen = gen;
+    atomic_fetch_add_explicit(&r->seq, 1, memory_order_release);   // even again: a copy taken from here on is this pool's
     if (slot == n) atomic_store(&g_nr, n + 1);
     atomic_store_explicit(&r->live, 1, memory_order_release);
     pthread_mutex_unlock(&g_slot_mu);

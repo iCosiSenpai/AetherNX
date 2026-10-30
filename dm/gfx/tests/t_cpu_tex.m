@@ -103,7 +103,23 @@ static void finalized_upload(int write_after_record) {
     CHECK(!tex_cpu_written(serial), "pool finalization drops retired CPU classification");
     defer_drain(); munmap(mem,len);
 }
+// WriteTexels regions (hle_nvn.c region_ok): checked against the level, its layers or slices before either write path; the whole-level path once copied a region past
+// the end of its level-sized buffer (x 4 of a 4×4 texture)
+static void write_regions(void) {
+    tex_t t = {0}; t.d.width = t.d.height = 4; t.d.depth = 1; t.d.levels = 2; t.d.target = NVN_TEXTURE_TARGET_2D; t.L.layers = 1;
+    NVNcopyRegion inside = {0, 0, 0, 4, 4, 1}, past = {4, 0, 0, 1, 4, 1}, wide = {1, 0, 0, 4, 1, 1}, negative = {-1, 0, 0, 1, 1, 1}, layer = {0, 0, 1, 1, 1, 1};
+    CHECK(region_ok(&t, 0, 0, &inside, 1, 0) && !region_ok(&t, 0, 0, &past, 1, 0) && !region_ok(&t, 0, 0, &wide, 1, 0) && !region_ok(&t, 0, 0, &negative, 1, 0),
+          "a 2D region inside its level is written; one starting or reaching past it, or before it, is not");
+    NVNcopyRegion small = {0, 0, 0, 2, 2, 1};
+    CHECK(region_ok(&t, 1, 0, &small, 1, 0) && !region_ok(&t, 1, 0, &inside, 1, 0) && !region_ok(&t, 2, 0, &small, 1, 0), "levels: the 2×2 level takes 2×2, not 4×4; no level 2");
+    CHECK(!region_ok(&t, 0, 0, &layer, 1, 0) && !region_ok(&t, 0, 1, &small, 1, 0), "a layer past the texture's is refused");
+    t.L.layers = 3; CHECK(region_ok(&t, 0, 0, &layer, 2, 0) && !region_ok(&t, 0, 0, &layer, 3, 0), "an array texture takes its layers and no more");
+    tex_t v = {0}; v.d.width = v.d.height = 4; v.d.depth = 4; v.d.levels = 1; v.d.target = NVN_TEXTURE_TARGET_3D; v.L.layers = 1;
+    NVNcopyRegion slices = {0, 0, 2, 4, 4, 2}, deep = {0, 0, 3, 4, 4, 2};
+    CHECK(region_ok(&v, 0, 0, &slices, 2, 1) && !region_ok(&v, 0, 0, &deep, 2, 1), "a 3D region stays inside its slices");
+}
 int main(int argc, const char **argv) { @autoreleasepool {
+    write_regions();
     enum { N = 6442, BASE = 1000 };
     static tex_t t[N];
     for (int i = 0; i < N; i++) { t[i].serial = BASE + i; t[i].d.width = t[i].d.height = 4; t[i].d.depth = 1; t[i].d.format = 0x25; mtl_tex_init(&t[i]); }

@@ -112,6 +112,9 @@ def shader_key(key, name, rec):
     payload = (b'record\0' + rec + b'\0map\0' + map_row + b'\0pc\0' + pc +
                b'\0tools\0' + TOOL_FP + b'\0code\0' + CODE_FP.encode() +
                b'\0rule\0' + shader_rule_source(name) + b'\0profile\0' + PROFILE_ROWS + b'\0pairs\0' + ','.join(sorted(PAIRS.get(key, ()))).encode())
+    # A pixel shader in dual_want.tsv gets a second entry point (fs_dual): listing or unlisting it must not restore the other build from the cache. Only listed shaders
+    # add the field, so the keys of every other shader stay as they were
+    if key in DUAL_WANT: payload += b'\0dual-want\01'
     return hashlib.sha256(payload).hexdigest()
 def pair_keyed(digest, pixel_digests):   # a vertex shader's key with its pixel shaders' keys (vs_pad)
     return hashlib.sha256((digest + '\0' + ','.join(pixel_digests)).encode()).hexdigest()

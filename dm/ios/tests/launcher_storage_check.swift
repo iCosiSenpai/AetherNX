@@ -1,6 +1,7 @@
 // The launcher's storage (LauncherSettings.swift LauncherModel), run by test_launcher_storage.py on macOS: only choices that differ from the game's default are
 // stored, Reset to tested defaults followed by Play forgets the choices, an env file's values are kept. Arguments: the iOS and the Mac launcher.json of Breath of the Wild (settings.py, GFXAPI=nvn)
 import Foundation
+import CoreGraphics
 @main struct Check {
     static func main() {
         var failed = 0
@@ -86,6 +87,35 @@ import Foundation
         launched.reset(); launched.apply()
         expect(launched.values["DM_OPMODE"] == "0" && d.string(forKey: "launcher.DM_OPMODE") == "1", "Reset then Play keeps the saved choice of a setting fixed at launch")
         unsetenv("DM_OPMODE"); setenv("DM_ENV_LAUNCH_KEYS", "", 1); d.removeObject(forKey: "launcher.DM_OPMODE")
+        // A fixed value this build does not offer (an env file's DM_RENDER_SCALE=nan) is named as it is: the row converted it to Int and stopped the app
+        setenv("DM_ENV_FILE_KEYS", "DM_RENDER_SCALE", 1); setenv("DM_RENDER_SCALE", "nan", 1)
+        let bad = LauncherModel(mac.settings, defaults: d)
+        expect(bad.isInvalid(macScale) && bad.valueLabel(macScale) == "nan" && bad.rangeLabel(macScale, .nan) == "–" && bad.rangeLabel(macScale, .infinity) == "–",
+               "a fixed nan range is shown as invalid, and no label converts a non-finite number")
+        expect(bad.summaryItems().first { $0.id == "DM_RENDER_SCALE" }?.value == "nan", "the summary strip names it too")
+        unsetenv("DM_RENDER_SCALE"); setenv("DM_ENV_FILE_KEYS", "", 1)
+        // A controller's left and right: a range steps and stops at its ends, a choice wraps, a toggle sets on or off; a fixed setting does not move
+        let pad = LauncherModel(mac.settings, defaults: d)
+        pad.values["DM_RENDER_SCALE"] = "1.00"; pad.step(macScale, by: 1)
+        expect(pad.values["DM_RENDER_SCALE"] == "1.00", "a range stops at its maximum")
+        pad.step(macScale, by: -1); expect(pad.values["DM_RENDER_SCALE"] == "0.95", "a range moves by its step")
+        let fpsMac = mac.settings.first { $0.env == "DM_FPS_TARGET" }!
+        pad.values["DM_FPS_TARGET"] = "30"; pad.step(fpsMac, by: 1); let up = pad.values["DM_FPS_TARGET"]; pad.step(fpsMac, by: 1)
+        expect(up == "60" && pad.values["DM_FPS_TARGET"] == "30", "a choice moves to its neighbour and wraps")
+        let rumble = mac.settings.first { $0.env == "DM_RUMBLE" }!
+        pad.step(rumble, by: -1); expect(pad.values["DM_RUMBLE"] == rumble.offValue, "a toggle steps off")
+        pad.useDefault(rumble); expect(pad.values["DM_RUMBLE"] == rumble.def && pad.defaultLabel(rumble) == (rumble.def == rumble.onValue ? "On" : "Off"), "Use tested default")
+        expect(pad.summary.map(\.env) == mac.settings.filter { $0.basic && pad.visible($0) }.map(\.env), "the summary strip states the basic settings in list order")
+        // The game's tint: a red icon gives a red whose white Play label passes 4.5:1, and a lighter mark for dark surfaces; a grey icon gives none (the system accent)
+        func solid(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> CGImage {
+            let ctx = CGContext(data: nil, width: 32, height: 32, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            ctx.setFillColor(red: r, green: g, blue: b, alpha: 1); ctx.fill(CGRect(x: 0, y: 0, width: 32, height: 32)); return ctx.makeImage()!
+        }
+        let red = GameTint.dominant(solid(0.9, 0.2, 0.15))
+        let fill = red.map { GameTint.darkened($0, atMost: 0.17) }, mark = red.map { GameTint.lightened($0, atLeast: 0.32) }
+        expect(red.map { $0.r > 0.8 && $0.g < 0.3 } == true && fill.map { 1.05 / (GameTint.luminance($0) + 0.05) >= 4.5 } == true
+               && mark.map { (GameTint.luminance($0) + 0.05) / (0.0116 + 0.05) >= 3 } == true, "icon tint: white on the fill passes 4.5:1, the mark 3:1 on a dark grouped surface")
+        expect(GameTint.dominant(solid(0.5, 0.5, 0.5)) == nil, "a grey icon has no tint of its own")
         failed += checkLauncherLayout(LauncherModel(mac.settings, defaults: d), defaults: d)
         print("launcher storage: \(failed) failed")
         exit(failed == 0 ? 0 : 1)

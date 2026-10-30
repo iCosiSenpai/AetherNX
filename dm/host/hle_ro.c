@@ -8,6 +8,19 @@
 // Only success matters for the failures: the game checks IsSuccess only, so a failure code is a non-zero value under the ro module number 22.
 #include "hle.h"
 #include <CommonCrypto/CommonDigest.h>
+#include <mach/mach.h>
+
+// [p, p + n) is mapped readable in this process (vm_region_64: iOS has no mach_vm.h): the NRO image the game hands over is hashed whole, and its header says how long it is
+static int image_readable(const void *p, uint64_t n) {
+    vm_address_t a = (vm_address_t)p, end = a + (vm_address_t)n;
+    if (end < a) return 0;
+    while (a < end) {
+        vm_address_t r = a; vm_size_t sz = 0; vm_region_basic_info_data_64_t info; mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64; mach_port_t obj = MACH_PORT_NULL;
+        if (vm_region_64(mach_task_self(), &r, &sz, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &cnt, &obj) != KERN_SUCCESS || r > a || !(info.protection & VM_PROT_READ)) return 0;
+        a = r + sz;
+    }
+    return 1;
+}
 
 #define RO_FAIL ((Result)(22 | (1 << 9)))   // a failure under ro module 22
 #define RO_NOT_NRO ((Result)0x816)           // the SDK's result for an image without NRO0 (sdk+0x3471e8)
@@ -52,8 +65,10 @@ HLE_FORCE("_ZN2nn2ro13GetBufferSizeEPmPKv", "the bss size from the NRO header, a
 HLE_FORCE("_ZN2nn2ro10LoadModuleEPNS0_6ModuleEPKvPvmi", "load an NRO rewritten offline (loader.c): found by the image's SHA-256, relocated against the loaded modules, its init called",
           Result, h_ro_LoadModule, void *mod, const void *image, void *buf, size_t size, int flag) {
     const uint8_t *h = image;
-    if (!h || memcmp(h + 0x10, "NRO0", 4)) return RO_NOT_NRO;
+    if (!h || !image_readable(h, 0x80) || memcmp(h + 0x10, "NRO0", 4)) return RO_NOT_NRO;
     uint32_t n = *(const uint32_t *)(h + 0x18);
+    // The size comes from the image's own header: checked against the memory there before the whole image is hashed (a header claiming 256 MiB over one page faulted here)
+    if (n < 0x80 || !image_readable(h, n)) { LOG("[RED] ro::LoadModule: the NRO header at %p says %u bytes, which are not all readable there: refused", image, n); return RO_NOT_NRO; }
     uint8_t sha[32]; CC_SHA256(h, n, sha);
     char hx[17]; for (int k = 0; k < 8; k++) snprintf(hx + 2 * k, 3, "%02x", sha[k]);
     // Online SDKs are never loaded, whatever the game (dm/tools/nro_collect.py ONLINE_SDKS: Epic Online Services, known by its export EOS_Platform_Create). Hades and Hades II load

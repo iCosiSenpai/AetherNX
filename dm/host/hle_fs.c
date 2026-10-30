@@ -65,6 +65,7 @@ static void path_unlock(pthread_mutex_t **m) { pthread_mutex_unlock(*m); }
 #define PATH_LOCK() pthread_mutex_t *path_guard __attribute__((cleanup(path_unlock))) = &g_path_lock; pthread_mutex_lock(path_guard)
 static uint8_t g_fmode[65536];              // fd → open mode
 static _Atomic uint16_t g_ftxn[65536];       // fd → 1-based canonical transaction index, or 0
+static _Atomic uint8_t g_fstale[65536];      // fd of a save file whose working directory a refused commit recloned: it names the old, deleted tree (stale_handle)
 static _Atomic int g_save_writes;           // number of writes on the save mount (shared by the injection point and the commit log)
 static pthread_once_t g_save_test_once = PTHREAD_ONCE_INIT;
 static int g_save_kill_n, g_save_fail_n, g_save_fail_e;
@@ -89,6 +90,13 @@ static void save_poison_txn(int txn, int e) {
     if (txn < 0 || txn >= MAX_MOUNT) return;
     int z = 0;
     atomic_compare_exchange_strong(&g_mnt[txn].poison, &z, e ? e : EIO);
+}
+// A write or resize through a handle a refused commit left on the old working tree (g_fstale): refused, and this transaction's commit with it
+static int stale_handle(int fd, int txn) {
+    if (txn < 0 || !atomic_load(&g_fstale[fd])) return 0;
+    save_poison_txn(txn, ESTALE);
+    LOG("[RED] save write through a file opened before a refused commit recloned the save: refused (close the file and open it again)");
+    errno = ESTALE; return 1;
 }
 static void save_poison(int e) { // Test helper: poison the first mounted transaction.
     for (int i = 0; i < g_nmnt; i++) if (g_mnt[i].txn_root == i) { save_poison_txn(i, e); return; }
@@ -301,13 +309,16 @@ static int path_component(char *parent, size_t n, const char *name, int create, 
         }
     }
     DIR *d = opendir(parent); if (!d) return 0;
-    struct dirent *e; char physical[0x301] = "", guest[0x301];
+    struct dirent *e; char physical[0x301] = "", guest[0x301]; int link = 0;
     while ((e = readdir(d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
         if (!guest_name(parent, e->d_name, guest, sizeof guest)) { closedir(d); return 0; }
-        if (!strcmp(guest, name)) { strlcpy(physical, e->d_name, sizeof physical); break; }
+        if (!strcmp(guest, name)) { strlcpy(physical, e->d_name, sizeof physical); link = e->d_type == DT_LNK; break; }
     }
     closedir(d);
+    // A writable mount's paths stay inside it: the guest cannot make a link, so one found there (put in a save or temporary folder from outside) is not followed. Through one,
+    // CleanDirectoryRecursively("temp:/link") emptied the folder it pointed at
+    if (link && !ro) { LOG("[RED] fs: %s/%s is a link inside a writable mount: not followed", parent, physical); errno = ELOOP; return 0; }
     if (!physical[0]) {
         if (!create) { errno = ENOENT; return 0; }
         strlcpy(physical, name, sizeof physical);
@@ -661,6 +672,9 @@ static Result commit_mount_locked(int i, int *notify_error) {
         else if (dm_fs_test_fail("reclone") || clonefile(g_mnt[i].commit, re, 0)) { rerr = errno ? errno : EIO; rm_tree(re); }
         else if (renamex_np(re, g_mnt[i].dir, RENAME_SWAP)) { rerr = errno ? errno : EIO; rm_tree(re); }
         else rm_tree(re);                                               // the swapped-out tainted work directory
+        // Handles still open on the old tree now write to unlinked files: a write through one would succeed and the next commit would keep the recloned (old) data.
+        // Such writes are refused and refuse that commit (stale_handle), until the handle is closed and the file opened again in the new tree
+        if (!rerr && nopen) for (int k = 0; k < 65536; k++) if (atomic_load(&g_ftxn[k]) == token) atomic_store(&g_fstale[k], 1);
         if (rerr) { save_poison_txn(txn, perr); LOG("[RED] save transaction: recloning the work directory failed errno=%d -- the work directory is left as it is and stays tainted (the next commit is refused again and retries), the committed version is unchanged", rerr); }
         LOG("[RED] save commit refused: a save write failed in this transaction errno=%d (0-byte files in the work directory: %s); the committed version is unchanged, the work directory %s%s", perr, tl ? torn + 1 : "none", rerr ? "could not be recloned (see the previous line)" : "was recloned from the committed version", nopen ? "; [RED] save files are still open" : "");
         *notify_error = perr;
@@ -743,7 +757,7 @@ HLE_FORCE("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci", "fsp-srv → open(2)", Re
     g_fmode[fd] = (uint8_t)mode; *out = FH_OUT(fd);
     { const char *c = strchr(path, ':'); size_t ln = c ? (size_t)(c - path) : 0; uint16_t token = 0;
       for (int i = 0; c && i < g_nmnt; i++) if (strlen(g_mnt[i].name) == ln && !strncmp(g_mnt[i].name, path, ln) && g_mnt[i].txn_root >= 0) { token = (uint16_t)(g_mnt[i].txn_root + 1); break; }
-      atomic_store(&g_ftxn[fd], token); }
+      atomic_store(&g_ftxn[fd], token); atomic_store(&g_fstale[fd], 0); }
     fslog_init();
     if (g_fslog && fd < 4096) { pthread_mutex_lock(&g_fslog_lock); free(g_fdpath[fd]); g_fdpath[fd] = strdup(path); pthread_mutex_unlock(&g_fslog_lock); }
     if (g_flag.fs) LOG("fs open [%.2fs] %s mode=%d → fd %d", (now_ns() - g_t0_ns) / 1e9, path, mode, fd);
@@ -797,6 +811,7 @@ HLE_FORCE("_ZN2nn2fs9WriteFileENS0_10FileHandleElPKvmRKNS0_11WriteOptionE", "fsp
     pthread_rwlock_t *txn_guard __attribute__((cleanup(txn_unlock))) = NULL;
     if (txn >= 0) { txn_guard = &g_txn_lock[txn]; pthread_rwlock_rdlock(txn_guard); }
     (void)opt; size_t put = 0;
+    if (stale_handle(fd, txn)) return RES_FAIL;
     if (txn >= 0) {                                                     // Save write injection point (for deterministic regression; only writes on the save mount are counted)
         pthread_once(&g_save_test_once, save_test_init);
         int n = atomic_fetch_add(&g_save_writes, 1) + 1;
@@ -823,6 +838,7 @@ HLE_FORCE("_ZN2nn2fs11SetFileSizeENS0_10FileHandleEl", "fsp-srv → ftruncate(2)
     int fd = (int)h & 0xffff; uint16_t token = atomic_load(&g_ftxn[fd]); int txn = token ? token - 1 : -1;
     pthread_rwlock_t *txn_guard __attribute__((cleanup(txn_unlock))) = NULL;
     if (txn >= 0) { txn_guard = &g_txn_lock[txn]; pthread_rwlock_rdlock(txn_guard); }
+    if (stale_handle(fd, txn)) return RES_FAIL;
     if (!ftruncate((int)h, sz)) return RES_OK;
     if (txn >= 0) save_poison_txn(txn, errno);
     return err_res("ftruncate", "fd");
@@ -830,19 +846,25 @@ HLE_FORCE("_ZN2nn2fs11SetFileSizeENS0_10FileHandleEl", "fsp-srv → ftruncate(2)
 HLE_FORCE("_ZN2nn2fs9FlushFileENS0_10FileHandleE", "fsp-srv; host writes are already in the page cache, flushing is a no-op", Result, h_fs_FlushFile, uint64_t h) { (void)h; return RES_OK; }
 HLE_FORCE("_ZN2nn2fs9CloseFileENS0_10FileHandleE", "fsp-srv → close(2)", void, h_fs_CloseFile, uint64_t h) { h = FH_IN(h);
     if (!h || IMG_H(h)) return;   // the null handle after a failed open (see ReadFile): do not touch fd 0; an image entry holds no descriptor
-    g_fmode[(int)h & 0xffff] = 0; atomic_store(&g_ftxn[(int)h & 0xffff], 0);
+    g_fmode[(int)h & 0xffff] = 0; atomic_store(&g_ftxn[(int)h & 0xffff], 0); atomic_store(&g_fstale[(int)h & 0xffff], 0);
     close((int)h); }
 HLE_FORCE("_ZN2nn2fs15GetFileOpenModeENS0_10FileHandleE", "fsp-srv; the open mode is recorded by the host", int, h_fs_GetFileOpenMode, uint64_t h) { h = FH_IN(h); return IMG_H(h) ? MODE_READ : g_fmode[(int)h & 0xffff]; }
 
 // ---------- Path operations ----------
+static int create_poisons(int e) { return e != EEXIST && e != ENOENT && e != ENOTDIR && e != ENAMETOOLONG; }   // a failure, not an answer the game expects
 HLE_FORCE("_ZN2nn2fs10CreateFileEPKcl", "fsp-srv → open(O_CREAT|O_EXCL)+ftruncate", Result, h_fs_CreateFile, const char *path, int64_t sz) {
     int mi; int64_t k; if (img_path(path, &mi, &k)) return k >= 0 ? RES_PATH_EXISTS : RES_FAIL;   // as RW_CREATE answers on a read-only folder
-    HP_EX(path, 1); RW_CREATE();
+    // The path is resolved here rather than with HP_EX: a resolution that fails on an I/O error (reading the folder or a guest name) refuses the commit as the create below does
+    PATH_LOCK(); char hp[1024] = ""; int ro = 0;
+    if (!host_path_ex(path, hp, sizeof hp, &ro, 1)) { int e = errno; if (create_poisons(e)) save_poison_txn(in_txn_dir(hp), e); errno = e; return err_res("path", path); }
+    RW_CREATE();
+    // A create that fails for want of space or an I/O error refuses this transaction's commit, as a failed write does: a game that deleted a file to create it
+    // anew would otherwise commit the deletion (the answers a game expects -- exists, not found -- leave the transaction alone)
     int fd = open(hp, O_WRONLY | O_CREAT | O_EXCL, 0644);
-    if (fd < 0) return err_res("create", hp);
+    if (fd < 0) { int e = errno; if (create_poisons(e)) save_poison_txn(in_txn_dir(hp), e); errno = e; return err_res("create", hp); }
     int rc = ftruncate(fd, sz); int e = errno; close(fd);
     if (!rc && set_guest_name(hp, path)) { rc = -1; e = errno; }
-    if (rc) unlink(hp);
+    if (rc) { unlink(hp); save_poison_txn(in_txn_dir(hp), e); }
     errno = e; return rc ? err_res("create", hp) : RES_OK;
 }
 HLE_FORCE("_ZN2nn2fs10DeleteFileEPKc", "fsp-srv → unlink(2)", Result, h_fs_DeleteFile, const char *path) { HP(path); RW(); return unlink(hp) ? err_res("unlink", hp) : RES_OK; }
@@ -892,8 +914,9 @@ HLE_FORCE("_ZN2nn2fs15DeleteDirectoryEPKc", "fsp-srv → rmdir(2) (the directory
     HP(path); RW(); return rmdir(hp) ? err_res("rmdir", hp) : RES_OK;
 }
 static Result rename_entry(const char *from, const char *to) {
-    HP(from); RW(); char hp2[1024];
-    if (!host_path_ex(to, hp2, sizeof hp2, NULL, 1)) return err_res("rename path", to);
+    HP(from); RW(); char hp2[1024]; int ro_to = 0;
+    if (!host_path_ex(to, hp2, sizeof hp2, &ro_to, 1)) return err_res("rename path", to);
+    if (ro_to) { LOG("fs rename into a read-only mount: %s -> %s", hp, hp2); return RES_FAIL; }   // the source being writable says nothing of where it goes (save:/x -> rom:/x)
     if (!access(hp2, F_OK)) return RES_PATH_EXISTS;
     if (rename(hp, hp2)) return err_res("rename", hp);
     if (dm_fs_test_fail("guestname") || set_guest_name(hp2, to)) { int e = errno ? errno : EIO;

@@ -67,6 +67,7 @@ typedef struct thr {
     struct thr *all;           // All-threads chain (for the state dump)
     int last_svc; uint64_t last_lr;
     int closed;                // Handle closed: the object is freed only when this holds together with exited (Horizon: the thread object goes away with the last reference)
+    int pins;                  // host code using the object with G released in between (SetThreadActivity's wait for the pause): it is freed only once that ends
     uint64_t nsvc;             // SVC count (for the state dump)
     uint64_t nyield, nyield_seen, nbackoff, nbackoff_seen;   // Yields (SleepThread 0/-1/-2) and those the back-off turned into short sleeps, with both counts at the last power report (dm_yield_top)
     uint64_t nspin, nspin_seen, spin_site; const char *spin_mod;   // Spin wait passes (dm_spin_wait; those that yield count in nyield too) and where the last one was
@@ -323,7 +324,7 @@ static void thread_exit(thr_t *t) {
     t->exited = 1;
     wake_sync_waiters(t);   // Synchronization waiters on this thread re-check
     pthread_setspecific(g_keythr, NULL);
-    if (t->closed) thr_free(t);
+    if (t->closed && !t->pins) thr_free(t);
     pthread_mutex_unlock(&G);
     pthread_exit(NULL);
 }
@@ -894,15 +895,16 @@ static int svc_thread_impl(int num, uint64_t *regs) {
     case 0x0D: { pthread_mutex_lock(&G); thr_t *t = h_get((uint32_t)regs[0], O_THREAD);   // SetThreadPriority; under DM_QOS_MAP the class follows (now on the calling thread, else at the target's next SVC)
         if (t) { t->prio = (int)regs[1]; if (g_qos_map) { if (t == cur()) qos_apply(t); else atomic_store(&t->qos_pending, 1); } }
         regs[0] = t ? 0 : R_BAD_HANDLE; pthread_mutex_unlock(&G); return 1; }
-    case 0x0E: { thr_t *t = h_get((uint32_t)regs[2], O_THREAD);
-                 regs[0] = t ? 0 : R_BAD_HANDLE; regs[1] = t ? (uint64_t)(uint32_t)t->core : 0; regs[2] = t ? t->mask : 0; return 1; }
+    // The thread SVCs below hold G from the lookup to their last use of the object, as the priority ones above do: CloseHandle frees an exited thread's object under G
+    case 0x0E: { pthread_mutex_lock(&G); thr_t *t = h_get((uint32_t)regs[2], O_THREAD);
+                 regs[0] = t ? 0 : R_BAD_HANDLE; regs[1] = t ? (uint64_t)(uint32_t)t->core : 0; regs[2] = t ? t->mask : 0; pthread_mutex_unlock(&G); return 1; }
     case 0x0F: {  // SetThreadCoreMask(w0, w1 ideal core, x2 mask): -2 = use the process default (ideal core 0, mask of just that core), -1 = don't care, -3 = leave the ideal core unchanged (as in the Horizon kernel); the host only keeps the bookkeeping
-        thr_t *t = h_get((uint32_t)regs[0], O_THREAD);
+        pthread_mutex_lock(&G); thr_t *t = h_get((uint32_t)regs[0], O_THREAD);
         if (t) { int c = (int)regs[1]; if (c >= 0) t->core = c; if (c == -2) { t->core = 0; t->mask = 1; } else if (regs[2]) t->mask = regs[2];
             // The ideal core is not in the new mask (-2/-3 keep the ideal core but pin the thread to other cores): as in Horizon, move the ideal core to the lowest core in the mask.
             // Otherwise GetCurrentProcessorNumber reports core 0 even for threads pinned to cores 1 / 2, and a job system with per-core queues (SMBW's BaseProcExecutor) takes core 0's work while nobody drains the queues of cores 1 / 2
             if (t->mask && (t->core < 0 || !(t->mask >> t->core & 1))) t->core = __builtin_ctzll(t->mask); }
-        regs[0] = t ? 0 : R_BAD_HANDLE; return 1;
+        regs[0] = t ? 0 : R_BAD_HANDLE; pthread_mutex_unlock(&G); return 1;
     }
     case 0x10: { thr_t *t = cur(); int c = t->core;   // The current core number is always 0..2 (never negative); a thread with no ideal core reports the lowest core its mask allows, not core 0 outside it
                  regs[0] = (uint64_t)(uint32_t)(c >= 0 ? c : t->mask ? __builtin_ctzll(t->mask) : 0); return 1; }
@@ -917,13 +919,16 @@ static int svc_thread_impl(int num, uint64_t *regs) {
             int st = atomic_fetch_or(&t->svc_state, 2);
             if (!t->started || t->exited || (st & 1)) t->paused = 1;
             uint64_t t0 = now_ns(); int warned = 0;
+            // G is released while this waits, and the thread may exit and its handle be closed meanwhile: the pin keeps the object (CloseHandle and thread_exit leave it to the
+            // unpin below). The signal goes while G is held and the thread has not exited: thread_exit sets exited under G, so its pthread is still there to receive it
+            t->pins++;
             while (!t->paused && !t->exited) {
-                pthread_mutex_unlock(&G); pthread_kill(t->pt, SIGUSR2); pthread_mutex_lock(&G);
-                if (t->paused || t->exited) break;
+                pthread_kill(t->pt, SIGUSR2);   // its handler takes G only once this waits below
                 struct timespec dl; clock_gettime(CLOCK_REALTIME, &dl); dl.tv_nsec += 100000; if (dl.tv_nsec >= 1000000000) { dl.tv_sec++; dl.tv_nsec -= 1000000000; }
                 pthread_cond_timedwait(&t->pcv, &G, &dl);
                 if (!warned && now_ns() - t0 > 1000000000ull) { warned = 1; LOG("[RED] thread %#x still not suspended after more than 1 second (stuck in host code?)", t->handle); }
             }
+            if (!--t->pins && t->closed && t->exited) thr_free(t);
         } else { atomic_store(&t->pause_req, 0); atomic_fetch_and(&t->svc_state, ~2); pthread_cond_broadcast(&t->pcv); }
         pthread_mutex_unlock(&G);
         { static int n; if (n++ < 4) LOG("SetThreadActivity %#x → %s (%s)", (uint32_t)regs[0], act ? "pause" : "resume", r ? "failed" : "ok"); }
@@ -938,7 +943,7 @@ static int svc_thread_impl(int num, uint64_t *regs) {
         pthread_mutex_unlock(&G);
         regs[0] = (uint64_t)r; return 1;
     }
-    case 0x25: { thr_t *t = h_get((uint32_t)regs[1], O_THREAD); regs[0] = t ? 0 : R_BAD_HANDLE; regs[1] = t ? t->id : 0; return 1; }
+    case 0x25: { pthread_mutex_lock(&G); thr_t *t = h_get((uint32_t)regs[1], O_THREAD); regs[0] = t ? 0 : R_BAD_HANDLE; regs[1] = t ? t->id : 0; pthread_mutex_unlock(&G); return 1; }
 
     case 0x1A: {  // ArbitrateLock(w0 owner handle, x1 address, w2 this thread's tag)
         thr_t *t = cur(); uint64_t addr = regs[1];
@@ -1081,7 +1086,7 @@ static int svc_thread_impl(int num, uint64_t *regs) {
             thr_t *t = g_h[i].obj;
             g_h[i].type = O_FREE; g_h[i].obj = NULL;
             t->closed = 1;
-            if (t->exited) thr_free(t);
+            if (t->exited && !t->pins) thr_free(t);
         }
         pthread_mutex_unlock(&G);
         regs[0] = 0; return 1;

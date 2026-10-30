@@ -4,9 +4,22 @@
 
 static NSString *const kCloudSaves = @"cloudSavesBookmark";
 
-// The folder's security scope, held from the first resolve on: the host writes there after every
-// save. Never stopped on purpose, the process exits when the game does.
+// The folder whose security scope this process holds (startAccessingSecurityScopedResource answered
+// YES), from the first resolve on: the host writes there after every save. Each start is balanced: a
+// different folder chosen before Play releases the one before it, and so does turning cloud saves off.
+// Unbalanced starts each keep a kernel resource until the app exits, and enough of them stop access
+// to any further scoped folder. The scope of the folder in use is kept until the process exits.
 static NSURL *opened = nil;
+
+static void hold_scope(NSURL *url) {
+    if (opened && [opened.path isEqualToString:url.path]) return;
+    if (opened) { [opened stopAccessingSecurityScopedResource]; opened = nil; }
+    if ([url startAccessingSecurityScopedResource]) opened = url;
+}
+
+static void release_scope(void) {
+    if (opened) { [opened stopAccessingSecurityScopedResource]; opened = nil; }
+}
 
 static NSData *fresh_bookmark(NSURL *url) {
     // The picker grants a security scope that lasts while it is held: the bookmark is written with
@@ -32,9 +45,7 @@ NSString *dm_cloud_saves_path(BOOL *stale) {
         if (stale) *stale = YES;
         return nil;
     }
-    if (opened && ![opened.path isEqualToString:url.path]) opened = nil;
-    if (!opened) [url startAccessingSecurityScopedResource];   // held for the session (see opened)
-    opened = url;
+    hold_scope(url);   // held for the session (see opened)
     if (isStale) {
         // The system still resolves it but asks for a rewrite. Same signature, so a fresh bookmark sticks.
         NSData *again = fresh_bookmark(url);
@@ -62,6 +73,7 @@ BOOL dm_store_cloud_saves(NSURL *url) {
 
 void dm_clear_cloud_saves(void) {
     [NSUserDefaults.standardUserDefaults removeObjectForKey:kCloudSaves];
+    release_scope();
 }
 
 void dm_cloud_saves_env(void) {

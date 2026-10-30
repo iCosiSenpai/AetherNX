@@ -182,6 +182,29 @@ void front_progress(const char *title, long done, long total) {
 void *front_metal_layer(void) { return (__bridge void *)g_layer; }
 void front_run(void (*guest)(void)) { guest(); }   // Already on main.m's big-stack thread
 
+// The view controller an alert goes over: the key window's root, then whatever it presents on top (the launcher, another alert)
+static UIViewController *top_controller(void) {
+    UIViewController *vc = nil;
+    for (UIScene *s in UIApplication.sharedApplication.connectedScenes) if ([s isKindOfClass:UIWindowScene.class]) for (UIWindow *w in ((UIWindowScene *)s).windows) if (w.isKeyWindow) vc = w.rootViewController;
+    while (vc.presentedViewController && !vc.presentedViewController.isBeingDismissed) vc = vc.presentedViewController;
+    return vc;
+}
+// Presents an alert on the main thread once nothing else is in the way: UIKit refuses a presentation while another one is coming or going, and says so only in its log.
+// A Save failed notice on screen when the game asks for text used to leave the text box unshown and the game thread waiting for it for good; now it comes once that notice is
+// dismissed. `none` runs when there is no window to show it in at all
+static void present_when_free(UIAlertController *ac, void (^none)(void)) {
+    UIViewController *vc = top_controller();
+    if (!vc) { if (none) none(); return; }
+    // Another alert up (waiting for the player), or a presentation coming or going: try again shortly
+    if (vc.isBeingPresented || vc.isBeingDismissed || vc.presentedViewController || [vc isKindOfClass:UIAlertController.class]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ present_when_free(ac, none); });
+        return;
+    }
+    [vc presentViewController:ac animated:YES completion:nil];
+    if (!ac.presentingViewController)   // refused all the same (UIKit sets it as an accepted presentation starts): try again
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ present_when_free(ac, none); });
+}
+
 // Software keyboard: show a UIAlertController on the main thread, the calling thread waits for the result
 int front_text_input(const char *title, const char *sub, const char *guide, const char *initial, int max_chars, char *out, int out_cap) {
     (void)max_chars;
@@ -193,12 +216,10 @@ int front_text_input(const char *title, const char *sub, const char *guide, cons
     dispatch_async(dispatch_get_main_queue(), ^{
         UIAlertController *ac = [UIAlertController alertControllerWithTitle:t message:m preferredStyle:UIAlertControllerStyleAlert];
         [ac addTextFieldWithConfigurationHandler:^(UITextField *f) { f.text = init; f.placeholder = ph; }];
-        [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) { (void)x; r = 1; text = ac.textFields.firstObject.text; dispatch_semaphore_signal(done); }]];
+        __weak UIAlertController *weak = ac;
+        [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) { (void)x; r = 1; text = weak.textFields.firstObject.text; dispatch_semaphore_signal(done); }]];
         [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(UIAlertAction *x) { (void)x; dispatch_semaphore_signal(done); }]];
-        UIViewController *vc = nil;
-        for (UIScene *s in UIApplication.sharedApplication.connectedScenes) if ([s isKindOfClass:UIWindowScene.class]) for (UIWindow *w in ((UIWindowScene *)s).windows) if (w.isKeyWindow) vc = w.rootViewController;
-        if (!vc) { dispatch_semaphore_signal(done); return; }
-        [vc presentViewController:ac animated:YES completion:nil];
+        present_when_free(ac, ^{ LOG("[RED] front end: no window for the text input; answered as cancelled"); dispatch_semaphore_signal(done); });
     });
     // The guest clock keeps running meanwhile, as on the Switch (hle_swkbd.c): a freeze here as well stopped Octopath Traveler 0's frame loop for as long as the box was up and made its sound stutter
     // (4,977 ms and 2,577 ms frames, 5,181 wakeups a second). The inline keyboard freezes around its own call (hle_swkbd.c)
@@ -213,15 +234,11 @@ int front_text_input(const char *title, const char *sub, const char *guide, cons
 void front_save_failed(int err) {
     LOG("front end: save data write failed errno=%d, telling the player", err);
     dispatch_async(dispatch_get_main_queue(), ^{
-        UIViewController *vc = nil;
-        for (UIScene *s in UIApplication.sharedApplication.connectedScenes) if ([s isKindOfClass:UIWindowScene.class]) for (UIWindow *w in ((UIWindowScene *)s).windows) if (w.isKeyWindow) vc = w.rootViewController;
-        while (vc.presentedViewController) vc = vc.presentedViewController;
-        if (!vc) { LOG("[RED] front end: no window for the save-failure alert errno=%d", err); return; }
         NSString *m = err == ENOSPC ? @"Storage is full, so progress was not saved. Free up space and save again."
                                     : [NSString stringWithFormat:@"Saving failed (errno %d); progress was not saved.", err];
         UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Save failed" message:m preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-        [vc presentViewController:a animated:YES completion:nil];
+        present_when_free(a, ^{ LOG("[RED] front end: no window for the save-failure alert errno=%d", err); });
     });
 }
 

@@ -1064,7 +1064,9 @@ VK(vkCmdPipelineBarrier, void, VkCommandBuffer cb, VkPipelineStageFlags s, VkPip
 // Queries of one submit: its event value (the ticket every query it writes gets) and, when it has occlusion queries, a visibility buffer that every render pass
 // of the submit counts into (one 8-byte slot per BeginQuery), copied to the pools when the submit completes
 typedef struct { VkQueryPool q; uint32_t idx, slot; } occ_t;
-typedef struct { uint64_t v; id<MTLBuffer> vis; uint32_t nvis, cap; occ_t *occ; } subq_t;
+// Timestamp queries are kept the same way (ts): each gets its submit's completion time in its pool entry, which holds it until the query is reset. It used to be read from
+// a ring of the last 1,024 completions by ticket, so a query left unreset read a later submit's time, still reported available
+typedef struct { uint64_t v; id<MTLBuffer> vis; uint32_t nvis, cap; occ_t *occ; uint32_t nts, tscap; occ_t *ts; } subq_t;
 typedef struct {
     id<MTLCommandBuffer> cb; id<MTLRenderCommandEncoder> re; id<MTLBlitCommandEncoder> be;
     VkPipeline pipe, applied; uint32_t rt_w, rt_h;
@@ -1078,8 +1080,6 @@ typedef struct {
     // for a copy in the middle of the pass and is resumed (loading the attachments) at the next draw
     MTLRenderPassDescriptor *rpd; MTLStoreAction st_col[8], st_d, st_s; int cut;
 } rs_t;
-#define DONE_RING 1024
-static uint64_t g_done_ns[DONE_RING];   // completion time of submit v at [v % DONE_RING] (timestamp query results)
 static void end_blit(rs_t *s) { if (s->be) { [s->be endEncoding]; s->be = nil; } }
 static MTLStoreAction keep(MTLStoreAction a) { return a == MTLStoreActionMultisampleResolve || a == MTLStoreActionStoreAndMultisampleResolve ? MTLStoreActionStoreAndMultisampleResolve : MTLStoreActionStore; }
 static void end_rp(rs_t *s, int final) {   // final: the pass's own store actions; otherwise everything is stored, to be loaded again when the pass resumes
@@ -1336,7 +1336,7 @@ static void replay(rs_t *s, VkCommandBuffer cb) {
                 break;
             }
             case C_QRESET: { const c_query *x = c; for (uint32_t i = 0; i < x->n && x->first + i < x->q->n; i++) x->q->ticket[x->first + i] = FENCE_NONE; break; }
-            case C_QTS: { const c_query *x = c; if (x->first < x->q->n) x->q->ticket[x->first] = s->sq->v; break; }
+            case C_QTS: { const c_query *x = c; if (x->first < x->q->n) { x->q->ticket[x->first] = s->sq->v; if (s->sq->nts < s->sq->tscap) s->sq->ts[s->sq->nts++] = (occ_t){x->q, x->first, 0}; } break; }
             case C_QBEGIN: {
                 const c_query *x = c; subq_t *q = s->sq;
                 if (!s->re && s->cut) resume_rp(s);
@@ -1372,8 +1372,9 @@ VKB(vkQueueSubmit, VkResult, VkQueue q, uint32_t n, const VkSubmitInfo *si, VkFe
         for (uint32_t i = 0; i < n; i++)   // occlusion queries need a visibility buffer before the first render pass is encoded
             for (uint32_t j = 0; j < si[i].commandBufferCount; j++) {
                 VkCommandBuffer c = si[i].pCommandBuffers[j];
-                for (size_t o = 0; o < c->n; o += ((const chdr *)(c->buf + o))->size) sq->cap += ((const chdr *)(c->buf + o))->op == C_QBEGIN;
+                for (size_t o = 0; o < c->n; o += ((const chdr *)(c->buf + o))->size) { int op = ((const chdr *)(c->buf + o))->op; sq->cap += op == C_QBEGIN; sq->tscap += op == C_QTS; }
             }
+        if (sq->tscap) sq->ts = zalloc(sq->tscap * sizeof *sq->ts);
         if (sq->cap) {
             sq->vis = [g_dev newBufferWithLength:sq->cap * 8 options:MTLResourceStorageModeShared]; memset(sq->vis.contents, 0, sq->cap * 8);
             sq->occ = zalloc(sq->cap * sizeof *sq->occ);
@@ -1385,9 +1386,10 @@ VKB(vkQueueSubmit, VkResult, VkQueue q, uint32_t n, const VkSubmitInfo *si, VkFe
         if (f) atomic_store(&f->val, v);
         [cb addCompletedHandler:^(id<MTLCommandBuffer> c) {
             if (c.error) { static int k; if (k++ < 20) LOG("[vk] [RED] command buffer error (submission %llu): %s", (unsigned long long)v, c.error.localizedDescription.UTF8String); }
-            g_done_ns[v % DONE_RING] = now_ns();
+            uint64_t t_done = now_ns();
             if (sq->nvis) { const uint64_t *r = sq->vis.contents; for (uint32_t k = 0; k < sq->nvis; k++) sq->occ[k].q->val[sq->occ[k].idx] = r[sq->occ[k].slot]; }
-            sq->vis = nil; free(sq->occ); free(sq);
+            for (uint32_t k = 0; k < sq->nts; k++) sq->ts[k].q->val[sq->ts[k].idx] = t_done;
+            sq->vis = nil; free(sq->occ); free(sq->ts); free(sq);
             done_advance(v);   // after the results: a query is read as available once g_done reaches its ticket
         }];
         [cb commit];
@@ -1448,7 +1450,7 @@ VKB(vkGetQueryPoolResults, VkResult, VkDevice d, VkQueryPool q, uint32_t first, 
         int ok = t != FENCE_NONE && atomic_load(&g_done) >= t;
         uint8_t *p = (uint8_t *)data + (size_t)i * stride; if ((size_t)(p - (uint8_t *)data) + (w64 ? 8 : 4) * (av ? 2 : 1) > size) break;
         if (ok || (fl & VK_QUERY_RESULT_PARTIAL_BIT)) {
-            uint64_t v = !ok ? 0 : q->type == VK_QUERY_TYPE_TIMESTAMP ? g_done_ns[t % DONE_RING] : q->val[k];
+            uint64_t v = !ok ? 0 : q->val[k];   // a timestamp's own entry (its submit's completion time), not the ring a later submit overwrites
             if (w64) memcpy(p, &v, 8); else { uint32_t v32 = (uint32_t)v; memcpy(p, &v32, 4); }
         }
         if (av) { uint64_t a1 = ok; if (w64) memcpy(p + 8, &a1, 8); else { uint32_t a32 = ok; memcpy(p + 4, &a32, 4); } }

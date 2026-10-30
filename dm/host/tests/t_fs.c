@@ -197,6 +197,27 @@ int main(void) {
     unsetenv("DM_TEST_FS_FAILAT"); g_nmnt = 0;
     CHECK(h_fs_MountSave("save", NULL) == RES_OK && write_save("save:/a", "ok3") == RES_OK && h_fs_Commit("save") == RES_OK, "remount without injection: transactional as usual, writing a=ok3 and committing succeed");
     snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok3"), "committed a = ok3");
+    // 6d A file left open across a refused commit names the deleted old working tree: a write through it is refused and refuses the next commit too, instead of
+    // succeeding into an unlinked file and letting that commit keep the recloned (old) data; reopened, the file is written and committed as usual
+    {   uint64_t hd; CHECK(h_fs_OpenFile(&hd, "save:/a", MODE_WRITE) == RES_OK, "open a and keep it open");
+        save_poison(ENOSPC); nf0 = g_nfail;
+        CHECK(h_fs_Commit("save") == RES_FAIL && g_nfail == nf0 + 1, "a failed write refuses the commit; the working directory is recloned");
+        CHECK(h_fs_WriteFile(hd, 0, "lost", 4, NULL) == RES_FAIL, "a write through the handle opened before the reclone is refused");
+        CHECK(h_fs_SetFileSize(hd, 2) == RES_FAIL, "so is a resize through it");
+        CHECK(h_fs_Commit("save") == RES_FAIL, "and the commit after it is refused: the game's write did not land");
+        h_fs_CloseFile(hd);
+        CHECK(write_save("save:/a", "ok4") == RES_OK && h_fs_Commit("save") == RES_OK, "reopened, a=ok4 is written and committed");
+        snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok4"), "committed a = ok4");
+    }
+    // 6e A link inside a writable mount is not followed: the guest cannot make one, and through one put there from outside a recursive clean emptied the folder it pointed at
+    {   char outside[1200], keep[1300], link[1200]; snprintf(outside, sizeof outside, "%s.outside", work); mkdir(outside, 0755);
+        snprintf(keep, sizeof keep, "%s/precious", outside); FILE *f = fopen(keep, "w"); fputs("keep", f); fclose(f);
+        snprintf(link, sizeof link, "%s/link", work); symlink(outside, link);
+        CHECK(h_fs_CleanDirRec("save:/link") != RES_OK && h_fs_DeleteDirRec("save:/link") != RES_OK, "cleaning or deleting through the link is refused");
+        CHECK(h_fs_CreateFile("save:/link/x", 0) != RES_OK, "so is creating a file through it");
+        CHECK(same(keep, "keep"), "the folder it points at keeps its files");
+        unlink(link); unlink(keep); rmdir(outside);
+    }
 
     printf("⑦ backslash paths on a save\n");
     {   uint64_t h; DirectoryEntry de[4]; int64_t cnt = 0; int32_t t = -1;

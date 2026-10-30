@@ -551,6 +551,20 @@ class App(unittest.TestCase):
         p.send_signal(signal.SIGTERM); p.communicate(timeout=30)
         self.assertEqual(p.returncode, 3)
 
+    def test_sigterm_during_the_cloud_send(self):   # once the host has exited it is not signalled again: the launcher itself ends, also while the cloud send waits
+        home, cloud = self.tmp / 'home', self.tmp / 'cloud fifo'
+        save = home / f'Library/Application Support/HorizonNative/{TID}/save'; save.mkdir(parents=True, exist_ok=True); (save / 'game.dat').write_text('progress')
+        (cloud / TID).mkdir(parents=True, exist_ok=True); fifo = cloud / TID / 'save.dmsync'; fifo.unlink(missing_ok=True); os.mkfifo(fifo)   # a read that never ends, as a download iCloud never finishes
+        (home / 'host_run.txt').unlink(missing_ok=True)
+        p = self.launch(DM_SAVE_SYNC=str(cloud))
+        for _ in range(100):
+            if (home / 'host_run.txt').exists(): break
+            time.sleep(0.05)
+        time.sleep(0.5); t0 = time.monotonic()
+        p.send_signal(signal.SIGTERM); p.communicate(timeout=30)
+        self.assertEqual(p.returncode, -signal.SIGTERM)
+        self.assertLess(time.monotonic() - t0, 5)   # not the 10 s the fetch is given
+
     def test_missing_data(self):
         broken = self.tmp / 'Broken.app'; shutil.rmtree(broken, ignore_errors=True)
         subprocess.run(['/bin/cp', '-R', self.app, broken], check=True)

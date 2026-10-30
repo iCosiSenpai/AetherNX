@@ -107,6 +107,16 @@ class DeriveProfile(Base):
         self.derive(); (self.pdir / 'pso_manifest.tsv').write_text('S\tk2\tpixel\n'); self.derive()
         self.assertEqual((self.pdir / 'pso_manifest.tsv').read_text(), 'S\tk2\tpixel\n')
 
+    def test_derived_folder_on_the_registered_profile_is_refused(self):   # --profile-out naming the profile's own folder, a folder holding it, or one inside it
+        before = {p.name: p.read_bytes() for p in self.src.iterdir()}
+        for target in (self.src, self.src / 'sub'):
+            with self.subTest(target=target), self.assertRaises(nsp.BuildError):
+                nsp.derive_profile(game.Game(self.src), target, 'v65536', self.ex, ['main'])
+        (self.tmp / 'link').symlink_to(self.src)
+        with self.assertRaises(nsp.BuildError): nsp.derive_profile(game.Game(self.src), self.tmp / 'link', 'v65536', self.ex, ['main'])
+        with self.assertRaises(nsp.BuildError): nsp.derive_profile(game.Game(self.src), self.tmp / 'games', 'v65536', self.ex, ['main'])
+        self.assertEqual({p.name: p.read_bytes() for p in self.src.iterdir()}, before)
+
     def test_shader_only_derivation_preserves_builds_and_registered_patch_file(self):
         source = self.src / 'game.tsv'
         source.write_text(source.read_text() + f'build\tv65536\t1.1.0\tmain={BID2}\nshader_versions\tv0 v65536\n')
@@ -277,6 +287,65 @@ class DeriveProfile(Base):
         self.assertFalse(key.exists())
         self.derive()
         self.assertFalse(game.Game(self.pdir).values('mem_alias'))
+
+    def test_provisional_run_on_the_registered_profile_is_refused(self):   # --provisional --profile-out <dm/games>: the provisional folder would be the registered profile
+        before = {p.name: p.read_bytes() for p in self.src.iterdir()}
+        keys = self.tmp / 'prod.keys'; keys.write_text('test')
+        fam = {'base': self.tmp / 'base.nsp', 'updates': [], 'dlc': []}
+        args = nsp.parse_args([str(self.tmp), '-k', str(keys), '--platform', 'mac', '--provisional', '--profile-out', str(self.src.parent)])
+        with mock.patch.object(nsp, 'find_repo', return_value=REPO), mock.patch.object(nsp, 'apple_silicon', return_value=True), \
+             mock.patch.object(nsp, '_importable', return_value=True), mock.patch.object(nsp.shutil, 'which', return_value='/dotnet'), \
+             mock.patch.object(nsp, 'scan_nsps', return_value=(TID, fam)), mock.patch.object(nsp, 'decompress_nsz', return_value=fam), \
+             mock.patch.object(nsp, 'survey', side_effect=AssertionError('surveyed into the registered profile')):
+            with self.assertRaisesRegex(nsp.BuildError, 'registered profile'): nsp.main(args)
+        self.assertEqual({p.name: p.read_bytes() for p in self.src.iterdir()}, before)
+
+
+class ExtractReuse(Base):   # extract(): an extraction is reused only while its NSPs, nx_extract and --allow-damaged are as when it was made
+    def setUp(self):
+        super().setUp()
+        self.ex2 = self.tmp / 'work/extract'; self.ex2.mkdir(parents=True); self.logs = self.tmp / 'work/logs'; self.logs.mkdir()
+        self.base = self.tmp / 'base.nsp'; self.base.write_bytes(b'base'); self.upd = self.tmp / 'upd.nsp'; self.upd.write_bytes(b'update')
+        self.runs = 0
+        def fake_run(argv, log, **kw):   # nx_extract's output: the code module, the RomFS image and the profile's marker file inside it
+            self.runs += 1; t = Path(argv[4])
+            (t / 'ExeFS').mkdir(parents=True); (t / 'ExeFS/main').write_bytes(b'NSO0'); (t / 'RomFS.img').write_bytes(b'img')
+            (t / 'a').mkdir(); (t / 'a/b').write_bytes(b'marker'); Path(log).write_text('ExeFS: 1 files 0.1 MB\n')
+        for cm in (mock.patch.object(nsp, 'run', fake_run), mock.patch.object(nsp.rfs, 'source', Path)):
+            cm.__enter__(); self.addCleanup(cm.__exit__, None, None, None)
+
+    def extract(self):
+        return nsp.extract('nx', 'keys', self.ex2, 'v65536', self.base, self.upd, None, self.logs, game.Game(self.src))
+
+    def test_reused_until_an_input_changes(self):
+        self.extract(); self.extract()
+        self.assertEqual(self.runs, 1)
+        self.upd.write_bytes(b'another update dump')   # the same version tag, another file
+        self.extract(); self.assertEqual(self.runs, 2)
+        self.extract(); self.assertEqual(self.runs, 2)
+        with mock.patch.object(nsp, 'ALLOW_DAMAGED', True): self.extract()
+        self.assertEqual(self.runs, 3)
+
+    def test_failed_replacement_is_extracted_again(self):   # the old extraction must not lose its key when its replacement fails, or the next run adopts it
+        self.extract()
+        self.upd.write_bytes(b'a different update')
+        with mock.patch.object(nsp, 'run', side_effect=nsp.BuildError('nx_extract failed')):
+            with self.assertRaises(nsp.BuildError): self.extract()
+        self.extract()
+        self.assertEqual(self.runs, 2)   # the first extraction and the retry; the failed attempt never produced output
+
+    def test_shader_stages_follow_the_extraction(self):   # a RomFS of the same names and sizes from another NSP: the extraction key changes the stage keys
+        d = self.ex2 / 'v65536'; (d / 'RomFS.img').parent.mkdir(parents=True, exist_ok=True); (d / 'RomFS.img').write_bytes(b'img')
+        (self.ex2 / 'v65536.key').write_text('A\n'); a = nsp.fingerprint(nsp.extraction_identity(d / 'RomFS.img'))
+        (self.ex2 / 'v65536.key').write_text('B\n'); b = nsp.fingerprint(nsp.extraction_identity(d / 'RomFS.img'))
+        self.assertNotEqual(a, b)
+        self.assertEqual(nsp.extraction_identity(self.tmp / 'capture'), ('extraction', None))
+
+    def test_extraction_without_a_key_is_adopted_once(self):
+        self.extract(); (self.ex2 / 'v65536.key').unlink()
+        self.extract(); self.assertEqual(self.runs, 1)
+        self.assertTrue((self.ex2 / 'v65536.key').is_file())
+        self.base.write_bytes(b'other base'); self.extract(); self.assertEqual(self.runs, 2)
 
 
 class DlcOnlyShaders(Base):

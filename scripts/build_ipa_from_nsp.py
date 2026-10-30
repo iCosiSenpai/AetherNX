@@ -788,6 +788,11 @@ def derive_profile(g, pdir, ver, d, mods, app=None, shader_only=False):
     they name shaders by content key. A folder derived from the same inputs (the files copied and the game.tsv written, kept in <pdir>.derived.key) is kept as it is, with what later
     stages wrote into it (mem_used, the heap check, the split's tables), so their own reuse holds. shader_only preserves all registered game.tsv rows and links its existing cuts:
     only the shader tables change with installed DLC or newly decoded compute kernels. Returns the version's display version"""
+    # The derived folder is emptied before the profile's files are copied into it: it must not be the registered profile itself, or hold it, or lie inside it
+    # (--profile-out dm/games put it on the profile, whose tables were then deleted before they could be copied)
+    real, reg = Path(pdir).resolve(), Path(g.dir).resolve()
+    if real == reg or reg.is_relative_to(real) or real.is_relative_to(reg):
+        raise BuildError(f'the derived profile folder {pdir} would overwrite the registered profile {g.dir}: give --profile-out a folder outside it')
     src = sorted(p for p in g.dir.iterdir() if p.is_file() and (p.name not in DERIVED_SKIP or shader_only and p.name == 'patches.py'))
     T, disp = '\t', nacp.version(d / 'control.nacp') or '?'
     row = T.join(['build', ver, disp] + [f'{m}={build_id(d / "ExeFS" / m)}' for m in mods if (d / 'ExeFS' / m).exists()])
@@ -953,22 +958,42 @@ def extracted(log):   # (files, bytes) from the summary lines nx_extract wrote t
     return (sum(int(n) for n, _ in rows), int(sum(float(mb) for _, mb in rows) * 2**20)) if rows else None
 
 
+def extract_key(base, upd):   # what an extraction is made from: the NSPs (names, sizes, times), nx_extract's sources and the damaged-input switch (extract_aoc keys its DLC the same way)
+    nx_src = Path(__file__).resolve().parents[1] / 'dm/tools/nx_extract'
+    return fingerprint([(p.name, p.stat().st_size, p.stat().st_mtime_ns) for p in (base, upd) if p], ('files', [nx_src / f for f in ('Program.cs', 'nx_extract.csproj')]), ('allow-damaged', ALLOW_DAMAGED))
+
+
+def extraction_identity(path):   # the extraction a RomFS belongs to (its key beside its folder, extract()): stages keyed on the RomFS's names and sizes alone missed a replaced NSP
+    p = Path(str(path))
+    if p.name not in ('RomFS.img', 'RomFS'): return ('extraction', None)
+    return ('files', [p.parent.with_name(p.parent.name + '.key')])
+
+
 def extract(nx, keys, ex, name, base, upd, cmp_dir, logs, g):   # the build IDs are checked by the caller (build_mismatch)
-    dst, marker, log = ex / name, g.get('romfs_marker'), logs / f'extract_{name}.log'
+    dst, marker, log, kf = ex / name, g.get('romfs_marker'), logs / f'extract_{name}.log', ex / f'{name}.key'
+    key = extract_key(base, upd)
     try: reusable = (dst / 'ExeFS' / 'main').exists() and (dst / 'RomFS.img').is_file() and not (dst / 'RomFS').exists() and (rfs.source(dst) / marker).exists()
     except (OSError, ValueError, struct.error): reusable = False
+    # A replaced NSP (a damaged dump redone, another release under the same version), another nx_extract or --allow-damaged turned off extracts again.
+    # An extraction from before the key was kept is taken as it is once, and keyed now
+    if reusable and kf.exists() and reused(kf, key) is None:
+        reusable = False; say(f'the {name} NSPs, nx_extract or --allow-damaged changed since the last extraction: extracting again')
     if reusable:
         PROG.stage(f'extract {name}')
+        if not kf.exists(): kf.write_text(f'{key}\n')
         say(f'reusing the extracted {name}: {dst}')
         PROG.end('reused')
         return dst
+    # The old key stays until the new extraction is swapped in: an extraction that fails part way leaves the old folder under its old key, which the next run
+    # extracts again, never one without a key, which it would take for an extraction from before keys and adopt
+    if not kf.exists() and dst.exists(): kf.write_text('extraction replaced part way\n')
     tmp = ex / (name + '.partial'); rmtree(tmp)
     last = extracted(log)   # the last extraction of this version (its log is about to be overwritten) has the exact size; without one, the NSPs' size is the estimate
     def poll():
         n, b = tree_size(tmp); return {'done': b, 'note': f'{n:,} files'}
     PROG.stage(f'extract {name}', poll=poll, unit='B', total=last[1] if last else base.stat().st_size + (upd.stat().st_size if upd else 0), est=not last)
     run([nx, keys, base, upd or '-', tmp, '--romfs-image'] + (['--allow-damaged'] if ALLOW_DAMAGED else []), log)
-    swap_in(tmp, dst)
+    swap_in(tmp, dst); kf.write_text(f'{key}\n')
     n, b = extracted(log) or (0, 0)
     PROG.end(f'{n:,} files, {amount(b, "B")}')
     return dst
@@ -1611,7 +1636,7 @@ def split_shaders(py, repo, roms, mains, pkg, env, logs, g, provisional=False, o
     PROG.stage('shader split', step='checking the inputs')   # then the count of files and archive ranges scanned (shader_split.py's progress lines); the package and tables come at the end
     kf = pkg.with_name(pkg.name + '.key')
     inputs = [('files', tool_files(repo)), bool(provisional)] + [x for r, m in zip(roms, mains) for x in
-        (('files', [m]), ('stat' if provisional else 'tree', r),
+        (('files', [m]), ('stat' if provisional else 'tree', r), extraction_identity(r),
          ('stat', r.parent / 'glslc_capture') if provisional else ('files', sorted((r.parent / 'glslc_capture').glob('*.glslc'))),
          ('stat', r.parent / 'ue_shaders') if provisional else ('files', sorted((r.parent / 'ue_shaders').glob('*.ushaderbytecode'))))]
     inputs += [item for r in dlc_roms for item in (('dlc', Path(r).name), ('stat', r))]   # DLC has no registered module build to pin its contents: include its index and re-extraction times, even when file sizes stay the same
@@ -1854,7 +1879,7 @@ def build_vk_shaders(py, repo, roots, sh, env, logs, g, reuse=True, mac=False, p
     """A Vulkan game's SPIR-V shaders (roots: the RomFS, and a run-time capture folder) → one Metal library each for the Mac (sh/vk/) and the iPhone (sh/ios/vk/, what build_ipa.sh takes from MSL_IOS;
     not with mac), replacing the NVN split and chain build (layer_shaders). Reused when the roots (paths and sizes), the tools, the profile and the compilers are as at the last successful run (reuse False: never)"""
     PROG.stage('Vulkan shaders', step='checking the inputs')
-    key = fingerprint(*[('stat' if provisional else 'tree', r) for r in roots], ('files', tool_files(repo)), ('files', profile_files(g)), *toolchain(repo, env), env=env) if reuse else None
+    key = fingerprint(*[('stat' if provisional else 'tree', r) for r in roots], *map(extraction_identity, roots), ('files', tool_files(repo)), ('files', profile_files(g)), *toolchain(repo, env), env=env) if reuse else None
     return layer_shaders(py, repo, 'vk', 'Vulkan', roots, sh, key, logs, env, mac)
 
 
@@ -1863,7 +1888,7 @@ def build_gl_shaders(py, repo, roots, sh, env, logs, g, reuse=True, mac=False, p
     not with mac), replacing the NVN split and chain build, as build_vk_shaders does for a Vulkan game; glslang (glslangValidator) compiles the GLSL to SPIR-V for spirv-cross"""
     PROG.stage('GL shaders', step='checking the inputs')
     if not shutil.which('glslangValidator', path=env['PATH']): raise BuildError('glslangValidator not found (brew install glslang): it compiles an OpenGL game\'s GLSL shaders')
-    key = fingerprint(*[('stat' if provisional else 'tree', r) if Path(r).is_dir() else ('files', [r]) for r in roots], ('files', tool_files(repo)), ('files', profile_files(g)), *toolchain(repo, env),
+    key = fingerprint(*[('stat' if provisional else 'tree', r) if Path(r).is_dir() else ('files', [r]) for r in roots], *map(extraction_identity, roots), ('files', tool_files(repo)), ('files', profile_files(g)), *toolchain(repo, env),
                       ('cmd', ['glslangValidator', '--version']), env=env) if reuse else None
     return layer_shaders(py, repo, 'gl', 'GL', roots, sh, key, logs, env, mac)
 
@@ -2218,6 +2243,10 @@ def main(args=None):
         check_capstone()
         if not shutil.which('dotnet', path=env['PATH']): raise BuildError('dotnet not found (.NET SDK 10)')
         pdir = Path(os.path.expanduser(args.profile_out or PROFILE_OUT)).resolve() if (args.profile_out or PROFILE_OUT) else nsp_dir / f'{app:016X}_build' / 'profile'
+        if (reg := gamemod.by_title(app)) is not None:   # --provisional for a game dm/games has: the provisional folder is written to, so it must not be (or hold, or lie in) the registered one
+            real, regd = (pdir / f'{app:016X}').resolve(), Path(reg.dir).resolve()
+            if real == regd or regd.is_relative_to(real) or real.is_relative_to(regd):
+                raise BuildError(f'the provisional profile folder {pdir / f"{app:016X}"} would overwrite the registered profile {reg.dir}: give --profile-out a folder outside it')
         if not (args.survey_only or SURVEY_ONLY): rmtree(derived_key(pdir / f'{app:016X}'))
         if (pdir / f'{app:016X}' / 'game.tsv').exists() and not (args.survey_only or SURVEY_ONLY):
             say(f'no game profile for {app:016X}: reusing the provisional profile from the last run (delete it to survey again)')

@@ -29,7 +29,7 @@
 
 extern char **environ;
 int dm_mac_launcher(void);   // Launcher.swift: 1 = Play (the settings are in the environment), 0 = the player quit, 2 = no window (apply the saved choices here)
-static pid_t g_child;
+static volatile pid_t g_child;   // the host while it runs; 0 once it has exited (forward then has no one to forward to)
 static char *g_file_keys, *g_launch_keys;   // the variables the env files set, and the settings the launch environment set (DM_ENV_FILE_KEYS, DM_ENV_LAUNCH_KEYS)
 
 static void add_key(char **list, const char *k) {   // a space-separated list of names
@@ -203,11 +203,21 @@ int main(int argc, char **argv) {
     struct sigaction sa = {.sa_handler = forward};   // no SA_RESTART: waitpid below sees EINTR and waits again
     sigemptyset(&sa.sa_mask);
     sigaction(SIGTERM, &sa, NULL); sigaction(SIGINT, &sa, NULL); sigaction(SIGHUP, &sa, NULL);
-    char *host_argv[] = {host, dm, NULL};
-    int err = posix_spawn(&g_child, host, NULL, NULL, host_argv, environ);
+    char *host_argv[] = {host, dm, NULL}; pid_t child;
+    int err = posix_spawn(&child, host, NULL, NULL, host_argv, environ);
     if (err) { fprintf(stderr, "[RED] launcher: cannot start %s: %s\n", host, strerror(err)); return 1; }
-    int status;
-    while (waitpid(g_child, &status, 0) < 0) if (errno != EINTR) return 1;
+    g_child = child;
+    // The host's end is waited for without reaping it (WNOWAIT): its process ID cannot be reused while forward may still signal it. Then, with the three signals held back,
+    // forwarding stops and they end the launcher as usual: a front end that cancels it during the cloud send below is not ignored (a send cut short goes at the next start)
+    siginfo_t si; int status;
+    while (waitid(P_PID, (id_t)child, &si, WEXITED | WNOWAIT) < 0) if (errno != EINTR) return 1;
+    sigset_t held, old; sigemptyset(&held); sigaddset(&held, SIGTERM); sigaddset(&held, SIGINT); sigaddset(&held, SIGHUP);
+    sigprocmask(SIG_BLOCK, &held, &old);
+    g_child = 0;
+    struct sigaction dfl = {.sa_handler = SIG_DFL}; sigemptyset(&dfl.sa_mask);
+    sigaction(SIGTERM, &dfl, NULL); sigaction(SIGINT, &dfl, NULL); sigaction(SIGHUP, &dfl, NULL);
+    while (waitpid(child, &status, 0) < 0) if (errno != EINTR) { sigprocmask(SIG_SETMASK, &old, NULL); return 1; }
+    sigprocmask(SIG_SETMASK, &old, NULL);
     // Cloud saves (DM_SAVE_SYNC, dm/host/save_sync.h): what the host committed and had not sent yet goes now, after a crash too (the committed save is whole whatever the host was doing)
     // DM_SAVE as the host had it: an env file or the launch environment may have set another folder than this app's own
     if (!save_sync_after_exit(getenv("DM_SAVE"), id)) fprintf(stderr, "launcher: the save did not reach the cloud; it goes at the next start\n");

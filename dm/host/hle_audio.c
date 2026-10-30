@@ -120,6 +120,7 @@ static void pull(aout *a, uint8_t *dst, uint64_t n) {
 // A six-channel output (front-left front-right center LFE back-left back-right) goes to the device as stereo, downmixed here with the audio renderer's default Q15 coefficients (hle_audren.c):
 // Core Audio's own 6 → 2 mapping keeps only the front pair, so voices on the center (Luigi's Mansion 3) and the back channels were silent. The queue still takes all six guest channels,
 // in blocks through a stack buffer (no allocation in the real-time callback)
+enum { AOUT_MAX_CH = 8 };   // the most channels an AudioOut may have here (Horizon's are 1, 2 or 6)
 static int device_channels(const aout *a) { return a->ch == 6 ? 2 : a->ch; }
 static void pull_device(aout *a, uint8_t *dst, uint64_t bytes) {
     if (a->ch != 6) { pull(a, dst, bytes); return; }
@@ -241,7 +242,7 @@ static void au_open(aout *a) {
 // Silent sink: consumes in real time at 48 kHz every 5 ms. When more than 100 ms behind (iOS suspended the whole process in the background, SIGSTOP on the Mac), restart the count from now and do not make up the missed time --
 // making it up would pull hundreds of times in one go (seconds' worth), releasing all of the game's buffers and logging hundreds of underruns; a suspended console does not play that stretch either
 static void *null_sink(void *p) {
-    aout *a = p; uint8_t scratch[RATE / 200 * 2 * 8]; dm_host_helper_qos(QOS_CLASS_USER_INTERACTIVE);   // paces the game's audio in real time
+    aout *a = p; uint8_t scratch[RATE / 200 * 2 * AOUT_MAX_CH]; dm_host_helper_qos(QOS_CLASS_USER_INTERACTIVE);   // paces the game's audio in real time; au_open_at bounds the channel count
     uint64_t bytes = (uint64_t)RATE / 200 * 2 * a->ch, t = now_ns();
     while (atomic_load_explicit(&a->null_run, memory_order_acquire)) {
         t += 5000000; uint64_t now = now_ns();
@@ -318,6 +319,8 @@ static Result au_open_at(void *g, void *ev, const char *name, const uint8_t *par
     int ch = *(const uint16_t *)(param + 4); int rate = *(const int32_t *)param;
     if (!ch) ch = 2;
     if (rate && rate != RATE) die("AudioOut sample rate %d not supported (48 kHz only)", rate);
+    // The count comes from the game's parameter: one past what the host's buffers hold (the silent sink's 5 ms block on its stack) would overrun them
+    if (ch > AOUT_MAX_CH) die("AudioOut channel count %d not supported (at most %d)", ch, AOUT_MAX_CH);
     aout *a = calloc(1, sizeof *a);
     pthread_mutex_init(&a->m, NULL); a->event = ev; a->ch = ch;
     atomic_init(&a->state, STATE_STOPPED); atomic_init(&a->vol, 0x3f800000u);

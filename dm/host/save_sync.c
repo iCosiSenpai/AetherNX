@@ -40,18 +40,20 @@ static void folder_path(const char *save, int i, char *out, size_t n) { snprintf
 
 static void free_names(char **v, size_t n) { for (size_t i = 0; i < n; i++) free(v[i]); free(v); }
 static int by_name(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
-// A folder's names in byte order, without . and ..; -1 when it cannot be read
+// A folder's names in byte order, without . and ..; -1 when it cannot be read, all of it (errno says why: ENOENT for no such folder)
 static int names_of(const char *dir, char ***out, size_t *count) {
     DIR *d = opendir(dir); if (!d) return -1;
-    char **v = NULL; size_t n = 0, cap = 0; struct dirent *e; int r = 0;
-    while ((e = readdir(d))) {
+    char **v = NULL; size_t n = 0, cap = 0; struct dirent *e; int r = 0, err = 0;
+    for (;;) {
+        errno = 0;
+        if (!(e = readdir(d))) { if (errno) { r = -1; err = errno; } break; }   // the end, or a read that failed part way: not a shorter folder
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-        if (n == cap) { char **w = realloc(v, (cap = cap ? cap * 2 : 16) * sizeof *v); if (!w) { r = -1; break; } v = w; }
-        if (!(v[n] = strdup(e->d_name))) { r = -1; break; }
+        if (n == cap) { char **w = realloc(v, (cap = cap ? cap * 2 : 16) * sizeof *v); if (!w) { r = -1; err = ENOMEM; break; } v = w; }
+        if (!(v[n] = strdup(e->d_name))) { r = -1; err = ENOMEM; break; }
         n++;
     }
     closedir(d);
-    if (r) { free_names(v, n); return -1; }
+    if (r) { free_names(v, n); errno = err; return -1; }
     if (n) qsort(v, n, sizeof *v, by_name);
     *out = v; *count = n; return 0;
 }
@@ -72,9 +74,10 @@ static int rm_tree(const char *p) {   // rm -rf: 0 when nothing is left
     return rmdir(p) ? -1 : r;
 }
 
-// Anything in it but Finder's .DS_Store: an empty folder is no save (the host makes DM_SAVE at every mount, DM_SAVE_device at the device save's)
+// 1: anything in it but Finder's .DS_Store. 0: nothing, or no such folder (an empty folder is no save: the host makes DM_SAVE at every mount, DM_SAVE_device at the device save's).
+// -1: it cannot be read (errno says why), so whether it holds a save is unknown: nothing may be decided from it, or a save that is there would count as none
 static int has_entries(const char *dir) {
-    char **v; size_t n, k = 0; if (names_of(dir, &v, &n)) return 0;
+    char **v; size_t n, k = 0; if (names_of(dir, &v, &n)) return errno == ENOENT ? 0 : -1;
     for (size_t i = 0; i < n; i++) k += strcmp(v[i], ".DS_Store") != 0;
     free_names(v, n); return k > 0;
 }
@@ -131,7 +134,10 @@ typedef struct { CC_SHA256_CTX sha; FILE *out; ss_meta *m; uint32_t entries; uin
 static int pack_entry(void *c, const char *abs, const char *rel, const struct stat *st) {
     packer *k = c;
     char guest[1024]; ssize_t gl = getxattr(abs, GUEST_NAME, guest, sizeof guest, 0, XATTR_NOFOLLOW);
-    if (gl < 0) gl = 0;   // ENOATTR: the host name is the guest's
+    if (gl < 0) {   // ENOATTR (or a volume without attributes): the host name is the guest's. Any other failure would pack the file under another name than the game's
+        if (errno != ENOATTR && errno != ENOTSUP) return -1;
+        gl = 0;
+    }
     size_t pl = strlen(rel); int file = S_ISREG(st->st_mode);
     if (pl > UINT16_MAX) return -1;
     uint8_t h[ENT] = {(uint8_t)(file ? 2 : 1)}; uint16_t pl16 = (uint16_t)pl, gl16 = (uint16_t)gl;
@@ -160,7 +166,8 @@ static int pack_save(const char *save, packer *k) {
     CC_SHA256_Init(&k->sha);
     for (int i = 0; i < 2; i++) {
         char dir[PATH_MAX]; folder_path(save, i, dir, sizeof dir);
-        if (has_entries(dir) && walk(dir, FOLDERS[i], pack_entry, k)) return -1;
+        int h = has_entries(dir);   // a folder that cannot be read fails the scan: packed as missing, a save that is there would read as none (and a cloud's would replace it)
+        if (h < 0 || (h && walk(dir, FOLDERS[i], pack_entry, k))) return -1;
     }
     uint8_t d[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_Final(d, &k->sha); hex(d, k->m->hash);
     if (!k->m->files) k->m->hash[0] = 0;   // no save: no hash, so that "nothing here" compares as nothing
@@ -268,19 +275,26 @@ ss_way ss_decide(const char *local, const char *base, const char *remote, int64_
 }
 
 // ---------- the sync state, backups, the cloud's file ----------
-static void read_base(const char *save, char *out) {   // <save>.sync: the hash of the save last known to be the same here and in the cloud ("" for none)
-    char p[PATH_MAX], ln[128]; out[0] = 0;
+// <save>.sync: the hash of the save last known to be the same here and in the cloud file it names ("" for none). A base recorded for another cloud file is none: a player who
+// picks another folder has a first sync with it, so the save goes there even though it did not change (a file written before the cloud line existed counts for any folder)
+static void read_base(const char *save, const char *cloud, char *out) {
+    char p[PATH_MAX], ln[PATH_MAX + 16], hash[SS_HASH + 1] = ""; int other = 0; out[0] = 0;
     snprintf(p, sizeof p, "%s.sync", save);
     FILE *f = fopen(p, "r"); if (!f) return;
-    while (fgets(ln, sizeof ln, f)) if (!strncmp(ln, "base\t", 5) && strspn(ln + 5, "0123456789abcdef") == SS_HASH) { memcpy(out, ln + 5, SS_HASH); out[SS_HASH] = 0; }
+    while (fgets(ln, sizeof ln, f)) {
+        if (!strncmp(ln, "base\t", 5) && strspn(ln + 5, "0123456789abcdef") == SS_HASH) { memcpy(hash, ln + 5, SS_HASH); hash[SS_HASH] = 0; }
+        else if (!strncmp(ln, "cloud\t", 6)) { ln[strcspn(ln, "\n")] = 0; other = strcmp(ln + 6, cloud) != 0; }
+    }
     fclose(f);
+    if (other && *hash) SLOG("the last sync was with another cloud folder: this is the first with %s", cloud);
+    if (!other) memcpy(out, hash, sizeof hash);
 }
 
-static void write_base(const char *save, const char *hash) {   // written beside it and renamed over it: a cut-off write must not read as another base
+static void write_base(const char *save, const char *cloud, const char *hash) {   // written beside it and renamed over it: a cut-off write must not read as another base
     char p[PATH_MAX], t[PATH_MAX + 8];
     snprintf(p, sizeof p, "%s.sync", save); snprintf(t, sizeof t, "%s.tmp", p);
     FILE *f = fopen(t, "w");
-    if (!f || fprintf(f, "# save sync (dm/host/save_sync.h): the save last known to be the same here and in the cloud\nbase\t%s\n", hash) < 0 || fclose(f) || rename(t, p)) {
+    if (!f || fprintf(f, "# save sync (dm/host/save_sync.h): the save last known to be the same here and in the cloud\nbase\t%s\ncloud\t%s\n", hash, cloud) < 0 || fclose(f) || rename(t, p)) {
         if (f) unlink(t);
         SRED("cannot write %s (errno=%d): the next start compares with the sync before", p, errno);
     }
@@ -312,14 +326,13 @@ static void prune_backups(const char *save, const char *side, const char *made) 
     free_names(v, k);
 }
 
-// A folder for a save about to be replaced: <save>-backups/<date> <side> (local: this device's, cloud: the cloud's); the oldest of that side beyond KEEP_BACKUPS go
+// A folder for a save about to be replaced: <save>-backups/<date> <side> (local: this device's, cloud: the cloud's). Once the replacement has gone through, prune_backups
+// removes the oldest of that side beyond KEEP_BACKUPS (not before: a replacement that fails and is put back must not cost an old backup)
 static int backup_dir(const char *save, const char *side, char *out, size_t n) {
     char stamp[32]; time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm); strftime(stamp, sizeof stamp, "%Y-%m-%d %H.%M.%S", &tm);
-    snprintf(out, n, "%s-backups/%s %s", save, stamp, side);
+    if (snprintf(out, n, "%s-backups/%s %s", save, stamp, side) >= (int)n) { errno = ENAMETOOLONG; return -1; }
     for (int k = 2; !access(out, F_OK); k++) snprintf(out, n, "%s-backups/%s %s %d", save, stamp, side, k);
-    if (mkdirs(out)) return -1;
-    prune_backups(save, side, out);
-    return 0;
+    return mkdirs(out);
 }
 
 // DM_SAVE_SYNC → <folder>/<title ID>/save.dmsync; 0 when sync is off
@@ -350,13 +363,23 @@ static int cloud_file(const char *title, char *out, size_t n) {
     return snprintf(out, n, "%s/%s/save.dmsync", dir, id) < (int)n;
 }
 
-// The platform's fetch, given at most `ms`: a download iCloud never finishes must not hold the game at its first save mount. One that comes too late is dropped
-typedef struct { pthread_mutex_t mu; pthread_cond_t cv; int done, abandoned, result; char cloud[PATH_MAX], local[PATH_MAX]; } fetch_job;
+// The platform's fetch, given at most `ms`: a download iCloud never finishes must not hold the game at its first save mount. One that comes too late is dropped.
+// Each fetch downloads to a file of its own (<local>.<pid>-<n>.part), and only the caller, while it still waits, renames it to `local`: a fetch abandoned at its time limit
+// removes its own file when it ends, never the one a later fetch put at `local` (the sender reuses the same paths at every send)
+typedef struct { pthread_mutex_t mu; pthread_cond_t cv; int done, abandoned, result; char cloud[PATH_MAX], part[PATH_MAX]; } fetch_job;
+static _Atomic unsigned g_fetch_seq;
+static void fetch_job_free(fetch_job *j) { pthread_mutex_destroy(&j->mu); pthread_cond_destroy(&j->cv); free(j); }
 static void *fetch_thread(void *p) {
-    fetch_job *j = p; int r = front_save_sync_fetch(j->cloud, j->local);
+    fetch_job *j = p; int r = front_save_sync_fetch(j->cloud, j->part);
     pthread_mutex_lock(&j->mu); j->done = 1; j->result = r; int late = j->abandoned; pthread_cond_signal(&j->cv); pthread_mutex_unlock(&j->mu);
-    if (late) { unlink(j->local); pthread_mutex_destroy(&j->mu); pthread_cond_destroy(&j->cv); free(j); }
+    if (late) { unlink(j->part); fetch_job_free(j); }
     return NULL;
+}
+// The fetch's answer for a job that is still the caller's: its file goes to `local` (1), or is removed (0, -1)
+static int fetch_publish(fetch_job *j, int r, const char *local) {
+    if (r == 1 && rename(j->part, local)) { SRED("cannot move the cloud's save into %s (errno=%d)", local, errno); r = -1; }
+    if (r != 1) unlink(j->part);
+    return r;
 }
 static void deadline(int ms, struct timespec *ts) {
     clock_gettime(CLOCK_REALTIME, ts);
@@ -367,69 +390,138 @@ static int fetch_timed(const char *cloud, const char *local, int ms) {   // fron
     fetch_job *j = calloc(1, sizeof *j); pthread_t t;
     if (!j) return -1;
     pthread_mutex_init(&j->mu, NULL); pthread_cond_init(&j->cv, NULL);
-    snprintf(j->cloud, sizeof j->cloud, "%s", cloud); snprintf(j->local, sizeof j->local, "%s", local);
-    if (pthread_create(&t, NULL, fetch_thread, j)) { pthread_mutex_destroy(&j->mu); pthread_cond_destroy(&j->cv); free(j); return front_save_sync_fetch(cloud, local); }
+    snprintf(j->cloud, sizeof j->cloud, "%s", cloud);
+    if (snprintf(j->part, sizeof j->part, "%s.%d-%u.part", local, (int)getpid(), atomic_fetch_add(&g_fetch_seq, 1)) >= (int)sizeof j->part) {
+        SRED("the download path beside %s is too long", local); fetch_job_free(j); return -1;
+    }
+    unlink(local);   // what an earlier fetch left there is not this one's answer
+    if (pthread_create(&t, NULL, fetch_thread, j)) { int r = fetch_publish(j, front_save_sync_fetch(cloud, j->part), local); fetch_job_free(j); return r; }
     pthread_detach(t);
     struct timespec ts; deadline(ms, &ts);
     pthread_mutex_lock(&j->mu);
     while (!j->done && pthread_cond_timedwait(&j->cv, &j->mu, &ts) != ETIMEDOUT) {}
     int r = j->done ? j->result : -1, mine = j->done;
-    if (!mine) j->abandoned = 1;   // the thread frees it when it ends
+    if (!mine) j->abandoned = 1;   // the thread removes its file and frees the job when it ends
     pthread_mutex_unlock(&j->mu);
-    if (mine) { pthread_mutex_destroy(&j->mu); pthread_cond_destroy(&j->cv); free(j); }
+    if (mine) { r = fetch_publish(j, r, local); fetch_job_free(j); }
     else SLOG("the cloud's save did not come within %d s", ms / 1000);
     return r;
 }
 
 // ---------- the two directions ----------
-// The cloud's save replaces this one. It is unpacked beside it first, so a pull that fails leaves this save as it was; then each folder is swapped in at once
-// (renamex_np, as a Commit swaps), and the one it replaced goes to the backups. kept: that backup, "" when this device had no save
+// One move of a pull, remembered so that a later failure can put it back: a renamed to b, or a and b swapped
+typedef struct { int swap; char a[PATH_MAX], b[PATH_MAX]; } pull_move;
+static int pull_do(pull_move *mv, int swap, const char *a, const char *b) {
+    mv->swap = swap; snprintf(mv->a, sizeof mv->a, "%s", a); snprintf(mv->b, sizeof mv->b, "%s", b);
+    return swap ? renamex_np(a, b, RENAME_SWAP) : rename(a, b);
+}
+static int pull_undo(const pull_move *mv, int n) {   // last first; 0 when everything is back
+    int stuck = 0;
+    while (n--) {
+        if (!(mv[n].swap ? renamex_np(mv[n].a, mv[n].b, RENAME_SWAP) : rename(mv[n].b, mv[n].a))) continue;
+        SRED("cannot put back %s after a failed pull (errno=%d)", mv[n].swap ? mv[n].b : mv[n].a, errno); stuck = 1;
+    }
+    return stuck;
+}
+
+// The cloud's save replaces this one. It is unpacked beside it first, and both folders here are looked at before anything moves (one that cannot be read stops the pull).
+// Then, folder by folder, this device's goes to the backup and the cloud's takes its place; a move that fails puts back every move before it, so the save is wholly this
+// device's or wholly the cloud's, never half of each. This device's save never passes through <save>.sync-tmp (which the caller and the next start remove): it goes straight
+// from its place into the backup, also if the app stops half way.
+// 0: the cloud's is in; kept: this device's backup ("" when it had none). -1: failed, this device's save is as it was.
+// -2: failed, and a move could not be put back: this device's save is in `kept` (never deleted), and its place may hold the cloud's or nothing
 static int pull(const char *save, const char *bundle, ss_meta *r, char *kept, size_t kn) {
-    char tmp[PATH_MAX]; snprintf(tmp, sizeof tmp, "%s.sync-tmp/in", save);
+    char tmp[PATH_MAX], here[2][PATH_MAX], incoming[2][PATH_MAX]; int fresh[2], had[2];
+    snprintf(tmp, sizeof tmp, "%s.sync-tmp/in", save);
     kept[0] = 0;
-    if (rm_tree(tmp) || mkdirs(tmp) || ss_read(bundle, tmp, r)) { rm_tree(tmp); return -1; }
+    if (rm_tree(tmp) || mkdirs(tmp) || ss_read(bundle, tmp, r)) { int e = errno; rm_tree(tmp); errno = e; return -1; }
     for (int i = 0; i < 2; i++) {
-        char here[PATH_MAX], incoming[PATH_MAX], old[PATH_MAX];
-        folder_path(save, i, here, sizeof here); snprintf(incoming, sizeof incoming, "%s/%s", tmp, FOLDERS[i]);
-        int fresh = !access(incoming, F_OK), had = has_entries(here);
-        if (had && !*kept && backup_dir(save, "local", kept, kn)) return -1;
-        snprintf(old, sizeof old, "%s/%s", kept, FOLDERS[i]);
-        if (fresh && !access(here, F_OK)) {   // swapped: here holds the cloud's, incoming this device's
-            if (renamex_np(incoming, here, RENAME_SWAP) || (had ? rename(incoming, old) : rm_tree(incoming))) return -1;
-        } else if (fresh) { if (rename(incoming, here)) return -1; }
-        else if (had && rename(here, old)) return -1;   // a folder the cloud's save does not have: this device's goes, so both hold the same
+        folder_path(save, i, here[i], sizeof here[i]); snprintf(incoming[i], sizeof incoming[i], "%s/%s", tmp, FOLDERS[i]);
+        fresh[i] = !access(incoming[i], F_OK);
+        if ((had[i] = has_entries(here[i])) < 0) { int e = errno; SRED("%s cannot be read (errno=%d)", here[i], e); rm_tree(tmp); errno = e; return -1; }
+    }
+    if ((had[0] || had[1]) && backup_dir(save, "local", kept, kn)) { int e = errno; kept[0] = 0; rm_tree(tmp); errno = e; return -1; }
+    pull_move mv[4]; int n = 0, failed = 0;
+    for (int i = 0; i < 2 && !failed; i++) {
+        char old[PATH_MAX]; snprintf(old, sizeof old, "%s/%s", kept, FOLDERS[i]);
+        int there = !access(here[i], F_OK);
+        if (had[i]) { if (pull_do(&mv[n], 0, here[i], old)) failed = 1; else n++, there = 0; }   // also a folder the cloud's save does not have: both then hold the same
+        if (failed || !fresh[i]) continue;
+        // An empty folder in the way (or one with only Finder's .DS_Store) is swapped out and goes with tmp; otherwise the place is free
+        if (pull_do(&mv[n], there, incoming[i], here[i])) failed = 1; else n++;
+    }
+    if (failed) {
+        int e = errno, stuck = pull_undo(mv, n);
+        if (!stuck && *kept) { rmdir(kept); kept[0] = 0; }   // the backup made for this pull is empty again
+        rm_tree(tmp); errno = e;
+        return stuck ? -2 : -1;
     }
     rm_tree(tmp);
+    if (*kept) prune_backups(save, "local", kept);
     return 0;
+}
+
+// <save>.sync-stuck: a pull failed and could not be put back (pull -2), so the save in place is neither side's whole save. While the file is there nothing is synced, by the
+// host or by the Mac launcher after it: a send would put that mixed save into the cloud. It names the backup holding this device's save; the player restores the save and
+// deletes the file (docs/settings.md, Cloud saves)
+static int stuck(const char *save, char *why, size_t n) {
+    char p[PATH_MAX]; snprintf(p, sizeof p, "%s.sync-stuck", save);
+    FILE *f = fopen(p, "r"); if (!f) return 0;
+    if (why && n) { why[0] = 0; if (fgets(why, (int)n, f)) why[strcspn(why, "\n")] = 0; }
+    fclose(f); return 1;
+}
+static void set_stuck(const char *save, const char *kept) {
+    char p[PATH_MAX]; snprintf(p, sizeof p, "%s.sync-stuck", save);
+    FILE *f = fopen(p, "w");
+    if (!f || fprintf(f, "%s\n# save sync (dm/host/save_sync.h): a pull from the cloud failed and could not be undone; this device's save is in the folder above. Restore it, then delete this file to sync again\n", kept) < 0 || fclose(f))
+        SRED("cannot write %s (errno=%d)", p, errno);
 }
 
 // What this device committed goes to the cloud, unless the cloud already has it. A cloud save changed since this device's last sync (another device sent it) is kept first.
 // 1 = in step with the cloud, 0 = not: the cloud cannot be read or written now (the next Commit, a flush or the Mac launcher tries again)
 static int send_save(const char *save, const char *title, const char *cloud) {
     char tmp[PATH_MAX], snap[PATH_MAX], packed[PATH_MAX], theirs[PATH_MAX], base[SS_HASH + 1], dir[PATH_MAX], kept[PATH_MAX], t[32];
-    ss_meta mine, other; int ok = 0, got;
+    ss_meta mine, other; int ok = 0, got, made_backup = 0;
+    if (stuck(save, kept, sizeof kept)) { SRED("not sent: an earlier pull could not be undone (this device's save is kept in %s); delete %s.sync-stuck once the save is restored", kept, save); return 0; }
     snprintf(tmp, sizeof tmp, "%s.sync-tmp/out", save); snprintf(snap, sizeof snap, "%s/s", tmp);
     snprintf(packed, sizeof packed, "%s/save.dmsync", tmp); snprintf(theirs, sizeof theirs, "%s/cloud.dmsync", tmp);
     if (rm_tree(tmp) || mkdirs(tmp)) { SRED("cannot make %s (errno=%d)", tmp, errno); goto done; }
     // A clone of the committed folders, taken while no Commit can swap them: the game may commit again while this packs
     for (int i = 0; i < 2; i++) {
         char from[PATH_MAX], to[PATH_MAX]; folder_path(save, i, from, sizeof from); folder_path(snap, i, to, sizeof to);
-        if (has_entries(from) && dm_fs_clone_committed(from, to)) { SRED("cloning %s failed (errno=%d)", from, errno); goto done; }
+        int h = has_entries(from);   // one that cannot be read is not sent as missing: the cloud would lose that half of the save
+        if (h < 0) { SRED("%s cannot be read (errno=%d): not sent", from, errno); goto done; }
+        if (h && dm_fs_clone_committed(from, to)) { SRED("cloning %s failed (errno=%d)", from, errno); goto done; }
     }
     if (ss_pack(snap, title, packed, &mine)) { SRED("packing %s failed (errno=%d)", save, errno); goto done; }
-    read_base(save, base);
+    read_base(save, cloud, base);
     if (!mine.files || !strcmp(mine.hash, base)) { ok = 1; goto done; }   // no save yet, or the one already in step
     if ((got = fetch_timed(cloud, theirs, FETCH_MS)) < 0) { SLOG("the cloud's save %s cannot be read now; sending later", cloud); goto done; }
     if (got && ss_read(theirs, NULL, &other)) SRED("the cloud's save %s is damaged; this device's replaces it", cloud);
-    else if (got && !strcmp(other.hash, mine.hash)) { write_base(save, mine.hash); ok = 1; goto done; }
+    else if (got && !strcmp(other.hash, mine.hash)) { write_base(save, cloud, mine.hash); ok = 1; goto done; }
     else if (got && other.files && strcmp(other.hash, base)) {
-        if (backup_dir(save, "cloud", kept, sizeof kept) || ss_read(theirs, kept, &other)) { SRED("cannot keep the cloud's save before replacing it (errno=%d); not sent", errno); goto done; }
+        // Both changed since the last sync (another device sent one): the newer stays, as at the mount (ss_decide). A newer cloud save is not replaced here, also not by the
+        // Mac launcher after a host that stopped before its first save mount had decided anything: the next start brings it in and keeps this device's
+        int both; char t2[32];
+        if (ss_decide(mine.hash, base, other.hash, mine.saved, other.saved, &both) == SS_PULL) {
+            when(other.saved, t, sizeof t); when(mine.saved, t2, sizeof t2);
+            SLOG("the cloud's save (from %s, saved %s) is newer than this device's (saved %s), and both changed since the last sync: not sent; the next start brings it in and keeps this device's", other.device, t, t2);
+            goto done;
+        }
+        if (backup_dir(save, "cloud", kept, sizeof kept)) { SRED("cannot make a backup folder for the cloud's save (errno=%d); not sent", errno); goto done; }
+        if (ss_read(theirs, kept, &other)) { SRED("cannot keep the cloud's save before replacing it (errno=%d); not sent", errno); rm_tree(kept); goto done; }   // a part of a backup is none
+        made_backup = 1;
         when(other.saved, t, sizeof t);
         SLOG("the cloud's save (from %s, saved %s) changed since this device's last sync; this device's newer one replaces it, and it is kept in %s", other.device, t, kept);
     }
     snprintf(dir, sizeof dir, "%s", cloud); *strrchr(dir, '/') = 0;
-    if (mkdirs(dir) || front_save_sync_store(packed, cloud) != 1) { SRED("sending to %s failed (errno=%d)", cloud, errno); goto done; }
-    write_base(save, mine.hash); ok = 1;
+    if (mkdirs(dir) || front_save_sync_store(packed, cloud) != 1) {
+        SRED("sending to %s failed (errno=%d)", cloud, errno);
+        if (made_backup) rm_tree(kept);   // the cloud still holds that save: a backup of it per failed attempt would push out older, different ones
+        goto done;
+    }
+    if (made_backup) prune_backups(save, "cloud", kept);   // only once the replacement went through (save_sync.h)
+    write_base(save, cloud, mine.hash); ok = 1;
     when(mine.saved, t, sizeof t);
     SLOG("sent: %d files, saved %s, to %s", mine.files, t, cloud);
 done:
@@ -471,11 +563,12 @@ static void mount_once(const char *save, const char *title) {
     char cloud[PATH_MAX], tmp[PATH_MAX], theirs[PATH_MAX], base[SS_HASH + 1], kept[PATH_MAX], t[32];
     ss_meta mine, other; memset(&other, 0, sizeof other);
     if (!cloud_file(title, cloud, sizeof cloud)) return;
+    if (stuck(save, kept, sizeof kept)) { SRED("off: an earlier pull could not be undone (this device's save is kept in %s); delete %s.sync-stuck once the save is restored", kept, save); return; }
     SLOG("on: %s", cloud);
     snprintf(tmp, sizeof tmp, "%s.sync-tmp", save); snprintf(theirs, sizeof theirs, "%s/in.dmsync", tmp);
     if (rm_tree(tmp) || mkdirs(tmp)) { SRED("cannot make %s (errno=%d): off", tmp, errno); return; }   // rm_tree: what an earlier session left
     if (ss_scan(save, &mine)) { SRED("this device's save %s cannot be read (errno=%d): off", save, errno); return; }
-    read_base(save, base);
+    read_base(save, cloud, base);
     int got = fetch_timed(cloud, theirs, FETCH_MS), both = 0, failed = 0;
     if (got > 0 && ss_read(theirs, NULL, &other)) { SRED("the cloud's save %s is damaged: playing on with this device's, which replaces it", cloud); got = 0; }
     else if (got > 0 && strcasecmp(other.title, title)) { SRED("the cloud's save %s is %s's, not %s's: not used", cloud, other.title, title); got = -1; }
@@ -483,8 +576,15 @@ static void mount_once(const char *save, const char *title) {
     switch (got < 0 ? SS_KEEP : ss_decide(mine.hash, base, got ? other.hash : "", mine.saved, other.saved, &both)) {
     case SS_PULL:
         when(other.saved, t, sizeof t);
-        if (pull(save, theirs, &other, kept, sizeof kept)) { SRED("bringing the cloud's save in failed (errno=%d): playing on with this device's", errno); failed = 1; break; }
-        write_base(save, other.hash);
+        switch (pull(save, theirs, &other, kept, sizeof kept)) {
+        case 0: break;
+        case -1: SRED("bringing the cloud's save in failed (errno=%d): playing on with this device's", errno); failed = 1; break;
+        default:   // nothing more is moved this session: what is here now is neither side's whole save
+            SRED("bringing the cloud's save in failed (errno=%d) and could not be undone: this device's save is kept in %s; sync stays off until %s.sync-stuck is deleted", errno, kept, save);
+            set_stuck(save, kept); rm_tree(tmp); return;
+        }
+        if (failed) break;
+        write_base(save, cloud, other.hash);
         SLOG("brought in the cloud's save (from %s, saved %s%s)%s%s", other.device, t, both ? ", the newer of two that both changed" : "", *kept ? "; this device's is kept in " : "", kept);
         break;
     case SS_PUSH:
@@ -493,7 +593,7 @@ static void mount_once(const char *save, const char *title) {
         g_want = 1;
         break;
     case SS_KEEP:
-        if (got > 0 && mine.files) { write_base(save, mine.hash); SLOG("in step with the cloud"); }
+        if (got > 0 && mine.files) { write_base(save, cloud, mine.hash); SLOG("in step with the cloud"); }
         else if (!got) SLOG("no save here or in the cloud yet");
         break;
     }

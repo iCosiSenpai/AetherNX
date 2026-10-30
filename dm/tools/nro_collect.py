@@ -41,11 +41,17 @@ def nro_size(h):   # an NRO header's total size, or 0 when the bytes are not one
     return n if 0x40 < n < 1 << 30 else 0
 
 
-def frame(mm, p, zstd):
-    dec = zstd.ZstdDecompressor(); parts, q = [], p
-    while not dec.eof and q < len(mm) and q - p < (1 << 30):
-        parts.append(dec.decompress(mm[q:q + (8 << 20)])); q += 8 << 20
-    return b''.join(parts)
+def frame(mm, p, zstd, size):
+    """The NRO a zstd frame at p holds, `size` bytes (its header's size): None when the frame ends short of it or inflates past it. Output is bounded by `size`, so a small
+    frame that inflates to gigabytes is refused after size + 1 bytes rather than held in memory before its hash is compared"""
+    dec = zstd.ZstdDecompressor(); out, q = bytearray(), p
+    while not dec.eof and len(out) <= size:
+        if dec.needs_input:
+            if q >= len(mm) or q - p >= (1 << 30): break
+            chunk = mm[q:q + (8 << 20)]; q += len(chunk)
+        else: chunk = b''
+        out += dec.decompress(chunk, max_length=size + 1 - len(out))
+    return bytes(out) if dec.eof and len(out) == size else None
 
 
 def scan(job):
@@ -65,8 +71,8 @@ def scan(job):
         while p != -1:
             try:
                 head = zstd.ZstdDecompressor().decompress(mm[p:p + 0x48000], max_length=0x40)
-                if nro_size(head):
-                    body = frame(mm, p, zstd); h = hashlib.sha256(body).digest()
+                if (n := nro_size(head)) and (body := frame(mm, p, zstd, n)) is not None:
+                    h = hashlib.sha256(body).digest()
                     if h in want: out.append((h, path, p, 'zstd', body))
             except Exception:
                 pass

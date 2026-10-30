@@ -1073,13 +1073,16 @@ void mtl_ubd_stats(uint64_t *deferred, uint64_t *conflicts) { *deferred = g_ubd_
 static int ubd_lazy(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_UB_LAZY"); v = e ? atoi(e) : 160; if (v < 0) v = 0; } return v; }   // the most updates kept across a pass end (0 = off)
 enum { UBD_PF = 1024 };
 static uint64_t g_ubd_pf[UBD_PF];   // pages (address >> 12, +1) the deferred updates touch, open addressing; cleared when the list is landed
-static int g_ubd_wide;              // an update spans more than 16 pages: the filter is skipped
+static int g_ubd_pf_n;              // pages in it: kept to 3/4 of the slots, so that a probe always meets an empty one
+static int g_ubd_wide;              // an update spans more than 16 pages, or the filter is full: the filter is skipped (every lookup scans the list)
 static inline unsigned ubd_pf_slot(uint64_t pg) { return (unsigned)((pg * 0x9E3779B97F4A7C15ull) >> 54) & (UBD_PF - 1); }
 static void ubd_pf_add(uint64_t lo, uint64_t hi) {
-    if (((hi - 1) >> 12) - (lo >> 12) > 16) { g_ubd_wide = 1; return; }
+    // 65 updates of 64 KiB each touch more pages than the filter has slots; with no empty slot left the probes below never ended
+    uint64_t npg = ((hi - 1) >> 12) - (lo >> 12) + 1;
+    if (g_ubd_wide || npg > 17 || g_ubd_pf_n + npg > UBD_PF * 3 / 4) { g_ubd_wide = 1; return; }
     for (uint64_t pg = lo >> 12; pg <= (hi - 1) >> 12; pg++) { unsigned k = ubd_pf_slot(pg);
         while (g_ubd_pf[k] && g_ubd_pf[k] != pg + 1) k = (k + 1) & (UBD_PF - 1);
-        g_ubd_pf[k] = pg + 1; }
+        if (!g_ubd_pf[k]) { g_ubd_pf[k] = pg + 1; g_ubd_pf_n++; } }
 }
 static inline int ubd_pf_hit(uint64_t lo, uint64_t hi) {
     if (g_ubd_wide || ((hi - 1) >> 12) - (lo >> 12) > 16) return 1;
@@ -1111,7 +1114,7 @@ static uint64_t ubd_shadow(uint64_t lo, uint64_t hi) {
 }
 // Encode the deferred copies in order (rp_end, once the pass has ended)
 static void ubd_flush(void) {
-    int n = g_nubd; g_nubd = 0; memset(g_ubd_pf, 0, sizeof g_ubd_pf); g_ubd_wide = 0;
+    int n = g_nubd; g_nubd = 0; memset(g_ubd_pf, 0, sizeof g_ubd_pf); g_ubd_pf_n = 0; g_ubd_wide = 0;
     for (int i = 0; i < n; i++) { const ubd_ent *e = &g_ubd[i]; void *db; uint64_t dof;
         if (!mtl_addr(e->lo, e->hi - e->lo, &db, &dof)) continue;
         enc_b_copy_buffer(blit_buf(0, 0, e->lo, e->hi), e->buf, e->off, (__bridge id<MTLBuffer>)db, dof, e->hi - e->lo); g_gp_ubd++; }
@@ -1156,14 +1159,18 @@ static void gw_commit(uint64_t fence) {
     if (g_nsbw) for (int i = 0; i < SBW_N; i++) if (g_sbwp[i].gen == g_pend_gen) gw_put(g_sbwp[i].page << 12, (g_sbwp[i].page + 1) << 12, fence, done);
     for (int i = 0; i < g_nsbw_w; i++) gw_put(g_sbw_wlo[i], g_sbw_whi[i], fence, done);
 }
-// The writes queued in this submission from index since on that overlap [a, b), newest first, into out (room for every entry a lookup can meet); -1 when they cannot all be told
-static int pend_since(uint64_t a, uint64_t b, int since, int *out) {
+// The writes queued in this submission from index since on that overlap [a, b), newest first, into out (room for cap entries); -1 when they cannot all be told.
+// An entry spanning several of the range's pages sits in each page's chain, so before the dedup below the chains can hold more than cap (1,207 updates over the same
+// seven pages, read for an eight-page range, gave 8,449 for 8,448 places): every append is checked, and a range that would overflow is not told (the pass ends instead)
+static int pend_since(uint64_t a, uint64_t b, int since, int *out, int cap) {
     if (g_pend_over) return -1;
     int n = 0; uint64_t p0 = a >> 12, p1 = (b - 1) >> 12;
-    if (p1 - p0 >= PEND_SPAN) { for (int e = g_npend - 1; e >= since; e--) if (a < g_pend_hi[e] && g_pend_lo[e] < b) out[n++] = e; return n; }   // every entry, newest first
-    for (int i = 0; i < g_nwide; i++) { int e = g_pend_wide[i]; if (e >= since && a < g_pend_hi[e] && g_pend_lo[e] < b) out[n++] = e; }
+    #define PEND_OUT(e) do { if (n == cap) return -1; out[n++] = (e); } while (0)
+    if (p1 - p0 >= PEND_SPAN) { for (int e = g_npend - 1; e >= since; e--) if (a < g_pend_hi[e] && g_pend_lo[e] < b) PEND_OUT(e); return n; }   // every entry, newest first
+    for (int i = 0; i < g_nwide; i++) { int e = g_pend_wide[i]; if (e >= since && a < g_pend_hi[e] && g_pend_lo[e] < b) PEND_OUT(e); }
     for (uint64_t pg = p0; pg <= p1; pg++) { unsigned bk = pend_bucket(pg); if (g_pend_hgen[bk] != g_pend_gen) continue;
-        for (int k = g_pend_head[bk]; k >= 0 && g_pend_node[k].e >= since; k = g_pend_node[k].next) { int e = g_pend_node[k].e; if (a < g_pend_hi[e] && g_pend_lo[e] < b) out[n++] = e; } }   // chains run newest first
+        for (int k = g_pend_head[bk]; k >= 0 && g_pend_node[k].e >= since; k = g_pend_node[k].next) { int e = g_pend_node[k].e; if (a < g_pend_hi[e] && g_pend_lo[e] < b) PEND_OUT(e); } }   // chains run newest first
+    #undef PEND_OUT
     if (n > 1 && (g_nwide || p1 > p0)) {   // several lists: newest first, each once
         for (int i = 1; i < n; i++) { int v = out[i], j = i; while (j > 0 && out[j - 1] < v) { out[j] = out[j - 1]; j--; } out[j] = v; }
         int m = 1; for (int i = 1; i < n; i++) if (out[i] != out[m - 1]) out[m++] = out[i];
@@ -1188,7 +1195,7 @@ static int ubp_get(uint64_t lo, uint64_t hi, uint64_t *gpu, const uint8_t **cpu)
     int since = c ? c->npend : 0;
     if (!c && gw_live(lo, hi)) { g_ubp_why[2]++; return 0; }
     if (!c && !nvn_host_readable(lo, hi - lo)) { g_ubp_why[4]++; return 0; }
-    int n = pend_since(lo, hi, since, g_ubp_idx); if (n < 0) { g_ubp_why[4]++; return 0; }
+    int n = pend_since(lo, hi, since, g_ubp_idx, (int)(sizeof g_ubp_idx / sizeof *g_ubp_idx)); if (n < 0) { g_ubp_why[4]++; return 0; }
     // Newest first, keep the writes that still show through somewhere (a write only newer ones cover is never read, whatever wrote it); stop once they cover the range
     enum { COVN = 64 }; uint64_t cl[COVN], ch[COVN]; int nc = 0, nk = 0, exact = 1;   // covered intervals, sorted and disjoint; exact = 0 once they no longer fit
     for (int i = 0; i < n; i++) { int e = g_ubp_idx[i];
@@ -1255,6 +1262,9 @@ void mtl_sub_fill(uint64_t dst, uint64_t n, uint32_t value) {
     if (value == (uint32_t)b0 * 0x01010101u) { [blit_buf(0, 0, dst, dst + n) fillBuffer:(__bridge id<MTLBuffer>)db range:NSMakeRange(dof, n) value:b0]; return; }
     enum { PAT = 0x10000 }; static __strong id<MTLBuffer> pat; static uint32_t pat_v; static int pat_ok;
     if (!pat_ok || pat_v != value) { uint32_t *tmp = malloc(PAT); for (unsigned i = 0; i < PAT / 4; i++) tmp[i] = value;
+        // The previous pattern is retired, not dropped: copies already recorded read it until their submission completes, and the residency set held every pattern made
+        // (64 KiB per change of value: a buffer cleared with 1 and 2 by turns grew by 225 MiB a minute at 60 changes a second)
+        if (pat) defer_obj_release(pat);
         pat = [g_dev newBufferWithBytes:tmp length:PAT options:MTLResourceStorageModeShared]; free(tmp); pat_v = value; pat_ok = 1; res_add(pat); }
     for (uint64_t off = 0; off < n; off += PAT) { uint64_t k = n - off < PAT ? n - off : PAT; enc_b_copy_buffer(blit_buf(0, 0, dst + off, dst + off + k), pat, 0, (__bridge id<MTLBuffer>)db, dof + off, k); }
 }
@@ -4243,10 +4253,15 @@ void mtl_reg_samp(int sid, const samp_par *sp) {
     os_unfair_lock_lock(&g_rmu);
     if (id_ >= g_nsreg) { int n = id_ + 256; g_sreg = realloc(g_sreg, n * sizeof *g_sreg); g_sreg_ok = realloc(g_sreg_ok, n); g_sview = realloc(g_sview, n * sizeof *g_sview); g_srid = realloc(g_srid, n * sizeof *g_srid);
         memset(g_sreg_ok + g_nsreg, 0, n - g_nsreg); memset(g_sview + g_nsreg, 0, (n - g_nsreg) * sizeof *g_sview); memset(g_srid + g_nsreg, 0, (n - g_nsreg) * sizeof *g_srid); g_nsreg = n; }
-    if (g_sview[id_]) { CFRelease(g_sview[id_]); g_sview[id_] = NULL; g_srid[id_] = 0; }
+    // The old sampler is retired, not released: a draw recorded before this re-registration copied its resource ID into an argument buffer, and the deferred encode and the
+    // GPU still read it after this returns. Released here it was freed under them; kept until the submissions recorded so far complete (defer_obj_unref: a sampler holds no
+    // residency-set allocation)
+    void *old = g_sview[id_];
+    if (old) { g_sview[id_] = NULL; g_srid[id_] = 0; }
     g_reg_gen++;
     g_sreg[id_] = *sp; g_sreg_ok[id_] = 1;
     os_unfair_lock_unlock(&g_rmu);
+    if (old) defer_obj_unref((__bridge_transfer id)old);
 }
 // Handles of deferred binds (BindTexturesDeferred) are read at execution: the record keeps the address of the handles (see hle_nvn.c); every reader of a bind record refreshes it first. Command memory is writable, so it is updated in place
 static inline void bh_fresh(const p_bind_handles *b) {

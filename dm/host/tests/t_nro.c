@@ -102,6 +102,14 @@ int main(void) {
     memcpy(nrr + 0x350, g_mod[1].sha256, 32);
     assert(h_ro_RegisterModuleInfo(NULL, nrr) != 0);
     assert(h_ro_LoadModule(&handles[0], raw[0], NULL, 32, 1) != 0 && !g_mod[1].loaded);
+    {   // A header that claims more bytes than are mapped behind it is refused before the image is hashed (256 MiB over one page faulted in CC_SHA256)
+        size_t pg = (size_t)getpagesize(); uint8_t *two = mmap(NULL, 2 * pg, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); assert(two != MAP_FAILED);
+        assert(!munmap(two + pg, pg));   // nothing mapped after the first page
+        memcpy(two + 0x10, "NRO0", 4); *(uint32_t *)(two + 0x18) = 256u << 20;
+        assert(h_ro_LoadModule(&handles[0], two, NULL, 32, 1) == RO_NOT_NRO);
+        *(uint32_t *)(two + 0x18) = (uint32_t)pg; assert(h_ro_LoadModule(&handles[0], two, NULL, 32, 1) != 0);   // all readable: hashed, then not a known module
+        munmap(two, pg);
+    }
     for (int i = 0; i < g_nmod; i++) { free(g_mod[i].symh); free(g_mod[i].pristine); }
     free(g_mod); free(g_loaded);
     puts("NRO relocation, load order, lifecycle, weak symbols and refusal: OK");

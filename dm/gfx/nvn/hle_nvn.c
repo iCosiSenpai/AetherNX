@@ -230,16 +230,23 @@ NVN(nvnMemoryPoolGetBufferAddress, NVNbufferAddress, const NVNmemoryPool *p) { r
 // default 8×8 white texture overwrote the UI's textures, and the title menu's labels, the name entry and other menus drew as plain bars or not at all. The scene also registers each draw's
 // textures into fresh IDs of a ring in its large pool (8,729 and up a few seconds in); with the table's capacity taken from the last pool alone, those all read as empty slots and the screen was black
 enum { NDPOOL = 16 };
-static struct dpool_base { const void *pool; int base; } g_tpb[NDPOOL], g_spb[NDPOOL];
+static struct dpool_base { const void *pool; int base, cap; } g_tpb[NDPOOL], g_spb[NDPOOL];   // cap: the entries its range holds
 static int g_ntpb, g_nspb, g_tnext, g_snext;
 static pthread_mutex_t g_dpool_mu = PTHREAD_MUTEX_INITIALIZER;
-static int dpool_add(struct dpool_base *t, int *nt, int *next, const void *pool, int n, const char *kind) {   // → the pool's base (assigned at its first Initialize)
+// → the pool's base, assigned at its first Initialize. A pool initialized again at the same address with more entries than its range holds gets a new range after the others:
+// keeping its base, its upper IDs ran into the next pool's range (two 512-entry pools at 0 and 512, the first re-created with 1,024: its ID 768 was the second's 256)
+static int dpool_add(struct dpool_base *t, int *nt, int *next, const void *pool, int n, const char *kind) {
     pthread_mutex_lock(&g_dpool_mu);
     int i = 0; while (i < *nt && t[i].pool != pool) i++;
+    int span = (n + 255) & ~255;
     if (i == *nt) {
         if (*nt == NDPOOL) { pthread_mutex_unlock(&g_dpool_mu); LOG("[RED] %s pools exceed %d: later ones share the first pool's numbering", kind, NDPOOL); return 0; }
-        t[i] = (struct dpool_base){pool, *next}; (*nt)++; *next += (n + 255) & ~255;
+        t[i] = (struct dpool_base){pool, *next, span}; (*nt)++; *next += span;
         if (i) LOG("[nvn] pool #%d (%s, %d entries): numbered from %d in the host table, separate from the earlier pools", i + 1, kind, n, t[i].base);
+    } else if (span > t[i].cap) {
+        if (t[i].base + t[i].cap == *next) *next = t[i].base;   // the last range: it simply grows in place
+        LOG("[nvn] %s pool #%d grows from %d to %d entries: numbered from %d in the host table", kind, i + 1, t[i].cap, n, *next);
+        t[i].base = *next; t[i].cap = span; *next += span;
     }
     int b = t[i].base; pthread_mutex_unlock(&g_dpool_mu); return b;
 }
@@ -2521,12 +2528,24 @@ static int write_region_bl(const tex_t *t, unsigned level, unsigned layer, const
         }
     return 0;
 }
+// The region lies inside the level (and its layers or slices): checked before either path writes. The fast path refused an out-of-range region, and the whole-level path
+// after it copied the region into a buffer of the level's size at the region's offsets, past its end (a 4-texel write at x 4 of a 4×4 texture wrote 4 bytes after it)
+static int region_ok(const tex_t *t, unsigned level, unsigned layer0, const NVNcopyRegion *r, int nz, int is3d) {
+    if (level >= (t->d.levels ? t->d.levels : 1) || r->xoffset < 0 || r->yoffset < 0 || r->zoffset < 0 || r->width < 0 || r->height < 0 || nz < 1) return 0;
+    uint32_t lw = t->d.width >> level ? t->d.width >> level : 1, lh = t->d.height >> level ? t->d.height >> level : 1, lz = is3d ? (t->d.depth >> level ? t->d.depth >> level : 1) : 1;
+    if ((uint64_t)r->xoffset + (uint64_t)r->width > lw || (uint64_t)r->yoffset + (uint64_t)r->height > lh) return 0;
+    return is3d ? (uint64_t)r->zoffset + (uint64_t)nz <= lz : (uint64_t)layer0 + (uint64_t)r->zoffset + (uint64_t)nz <= (t->L.layers ? t->L.layers : 1);
+}
 static void write_texels(const tex_t *t, const view_t *v, const NVNcopyRegion *r, const uint8_t *src, size_t row, size_t img) {
     if (!t->mem) { LOG("[RED] WriteTexels: texture has no storage"); return; }
     int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
     if (!bpb) { ONCE_LOG("[RED] WriteTexels: unknown format %#x", t->d.format); return; }
     unsigned level = v && v->set_levels ? (unsigned)v->base_level : 0, layer0 = v && v->set_layers ? (unsigned)v->min_layer : 0;
     int is3d = t->d.target == NVN_TEXTURE_TARGET_3D, nz = r->depth ? r->depth : 1;
+    if (!region_ok(t, level, layer0, r, nz, is3d)) {
+        ONCE_LOG("[RED] WriteTexels: region %d,%d,%d %dx%dx%d (level %u, layer %u) outside the %ux%ux%u texture: not written", r->xoffset, r->yoffset, r->zoffset, r->width, r->height, nz, level, layer0, t->d.width, t->d.height, t->d.depth);
+        return;
+    }
     if (!is3d) {
         size_t wb0 = (size_t)((r->width + bw - 1) / bw) * bpb, row0 = row ? row : wb0, img0 = img ? img : row0 * (size_t)((r->height + bh - 1) / bh);
         dm_guest_write_prepare(t->mem, t->L.size);

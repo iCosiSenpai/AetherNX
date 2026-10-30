@@ -233,7 +233,8 @@ static void md_nv12(const vpx_image_t *im, uint8_t *dst, int w, int h) {
         const uint8_t *u = im->planes[1] + (size_t)y * im->stride[1], *v = im->planes[2] + (size_t)y * im->stride[2];
         uint8_t *o = dst + (size_t)w * h + (size_t)y * w;
         int x = 0;
-        for (; x + 16 <= cw2; x += 16) { uint8x16x2_t t = { { vld1q_u8(u + x), vld1q_u8(v + x) } }; vst2q_u8(o + 2 * x, t); }
+        // 16 pairs (32 bytes) at a time only while they fit the row of w bytes: an odd width rounds cw2 up, and the last row's store ran a byte past the w*h*3/2 output
+        for (; x + 16 <= cw2 && 2 * x + 32 <= w; x += 16) { uint8x16x2_t t = { { vld1q_u8(u + x), vld1q_u8(v + x) } }; vst2q_u8(o + 2 * x, t); }
         for (; x < cw2 && 2 * x + 1 < w; x++) { o[2 * x] = u[x]; o[2 * x + 1] = v[x]; }
     }
 }
@@ -292,21 +293,27 @@ static uint32_t ogg_crc(const uint8_t *p, size_t n) {
     static uint32_t t[256]; if (!t[1]) for (uint32_t i = 0; i < 256; i++) { uint32_t r = i << 24; for (int k = 0; k < 8; k++) r = r & 0x80000000u ? r << 1 ^ 0x04c11db7u : r << 1; t[i] = r; }
     uint32_t c = 0; for (size_t i = 0; i < n; i++) c = c << 8 ^ t[(c >> 24 ^ p[i]) & 0xff]; return c;
 }
-static size_t ogg_page(mdec_t *d, uint8_t *out, const uint8_t *pkt, int n, int bos) {   // out needs n + 27 + 255 bytes; n < 65025
-    int seg = n / 255 + 1; uint8_t *h = out;
-    memcpy(h, "OggS", 4); h[4] = 0; h[5] = bos ? 2 : 0;
-    int64_t g = d->ogg_gran; memcpy(h + 6, &g, 8); uint32_t sn = 0x444d5642u; memcpy(h + 14, &sn, 4);   // granule, serial "BVMD"
-    uint32_t q = d->ogg_seq++; memcpy(h + 18, &q, 4); memset(h + 22, 0, 4); h[26] = (uint8_t)seg;
-    for (int i = 0; i < seg - 1; i++) h[27 + i] = 255;
-    h[27 + seg - 1] = (uint8_t)(n % 255);
-    memcpy(h + 27 + seg, pkt, (size_t)n);
-    size_t len = 27 + (size_t)seg + (size_t)n; uint32_t c = ogg_crc(out, len); memcpy(h + 22, &c, 4);
+// One packet as Ogg pages: 255 lacing values at most on a page, so a packet of 65025 bytes or more (a large Vorbis setup header) continues on the next page (header type 1),
+// with granule -1 on every page it does not end on (Ogg spec). ogg_cap(n) is what out needs
+static size_t ogg_cap(size_t n) { size_t laces = n / 255 + 1; return n + laces + 27 * ((laces + 254) / 255); }
+static size_t ogg_page(mdec_t *d, uint8_t *out, const uint8_t *pkt, size_t n, int bos) {
+    size_t laces = n / 255 + 1, done = 0, len = 0;
+    for (int first = 1; laces; first = 0) {
+        size_t seg = laces < 255 ? laces : 255, body = 0; uint8_t *h = out + len;
+        memcpy(h, "OggS", 4); h[4] = 0; h[5] = (uint8_t)((bos && first ? 2 : 0) | (first ? 0 : 1));
+        int64_t g = seg == laces ? d->ogg_gran : -1; memcpy(h + 6, &g, 8); uint32_t sn = 0x444d5642u; memcpy(h + 14, &sn, 4);   // granule, serial "BVMD"
+        uint32_t q = d->ogg_seq++; memcpy(h + 18, &q, 4); memset(h + 22, 0, 4); h[26] = (uint8_t)seg;
+        for (size_t i = 0; i < seg; i++) { uint8_t v = laces - i == 1 ? (uint8_t)(n % 255) : 255; h[27 + i] = v; body += v; }
+        memcpy(h + 27 + seg, pkt + done, body);
+        size_t plen = 27 + seg + body; uint32_t c = ogg_crc(h, plen); memcpy(h + 22, &c, 4);
+        len += plen; done += body; laces -= seg;
+    }
     return len;
 }
 static int md_vorbis_open(mdec_t *d) {
     if (!d->vhdr[0] || !d->vhdr[1]) { if (!d->red_vb++) LOG("[RED] movie: the Vorbis decoder got no headers (csd-0 / csd-1), outputting silence"); return 0; }
     static const uint8_t comment[] = {3, 'v', 'o', 'r', 'b', 'i', 's', 0, 0, 0, 0, 0, 0, 0, 0, 1};
-    size_t cap = (size_t)d->vhdr_n[0] + d->vhdr_n[1] + sizeof comment + 3 * (27 + 255); uint8_t *buf = malloc(cap); if (!buf) return 0;
+    size_t cap = ogg_cap((size_t)d->vhdr_n[0]) + ogg_cap(sizeof comment) + ogg_cap((size_t)d->vhdr_n[1]); uint8_t *buf = malloc(cap); if (!buf) return 0;
     d->ogg_seq = 0; d->ogg_gran = 0;
     size_t n = ogg_page(d, buf, d->vhdr[0], d->vhdr_n[0], 1); n += ogg_page(d, buf + n, comment, sizeof comment, 0); n += ogg_page(d, buf + n, d->vhdr[1], d->vhdr_n[1], 0);
     int used = 0, err = 0; d->vb = stb_vorbis_open_pushdata(buf, (int)n, &used, &err, NULL); free(buf);
@@ -319,8 +326,8 @@ static int md_vorbis_open(mdec_t *d) {
 static int md_vorbis(mdec_t *d, const uint8_t *p, int n, int slot) {
     if (!d->vb && !md_vorbis_open(d)) return 0;
     if (n >= 65025) { if (!d->red_vb++) LOG("[RED] movie: Vorbis packet of %d bytes, larger than a page", n); return 0; }
-    uint8_t *page = malloc((size_t)n + 27 + 255); if (!page) return 0;
-    size_t len = ogg_page(d, page, p, n, 0);
+    uint8_t *page = malloc(ogg_cap((size_t)n)); if (!page) return 0;
+    size_t len = ogg_page(d, page, p, (size_t)n, 0);
     int ch = 0, ns = 0; float **pcm = NULL;
     stb_vorbis_decode_frame_pushdata(d->vb, page, (int)len, &ch, &pcm, &ns); free(page);
     if (ns <= 0 || ch <= 0 || !pcm) return 0;
@@ -539,7 +546,9 @@ HLE_FORCE("_ZN5movie7Decoder9ConfigureEPNS_9MediaDataE", "movie decoder configur
     mdec_t *d = md_of(self); if (!d) return 0x1000;
     if (MD_AUDIO(d)) {   // codec-specific data as Android's MediaCodec takes it: Vorbis csd-0 = identification header, csd-1 = setup header; AAC csd-0 = AudioSpecificConfig
         for (int k = 0; k < 2 && md; k++) { void *b = NULL; char key[8]; snprintf(key, sizeof key, "csd-%d", k);
-            if (G.find_buf(md, key, &b) && b && G.data(b) && G.size(b)) { size_t n = G.size(b); free(d->vhdr[k]); d->vhdr[k] = malloc(n); memcpy(d->vhdr[k], G.data(b), n); d->vhdr_n[k] = (int)n; } }
+            if (G.find_buf(md, key, &b) && b && G.data(b) && G.size(b)) { size_t n = G.size(b); free(d->vhdr[k]); d->vhdr[k] = NULL; d->vhdr_n[k] = 0;
+                if (n > INT_MAX || !(d->vhdr[k] = malloc(n))) { LOG("[RED] movie: codec header %s of %zu bytes cannot be kept", key, n); continue; }
+                memcpy(d->vhdr[k], G.data(b), n); d->vhdr_n[k] = (int)n; } }
         int ch = 0, rate = 0; if (md) { G.find_i32(md, "channel-count", &ch); G.find_i32(md, "sample-rate", &rate); }
         if (ch > 0) d->ch = ch; if (rate > 0) d->rate = rate;
         MD_TRACE(d, 0, "Configure (%s): %d channels %d Hz, headers %d + %d bytes", d->type == MD_TYPE_AAC ? "AAC" : "Vorbis", ch, rate, d->vhdr_n[0], d->vhdr_n[1]);

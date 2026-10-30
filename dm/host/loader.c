@@ -45,19 +45,74 @@ static void tsd_check(void) {
 }
 
 static void build_symhash(module_t *m);
+enum { DT_HASH_TAG = 4, DT_STRSZ_TAG = 10, DT_SYMENT_TAG = 11, DT_GNU_HASH_TAG = 0x6ffffef5, MAX_DYNSYM = 1 << 28 };
+// [off, off + len) lies inside the mapped module
+static int mod_span(const module_t *m, uint64_t off, uint64_t len) { return off <= m->size && len <= m->size - off; }
+static uint32_t mod_u32(const module_t *m, uint64_t off) { uint32_t v; memcpy(&v, m->base + off, 4); return v; }
+// The number of dynamic symbols DT_GNU_HASH covers: past the highest symbol a bucket starts at, along its chain to the entry that ends it (bit 0). 0 = the table is damaged
+static uint64_t gnu_hash_count(const module_t *m, uint64_t off) {
+    if (!mod_span(m, off, 16)) return 0;
+    uint64_t nb = mod_u32(m, off), first = mod_u32(m, off + 4), nbloom = mod_u32(m, off + 8);
+    if (!mod_span(m, off + 16, nbloom * 8 + nb * 4)) return 0;
+    uint64_t buckets = off + 16 + nbloom * 8, chains = buckets + nb * 4, top = 0;
+    for (uint64_t i = 0; i < nb; i++) { uint64_t b = mod_u32(m, buckets + i * 4); if (b > top) top = b; }
+    if (!top) return first;                       // no hashed symbol: only the ones before symoffset
+    if (top < first) return 0;
+    for (;; top++) {
+        if (top - first > MAX_DYNSYM || !mod_span(m, chains + (top - first) * 4, 4)) return 0;
+        if (mod_u32(m, chains + (top - first) * 4) & 1) return top + 1;
+    }
+}
+// The dynamic table, the symbol and string tables and every symbol's name, all checked against the mapped module: a damaged or unexpected layout stops here with its reason,
+// not later as a read past the module. The symbol count comes from DT_HASH (nchain), else DT_GNU_HASH, as Horizon's rtld and dm/tools/nso_syms.py read it; only a module with
+// neither falls back to the symbol table running up to the string table that follows it. (The distance between the two tables alone, with the strings first, once asked for 8 GiB.)
 static void parse_dynamic(module_t *m) {
-    uint32_t mod0 = *(uint32_t *)(m->base + 4);
-    if (memcmp(m->base + mod0, "MOD0", 4)) die("%s: no MOD0", m->name);
-    m->dyn = (const Elf64_Dyn *)(m->base + mod0 + *(int32_t *)(m->base + mod0 + 4));
-    for (const Elf64_Dyn *d = m->dyn; d->d_tag; d++) switch (d->d_tag) {
-        case DT_SYMTAB: m->symtab = (const Elf64_Sym *)(m->base + d->d_un.d_ptr); break;
-        case DT_STRTAB: m->strtab = (const char *)(m->base + d->d_un.d_ptr); break;
+    if (!mod_span(m, 0, 8)) die("%s: module too small for its header", m->name);
+    uint32_t mod0 = mod_u32(m, 4);
+    if (!mod_span(m, mod0, 8) || memcmp(m->base + mod0, "MOD0", 4)) die("%s: no MOD0", m->name);
+    int64_t dyn_off = (int64_t)mod0 + (int32_t)mod_u32(m, (uint64_t)mod0 + 4);
+    if (dyn_off < 0 || (dyn_off & 7)) die("%s: MOD0 puts the dynamic table outside the module (%lld)", m->name, (long long)dyn_off);
+    m->dyn = (const Elf64_Dyn *)(m->base + dyn_off);
+    uint64_t symtab = 0, strtab = 0, strsz = 0, syment = sizeof(Elf64_Sym), hash = 0, gnu = 0; int have_sym = 0, have_str = 0, have_strsz = 0;
+    for (const Elf64_Dyn *d = m->dyn;; d++) {   // relocs_of and the NRO paths walk the same table later: it ends inside the module
+        if (!mod_span(m, (uint64_t)((const uint8_t *)d - m->base), sizeof *d)) die("%s: the dynamic table runs past the module (no DT_NULL)", m->name);
+        if (!d->d_tag) break;
+        switch (d->d_tag) {
+        case DT_SYMTAB: symtab = d->d_un.d_ptr; have_sym = 1; break;
+        case DT_STRTAB: strtab = d->d_un.d_ptr; have_str = 1; break;
+        case DT_STRSZ_TAG: strsz = d->d_un.d_val; have_strsz = 1; break;
+        case DT_SYMENT_TAG: syment = d->d_un.d_val; break;
+        case DT_HASH_TAG: hash = d->d_un.d_ptr; break;
+        case DT_GNU_HASH_TAG: gnu = d->d_un.d_ptr; break;
         case DT_INIT: m->init = d->d_un.d_ptr; break;
         case DT_FINI: m->fini = d->d_un.d_ptr; break;
         case DT_INIT_ARRAY: m->init_array = d->d_un.d_ptr; break;
         case DT_INIT_ARRAYSZ: m->init_arraysz = d->d_un.d_val; break;
+        }
     }
-    m->nsym = (unsigned)(((const uint8_t *)m->strtab - (const uint8_t *)m->symtab) / sizeof(Elf64_Sym));
+    if (!have_sym || !have_str) die("%s: no %s in the dynamic table", m->name, have_sym ? "DT_STRTAB" : "DT_SYMTAB");
+    if (syment != sizeof(Elf64_Sym)) die("%s: DT_SYMENT %llu, not the %zu bytes of an Elf64_Sym", m->name, (unsigned long long)syment, sizeof(Elf64_Sym));
+    if (!mod_span(m, strtab, 1)) die("%s: DT_STRTAB %#llx outside the module (%#zx bytes)", m->name, (unsigned long long)strtab, m->size);
+    if (!have_strsz) strsz = m->size - strtab;
+    if (!strsz || !mod_span(m, strtab, strsz)) die("%s: the string table (%#llx, %#llx bytes) runs past the module", m->name, (unsigned long long)strtab, (unsigned long long)strsz);
+    uint64_t n; const char *from;
+    if (hash) {
+        if (!mod_span(m, hash, 8)) die("%s: DT_HASH %#llx outside the module", m->name, (unsigned long long)hash);
+        n = mod_u32(m, hash + 4); from = "DT_HASH";
+    } else if (gnu) {
+        if (!(n = gnu_hash_count(m, gnu))) die("%s: DT_GNU_HASH %#llx is damaged or runs past the module", m->name, (unsigned long long)gnu);
+        from = "DT_GNU_HASH";
+    } else {
+        if (strtab <= symtab) die("%s: no DT_HASH or DT_GNU_HASH, and the string table does not follow the symbol table: the symbol count is unknown", m->name);
+        n = (strtab - symtab) / sizeof(Elf64_Sym); from = "the table layout";
+    }
+    if (n > MAX_DYNSYM || !mod_span(m, symtab, n * sizeof(Elf64_Sym)))
+        die("%s: %llu symbols (from %s) at %#llx run past the module (%#zx bytes)", m->name, (unsigned long long)n, from, (unsigned long long)symtab, m->size);
+    m->symtab = (const Elf64_Sym *)(m->base + symtab); m->strtab = (const char *)(m->base + strtab); m->nsym = (unsigned)n;
+    for (unsigned i = 0; i < m->nsym; i++) {   // every name ends inside the string table: lookups compare them as C strings
+        uint32_t nm = m->symtab[i].st_name;
+        if (nm >= strsz || !memchr(m->strtab + nm, 0, strsz - nm)) die("%s: symbol %u's name (%#x) is outside the string table (%#llx bytes)", m->name, i, nm, (unsigned long long)strsz);
+    }
     build_symhash(m);
 }
 
@@ -72,8 +127,9 @@ static void *module_sym_linear(module_t *m, const char *name) {
 // Of the 91–99 ms of ① host loading, relocation + forced take-over took 77–86 ms, mainly because every by-name relocation scanned the symbol tables of two modules linearly
 static uint32_t sym_hash(const char *s) { uint32_t h = 2166136261u; while (*s) h = (h ^ (uint8_t)*s++) * 16777619u; return h; }
 static void build_symhash(module_t *m) {
-    unsigned cap = 16; while (cap < m->nsym * 2) cap <<= 1;
-    m->symh = calloc(cap, sizeof *m->symh); m->symh_mask = cap - 1;
+    unsigned cap = 16; while (cap < m->nsym * 2) cap <<= 1;   // nsym <= MAX_DYNSYM (parse_dynamic)
+    if (!(m->symh = calloc(cap, sizeof *m->symh))) die("%s: no memory for the index of %u symbols", m->name, m->nsym);
+    m->symh_mask = cap - 1;
     for (unsigned i = 1; i < m->nsym; i++) {
         const Elf64_Sym *s = &m->symtab[i]; if (!s->st_shndx) continue;
         const char *nm = m->strtab + s->st_name;
@@ -330,6 +386,7 @@ static void relocate(module_t *m) {
             uint64_t *where = (uint64_t *)(m->base + r->r_offset);
             unsigned type = ELF64_R_TYPE(r->r_info), si = ELF64_R_SYM(r->r_info);
             if (type == R_AARCH64_RELATIVE) { *where = (uint64_t)m->base + r->r_addend; cnt[0]++; continue; }
+            if (si >= m->nsym) die("%s: relocation %llu names symbol %u of %u", m->name, (unsigned long long)i, si, m->nsym);
             const Elf64_Sym *s = &m->symtab[si]; int other, weak0;
             uint64_t v = bind_sym(m, s, &other, &weak0);
             if (other && nint++ < 8) LOG("%s: %s bound to an earlier module's definition (%s)", m->name, m->strtab + s->st_name, module_of((void *)v) ? module_of((void *)v)->name : "?");

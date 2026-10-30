@@ -59,6 +59,57 @@ static void expect_abort(int duplicate) {
     assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
 }
 
+// parse_dynamic on synthetic modules (docs/code-review.md, symbol-table sizing): the count comes from DT_HASH or DT_GNU_HASH, not from where the tables lie, and every table
+// and name is checked against the module. A 4 KiB image: MOD0 at 0x20, the dynamic table at 0x40, strings at 0x100, the hash table at 0x180, symbols at 0x200
+enum { IMG = 4096 };
+static uint8_t img[IMG] __attribute__((aligned(16))); static module_t dm_mod;
+static void layout(int hash_tag, uint64_t symtab, uint64_t strtab) {
+    memset(img, 0, sizeof img); memset(&dm_mod, 0, sizeof dm_mod);
+    dm_mod.base = img; dm_mod.size = IMG; strcpy(dm_mod.name, "synthetic");
+    *(uint32_t *)(img + 4) = 0x20; memcpy(img + 0x20, "MOD0", 4); *(int32_t *)(img + 0x24) = 0x20;
+    Elf64_Dyn *d = (Elf64_Dyn *)(img + 0x40); int n = 0;
+    d[n++] = (Elf64_Dyn){.d_tag = DT_SYMTAB, .d_un.d_ptr = symtab};
+    d[n++] = (Elf64_Dyn){.d_tag = DT_STRTAB, .d_un.d_ptr = strtab};
+    d[n++] = (Elf64_Dyn){.d_tag = 10 /* DT_STRSZ */, .d_un.d_val = 16};
+    if (hash_tag) d[n++] = (Elf64_Dyn){.d_tag = hash_tag, .d_un.d_ptr = 0x180};
+    memcpy(img + strtab, "\0symbol\0other\0", 14);
+    Elf64_Sym *s = (Elf64_Sym *)(img + symtab);
+    s[1] = (Elf64_Sym){.st_name = 1, .st_shndx = 1, .st_value = 0x300};
+    s[2] = (Elf64_Sym){.st_name = 8, .st_shndx = 1, .st_value = 0x310};
+}
+static int parse_dies(void) {   // parse_dynamic in a child: 1 when it stopped with its diagnostic (abort)
+    fflush(stdout); pid_t pid = fork(); assert(pid >= 0);
+    if (!pid) { struct rlimit lim = {0, 0}; setrlimit(RLIMIT_CORE, &lim); freopen("/dev/null", "w", stderr); freopen("/dev/null", "w", stdout); parse_dynamic(&dm_mod); _exit(0); }
+    int status; assert(waitpid(pid, &status, 0) == pid);
+    return WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT;
+}
+static void dynamic_tables(void) {
+    // DT_HASH (nbucket 1, nchain 3: the null symbol and two), strings before symbols: the layout whose pointer difference once asked for 8 GiB
+    layout(4, 0x200, 0x100); uint32_t *h = (uint32_t *)(img + 0x180); h[0] = 1; h[1] = 3;
+    parse_dynamic(&dm_mod);
+    assert(dm_mod.nsym == 3 && module_sym(&dm_mod, "symbol") == img + 0x300 && module_sym(&dm_mod, "other") == img + 0x310 && !module_sym(&dm_mod, "absent"));
+    free(dm_mod.symh);
+    // DT_GNU_HASH only: nbuckets 1, symoffset 1, one bloom word; bucket 0 starts at symbol 1, whose chain ends at symbol 2 (bit 0 set)
+    layout(0x6ffffef5, 0x200, 0x100); h = (uint32_t *)(img + 0x180); h[0] = 1; h[1] = 1; h[2] = 1; h[3] = 0;
+    h[6] = 1; h[7] = 0x10; h[8] = 0x21;   // bloom (8 bytes) at h[4..5], bucket h[6], chain h[7..8]
+    parse_dynamic(&dm_mod);
+    assert(dm_mod.nsym == 3 && module_sym(&dm_mod, "other") == img + 0x310);
+    free(dm_mod.symh);
+    // Neither hash: the symbol table running up to the string table after it (0x200 .. 0x248 = 3 symbols)
+    layout(0, 0x200, 0x248); parse_dynamic(&dm_mod);
+    assert(dm_mod.nsym == 3 && module_sym(&dm_mod, "symbol") == img + 0x300);
+    free(dm_mod.symh);
+    // Damaged or unknown layouts stop with a diagnostic instead of reading past the module
+    layout(0, 0x200, 0x100); assert(parse_dies());                                                      // no hash, strings first: the count is unknown
+    layout(4, 0x200, 0x100); h = (uint32_t *)(img + 0x180); h[0] = 1; h[1] = 1u << 20; assert(parse_dies());   // nchain past the module
+    layout(4, 0x200, 0x100); h = (uint32_t *)(img + 0x180); h[0] = 1; h[1] = 3;
+    ((Elf64_Sym *)(img + 0x200))[2].st_name = 40; assert(parse_dies());                                // a name outside DT_STRSZ
+    layout(4, 0x200, 0x100); *(int32_t *)(img + 0x24) = IMG; assert(parse_dies());                     // MOD0 points the dynamic table past the module
+    layout(4, 0x200, 0x100); h = (uint32_t *)(img + 0x180); h[0] = 1; h[1] = 3;
+    memset(img + 0x40, 0xff, IMG - 0x40); assert(parse_dies());                                         // no DT_NULL before the module ends
+    puts("Dynamic tables: DT_HASH, DT_GNU_HASH and adjacent layouts counted; damaged layouts refused: OK");
+}
+
 int main(void) {
     // Empty/missing sections must still give misses after lazy initialization.
     assert(!hle_implements("absent")); assert(!hle_implements("absent"));
@@ -104,6 +155,7 @@ int main(void) {
     }
     assert(g_nstub == MAX_STUB); expect_abort(0);
     reset_sections();
+    dynamic_tables();
     puts("Symbol indexes: collisions, duplicate precedence/rejection, misses, wrappers and 4096 reusable stubs: OK");
     return 0;
 }

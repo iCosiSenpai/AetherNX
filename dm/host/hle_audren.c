@@ -109,13 +109,16 @@ static void render_main(void *arg) {
             if (!atomic_load(&g_open)) break;
         }
         if (!nfree) break;
-        const int16_t *src; int got;
+        gbuf *b = free_list[--nfree]; int got, n;
         uint32_t h = atomic_load(&g_cq_head);
-        if (h != atomic_load(&g_cq_tail)) { src = g_cq[h % CQ]; got = g_cq_n[h % CQ]; atomic_store(&g_cq_head, h + 1); cq_popped(); }   // play queued catch-up output first
-        else { g_frame_n = 0; exec(g_handle[0], g_handle[1]); src = g_frame; got = g_frame_n; }   // SDK: generate commands → CPU processing (output taken in the host takeover) → signal the game's renderer event
-        int n = got ? got : 240;
-        gbuf *b = free_list[--nfree];
-        if (got) memcpy(b->ptr, src, (size_t)n * 4); else memset(b->ptr, 0, (size_t)n * 4);
+        if (h != atomic_load(&g_cq_tail)) {   // play queued catch-up output first. Copied out before the slot is handed back: the update waiting for room renders into it at once
+            got = g_cq_n[h % CQ]; n = got ? got : 240;
+            if (got) memcpy(b->ptr, g_cq[h % CQ], (size_t)n * 4); else memset(b->ptr, 0, (size_t)n * 4);
+            atomic_store(&g_cq_head, h + 1); cq_popped();
+        } else {   // SDK: generate commands → CPU processing (output taken in the host takeover) → signal the game's renderer event
+            g_frame_n = 0; exec(g_handle[0], g_handle[1]); got = g_frame_n; n = got ? got : 240;
+            if (got) memcpy(b->ptr, g_frame, (size_t)n * 4); else memset(b->ptr, 0, (size_t)n * 4);
+        }
         b->size = (uint64_t)n * 4;
         if (!dm_pcmout_append(out, b)) free_list[nfree++] = b;
     }

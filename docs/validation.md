@@ -45,3 +45,18 @@ The initial native geometry invocation was missing the required test-executable 
 The pinned release assemblies and source digest changed, so the chain header is now `e25fce867fcc`. This deliberately invalidates old shader libraries: game shaders and the host must be rebuilt together on the next game build. The cleanup has not run real-game regression routes and does not establish improved game compatibility.
 
 The published branch starts with a new HorizonNative import commit rather than retaining the source project's commit authors. The local recovery bundle, archive branch and temporary comparison copies were removed at the owner's request after the identity cleanup. The read-only external source remote and review metadata remain available for the requested monitoring. Required licenses remain in the new tree.
+
+## Audit and launcher redesign: 2026-10-29
+
+[Functional code review](code-review.md) records the defects fixed here and their regression tests. Only the fixes are validated by these checks; no compatibility or performance claim is made.
+
+- All 93 Python test files under `dm/tools/tests`, `dm/ios/tests` and `dm/gfx/tests` passed in isolated processes with `DM_GAME=010015100B514000`: 801 cases, 22 skipped (after the third audit round). Several graphics test files need `DM_GAME` set and fail without it, independently of these changes.
+- The pinned ruff/pyright ratchet reported 392 findings, all in the baseline, and no new ones.
+- The host built for `010015100B514000`. Its `run`, `asan` (ASan/UBSan) and `tsan-threads` test targets passed after the third round, including `t_save_sync_faults` (49 checks; 20 of its first 33 fail on the reviewed revision), the dynamic-table cases of `t_symbols`, the Ogg paging and odd-size NV12 cases of `t_movie_vpx`, `t_fs` (101 checks, with stale handles and links) and `t_nro` (an NRO header larger than its mapping).
+- The 23 graphics unit tests the CI runs in `dm/gfx/tests` passed, `t_cpu_tex` with its new region checks also under `--metal`. `nx_extract` builds with `dotnet build`.
+- The deferred-uniform page filter was checked with a harness extracted from `nvn_mtl.m`: the reviewed revision hangs, the fixed one returns.
+- The iOS launcher sources type-check against the iOS 26 SDK and the Mac sources against the macOS SDK. `test_launcher_storage` (model, saved choices, invalid env values, controller steps, tint contrast and the Mac window's measured layout) and `test_nsp_mac_app` (including SIGTERM during the cloud send, which fails on the reviewed launcher) passed.
+- Screens were captured from the Mac window and, through Mac Catalyst running the iOS sources, for an iPhone in landscape and an iPad. No iOS simulator runtime is installed on this Mac, so text at accessibility sizes and controller focus were checked from the source and the model tests, not on screen. Neither has been checked on a device.
+- `dmsh_build.py` is a shader chain input, so the chain is now `5ba3d294ee74`. Game shader libraries and the host must be rebuilt together on the next build.
+
+No game was launched, no gameplay regression route was run, and no app was installed on a device.

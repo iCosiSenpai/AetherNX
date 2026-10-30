@@ -115,13 +115,22 @@ def read(path, ent):
     if len(c) != usz: raise ValueError(f'{path}#{nm}: {len(c)} bytes, the TOC says {usz}')
     return c
 
+def extract(p, es, out, rx=None):   # writes the entries es of CPK p under out
+    out = Path(out); root = out.resolve()
+    for e in es:
+        if rx and not rx.search(e[0]): continue
+        # A member name comes from the archive: one that is absolute, climbs out with .., or reaches outside through a link already there is refused, never written
+        rel = Path(e[0])
+        if rel.is_absolute() or '..' in rel.parts or not (dst := (out / rel).resolve()).is_relative_to(root):
+            raise ValueError(f'{p}: member {e[0]!r} would be written outside {out}')
+        dst.parent.mkdir(parents=True, exist_ok=True); dst.write_bytes(read(p, e))
+
 if __name__ == '__main__':
     p = sys.argv[1]
     es = files(p)
     if '--extract' in sys.argv:
-        i = sys.argv.index('--extract'); out = Path(sys.argv[i + 1]); rx = re.compile(sys.argv[i + 2]) if len(sys.argv) > i + 2 else None
-        for e in es:
-            if rx and not rx.search(e[0]): continue
-            dst = out / e[0]; dst.parent.mkdir(parents=True, exist_ok=True); dst.write_bytes(read(p, e))
+        i = sys.argv.index('--extract')
+        try: extract(p, es, Path(sys.argv[i + 1]), re.compile(sys.argv[i + 2]) if len(sys.argv) > i + 2 else None)
+        except ValueError as e: raise SystemExit(f'[RED] {e}') from None
     else:
         for nm, off, csz, usz in es: print(f'{nm}\t{off:#x}\t{csz}\t{usz}')

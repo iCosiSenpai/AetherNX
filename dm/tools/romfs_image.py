@@ -14,6 +14,7 @@
 # Usage: romfs_image.py [--reuse] <RomFS folder> <out image>   (written to <out>.part, renamed at the end)
 # --reuse checks the source tree's names and file metadata, the packer's version and the image's identity before keeping a previous image.
 import argparse, hashlib, json, os, struct, subprocess
+import tempfile
 from pathlib import Path
 
 MAGIC = b'DMROMFS1'
@@ -64,6 +65,12 @@ def source_digest(src, ents):
     return h.hexdigest()
 
 
+def staging(dst):   # a new file beside dst, created exclusively (never a link or a file already there), with the mode an ordinary new file gets: (fd, path)
+    fd, path = tempfile.mkstemp(prefix=os.path.basename(dst) + '.', suffix='.part', dir=os.path.dirname(os.path.abspath(dst)))
+    mask = os.umask(0); os.umask(mask); os.fchmod(fd, 0o666 & ~mask)
+    return fd, path
+
+
 def pack(src, dst, reuse=False):
     src, dst = os.fspath(src), os.fspath(dst)
     ents = entries(src)
@@ -74,31 +81,37 @@ def pack(src, dst, reuse=False):
             cached = json.loads(Path(stamp).read_text())
             if cached == {'source': digest, 'image': file_identity(dst)}: return len(ents)
         except (OSError, ValueError): pass
-    part = dst + '.part'
-    with open(part, 'wb') as out:
-        out.write(b'\0' * HEAD.size)
-        off = HEAD.size
-        for e in ents:
-            if e[2]: continue
-            with open(e[1], 'rb') as f:
-                n = 0
-                while True:
-                    b = f.read(8 << 20)
-                    if not b: break
-                    out.write(b); n += len(b)
-            e[3], e[4] = off, n; off += n
-        pool, idx = bytearray(), bytearray()
-        for name, _, isdir, a, b in ents:
-            idx += ENT.pack(a, b, len(pool), len(name), 0 if isdir else 1, 0); pool += name
-        out.write(idx); out.write(pool)
-        out.seek(0); out.write(HEAD.pack(MAGIC, off, len(idx) + len(pool), len(ents)))
-    # A changing source must not publish a mixed image or a reuse stamp for stale data.
-    if source_digest(src, entries(src)) != digest:
+    # The staging files are created new and exclusively beside the destination (staging): a predictable <dst>.part opened with truncation followed a link someone left
+    # there and emptied the file it pointed at before anything was read
+    fd, part = staging(dst)
+    try:
+        with os.fdopen(fd, 'wb') as out:
+            out.write(b'\0' * HEAD.size)
+            off = HEAD.size
+            for e in ents:
+                if e[2]: continue
+                with open(e[1], 'rb') as f:
+                    n = 0
+                    while True:
+                        b = f.read(8 << 20)
+                        if not b: break
+                        out.write(b); n += len(b)
+                e[3], e[4] = off, n; off += n
+            pool, idx = bytearray(), bytearray()
+            for name, _, isdir, a, b in ents:
+                idx += ENT.pack(a, b, len(pool), len(name), 0 if isdir else 1, 0); pool += name
+            out.write(idx); out.write(pool)
+            out.seek(0); out.write(HEAD.pack(MAGIC, off, len(idx) + len(pool), len(ents)))
+        # A changing source must not publish a mixed image or a reuse stamp for stale data.
+        if source_digest(src, entries(src)) != digest:
+            raise RuntimeError('RomFS changed while packing; run the packer again when its files are stable')
+    except BaseException:
         os.unlink(part)
-        raise RuntimeError('RomFS changed while packing; run the packer again when its files are stable')
+        raise
     os.replace(part, dst)
-    Path(stamp + '.part').write_text(json.dumps({'source': digest, 'image': file_identity(dst)}))
-    os.replace(stamp + '.part', stamp)
+    fd, spart = staging(stamp)
+    with os.fdopen(fd, 'w') as f: f.write(json.dumps({'source': digest, 'image': file_identity(dst)}))
+    os.replace(spart, stamp)
     return len(ents)
 
 

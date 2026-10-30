@@ -431,6 +431,20 @@ class Regress(unittest.TestCase):
                     self.assertEqual(selected['DM_GAME'], 'game')
                     self.assertTrue((dst / '.done').is_file())
 
+    def test_rewrite_cache_follows_its_inputs(self):   # the same rewriter, another extraction of the same version: rewritten again, not the cached modules
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); build = root / 'build'; main = build / 'extract/v0/ExeFS/main'; main.parent.mkdir(parents=True); main.write_bytes(b'NSO0 one')
+            g = NS(id='game', folder=root / 'f', build=build, ver='v0', patched=root / 'patched_v0', derived=False, env=lambda tree: {'DM_GAME': 'game'})
+            tree = NS(id='tree', path=root, py=lambda code, e: 'main')
+            process = NS(poll=lambda: 0, returncode=0)
+            with patch.object(regress, 'rewriter_key', return_value='key'), patch.object(regress, 'say'), \
+                 patch.object(regress.subprocess, 'Popen', return_value=process) as spawn, patch.object(regress.time, 'sleep'), patch.object(regress, 'game_root', return_value=root):
+                regress.modules_for(tree, g, True, 1); regress.modules_for(tree, g, True, 1)
+                self.assertEqual(spawn.call_count, 1)   # unchanged inputs: the cached rewrite
+                main.write_bytes(b'NSO0 two')
+                regress.modules_for(tree, g, True, 1)
+                self.assertEqual(spawn.call_count, 2)   # a changed module: rewritten again
+
     def test_vk_build_records_failure_even_without_generated_shaders(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); tool = root / 'dm/gfx/tools/vk_shaders.py'; tool.parent.mkdir(parents=True)

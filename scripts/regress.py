@@ -568,11 +568,12 @@ def rewriter_key(tree):
 
 
 def modules_for(tree, g, rewrite, jobs):
-    """The rewritten modules a run takes: the build's (rewrite False), or the tree's patch_nso.py on the build's extracted modules, cached by the rewriter's files"""
+    """The rewritten modules a run takes: the build's (rewrite False), or the tree's patch_nso.py on the build's extracted modules, cached by the rewriter's files.
+    The cached rewrite is reused only for the same inputs too: the module list, the extracted modules' and the NROs' bytes, the NRO manifest and the profile's game.tsv
+    (its .done holds their digest). A re-extracted module of the same version used to get the previous rewrite"""
     if not rewrite: return g.patched, 'build'
     key = rewriter_key(tree)
     dst = game_root(g) / 'patched' / key / g.patched.name
-    if (dst / '.done').is_file(): return dst, key
     mods = g.env(tree)
     if not g.derived:
         # Registered builds rewrite with this revision's original profile. The
@@ -587,6 +588,9 @@ def modules_for(tree, g, rewrite, jobs):
         for ln in nro.read_text().splitlines():
             c = ln.split('\t')
             if ln and not ln.startswith(('#', 'refused\t')): src[c[0]] = nro.parent / (c[0] + '.nro')
+    profile = [Path(d) / g.id / 'game.tsv' for d in (mods.get('DM_GAMES_DIR') or str(tree.path / 'dm/games')).split(os.pathsep) if d]
+    inputs = digest([src[m] for m in sorted(src)] + [nro] + profile, extra=' '.join(names).encode())
+    if (dst / '.done').is_file() and (dst / '.done').read_text().strip() == inputs: return dst, key
     shutil.rmtree(dst, ignore_errors=True); dst.mkdir(parents=True)
     if nro.is_file(): shutil.copyfile(nro, dst / 'nro.tsv')
     say(f'  {g.id}: rewriting {len(src)} modules with the rewriter of {tree.id}')
@@ -599,7 +603,7 @@ def modules_for(tree, g, rewrite, jobs):
             p, f = procs.pop(m); f.close()
             if p.returncode: raise HarnessError(f'{g.id}: patch_nso.py of {tree.id} failed on {m} (see {dst / f"rewrite_{m}.log"})')
         time.sleep(0.2)
-    (dst / '.done').write_text('')
+    (dst / '.done').write_text(inputs + '\n')
     return dst, key
 
 

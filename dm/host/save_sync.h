@@ -4,9 +4,14 @@
 // whole but syncs a folder file by file, and a save that is half one device's and half the other's is worse than either.
 // When: the cloud's copy comes in at the game's first save mount (hle_fs.c, before the work directory is cloned from the committed save); the committed save goes out a few
 // seconds after a Commit, on a thread of its own (the game never waits), when the iPhone app goes to the background, and from the Mac launcher once the host has exited.
-// Which way: <DM_SAVE>.sync keeps the hash of the save last known to be the same here and in the cloud. Only the cloud's changed: it comes in; only this one changed: it goes out;
-// both changed (played on both without syncing in between, or the first sync of a device that has a save of its own): the newer one wins and the other is kept.
-// Every save this replaces, here or in the cloud, is kept first in <DM_SAVE>-backups/<date> <side>; the newest 10 of each side stay.
+// Which way: <DM_SAVE>.sync keeps the hash of the save last known to be the same here and in the cloud, and the cloud file it was (another folder chosen: a first sync with it).
+// Only the cloud's changed: it comes in; only this one changed: it goes out; both changed (played on both without syncing in between, or the first sync of a device that has a
+// save of its own): the newer one wins and the other is kept, at the mount and at every send alike (a newer cloud save is never replaced by an older one).
+// Every save this replaces, here or in the cloud, is kept first in <DM_SAVE>-backups/<date> <side>; the newest 10 of each side stay (pruned only once the replacement went through).
+// A save folder that cannot be read is an error, never "no save": the mount turns sync off and a send sends nothing. A pull moves this device's folders to the backup and the
+// cloud's in, putting back every move when one fails; this device's save never passes through <DM_SAVE>.sync-tmp. When putting back fails too, <DM_SAVE>.sync-stuck names the backup
+// holding this device's save, and nothing is synced until it is deleted. A fetch downloads to a file of its own, so one abandoned at
+// its time limit never removes a later fetch's file (dm/host/tests/t_save_sync_faults.c).
 #pragma once
 #include <stdint.h>
 

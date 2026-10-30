@@ -230,7 +230,8 @@ static class P {
         Directory.CreateDirectory(Path.GetDirectoryName(dst));
         string part = dst + ".part"; long files = 0, bytes = 0; int damaged = g_damaged.Count;
         try {
-            using (var output = File.Create(part)) using (var writer = new BinaryWriter(output)) {
+            File.Delete(part);   // a link left at this predictable path is removed, not followed: the image is then created new, never truncating another file
+            using (var output = new FileStream(part, FileMode.CreateNew, FileAccess.ReadWrite)) using (var writer = new BinaryWriter(output)) {
                 writer.Write(new byte[32]); byte[] buffer = new byte[4 << 20];
                 foreach (var e in entries) {
                     if (e.Directory) continue;

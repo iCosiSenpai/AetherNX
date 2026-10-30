@@ -39,7 +39,7 @@ class ShaderCache(unittest.TestCase):
                        XC=['--msl'], MAC_RECORD='mac flags', IOSOUT=None, TARGETS={'mac'},
                        ios_metal=types.SimpleNamespace(RECORD='ios flags'), METAL_FP='tested Metal and SDK',
                        FACTS={}, MAP_ROWS={}, MAP_CONFLICT_ROWS={}, CODE_FP='source', PROFILE_ROWS=b'', PAIRS={},
-                       BF_WANT=set(), BF_STATS=collections.Counter(), CAS=str(root / 'cas'), out=str(root / 'out'),
+                       BF_WANT=set(), DUAL_WANT=set(), BF_STATS=collections.Counter(), CAS=str(root / 'cas'), out=str(root / 'out'),
                        CHAIN='test-chain', clone=shutil.copyfile, shader_rule_source=lambda name: b'')
         (root / 'out').mkdir()
         names = {'tool_fingerprint', 'shader_key', 'cache_path', 'cache_outputs', 'restore_cache', 'publish_cache', 'atomic_json', 'cache_meta_path',

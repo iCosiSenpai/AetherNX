@@ -76,8 +76,10 @@ final class LauncherModel: ObservableObject {
         settings.filter { $0.basic == basic }.reduce(into: []) { if !$0.contains($1.sectionTitle) { $0.append($1.sectionTitle) } }
     }
     func rows(in section: String, basic: Bool) -> [Setting] { rows(in: section).filter { $0.basic == basic } }
-    // A range's label: its percentage, with the size in pixels for the chosen console mode when the list has the base size (the render scale)
+    // A range's label: its percentage, with the size in pixels for the chosen console mode when the list has the base size (the render scale).
+    // A value that is no number (DM_RENDER_SCALE=nan in an env file, shown fixed) is named as it is: converting it to Int would stop the app
     func rangeLabel(_ s: Setting, _ v: Double) -> String {
+        guard v.isFinite, abs(v) < 1e6 else { return "–" }
         let p = "\(Int((v * 100).rounded())) %"
         guard let b = s.base else { return p }
         let size = (values["DM_OPMODE"] ?? "1") == "0" ? b.handheld : b.docked
@@ -85,6 +87,51 @@ final class LauncherModel: ObservableObject {
         return "\(Int((Double(size[0]) * v).rounded())) × \(Int((Double(size[1]) * v).rounded())) (\(p))"
     }
     var changed: Bool { settings.contains { !fixed.contains($0.env) && !$0.isDefault(values[$0.env] ?? $0.def) } }
+
+    func value(_ s: Setting) -> String { values[s.env] ?? s.def }
+    // Differs from the tested default (fixed ones too: the screen shows what the game gets)
+    func isChanged(_ s: Setting) -> Bool { !s.isDefault(value(s)) }
+    // A fixed value this build does not offer (an env file's DM_RENDER_SCALE=nan, an option that was removed): the game still gets it, so the screen names it instead of drawing a control
+    func isInvalid(_ s: Setting) -> Bool { fixed.contains(s.env) && !s.accepts(value(s)) }
+    // The value as the player reads it: a choice's label, a range's percentage (or size in pixels), On or Off
+    func valueLabel(_ s: Setting) -> String {
+        let v = value(s)
+        if isInvalid(s) { return v.isEmpty ? "(empty)" : v }
+        switch s.kind {
+        case "choice": return s.options?.first { $0.count > 1 && $0[0] == v }?[1] ?? v
+        case "range": return rangeLabel(s, Double(v) ?? .nan)
+        default: return v == s.onValue ? "On" : "Off"
+        }
+    }
+    // The tested default as the player reads it ("Use tested default (60 fps)")
+    func defaultLabel(_ s: Setting) -> String {
+        switch s.kind {
+        case "choice": return s.options?.first { $0.count > 1 && $0[0] == s.def }?[1] ?? s.def
+        case "range": return rangeLabel(s, Double(s.def) ?? .nan)
+        default: return s.def == s.onValue ? "On" : "Off"
+        }
+    }
+    func useDefault(_ s: Setting) { if !fixed.contains(s.env) { values[s.env] = s.def } }
+    // What the summary strip states: the basic settings while drawn, or the first four drawn when the list marks none basic
+    var summary: [Setting] {
+        let basic = settings.filter { $0.basic && visible($0) }
+        return basic.isEmpty ? Array(settings.filter { visible($0) }.prefix(4)) : basic
+    }
+    // A controller or an arrow key moves a value one step: a choice to its neighbour (wrapping), a range by its step (clamped), a toggle on (+1) or off (-1)
+    func step(_ s: Setting, by d: Int) {
+        guard !fixed.contains(s.env) else { return }
+        switch s.kind {
+        case "choice":
+            guard let o = s.options, !o.isEmpty else { return }
+            let i = o.firstIndex { $0[0] == value(s) } ?? 0
+            values[s.env] = o[((i + d) % o.count + o.count) % o.count][0]
+        case "range":
+            let lo = s.min ?? 0, hi = s.max ?? 1, st = s.step ?? 0.05
+            let cur = Double(value(s)).flatMap { $0.isFinite ? $0 : nil } ?? lo
+            values[s.env] = String(format: "%.2f", Swift.min(hi, Swift.max(lo, lo + (((cur - lo) / st).rounded() + Double(d)) * st)))
+        default: values[s.env] = d > 0 ? s.onValue : s.offValue
+        }
+    }
 
     // Reset every launcher choice to the game's defaults on the screen; values fixed by an env file or at launch stay. The saved choices are forgotten when Play applies
     // the defaults (apply() keeps no default), so Quit after Reset keeps them, and a choice a launch override hides is kept
