@@ -44,7 +44,10 @@ if [ "$PREPARE_XCODE" = YES ]; then
   IOS=$(cd "$IOS" && pwd)
   [ "$IOS" != "$IOS_SOURCE" ] || die "the per-game Xcode project must be outside dm/ios"
   # Source links follow repository edits; generated files and build products belong to this game only. Linked again each time: a project prepared from another checkout (a removed worktree) follows this one
-  for item in Sources tools; do ln -sfn "$IOS_SOURCE/$item" "$IOS/$item" || die "link $item"; done
+  # A real folder already there would receive the link inside it (ln -n only declines to follow a link) and keep its own files, which the build then ran: refuse it
+  for item in Sources tools; do
+    if [ -e "$IOS/$item" ] && [ ! -L "$IOS/$item" ]; then die "$IOS/$item is a folder or file, not the link to the repository's $item: move it away and prepare again"; fi
+    ln -sfn "$IOS_SOURCE/$item" "$IOS/$item" && [ "$(readlink "$IOS/$item")" = "$IOS_SOURCE/$item" ] || die "link $item"; done
   cp "$IOS_SOURCE/project.yml" "$IOS/project.yml" || die "copy project template"
   cd "$IOS" || die "cd $IOS"
   DM_SCHEME_NAME="$(echo "$DM_DISPLAY_NAME" | tr '/:' '__') ($GAME)"   # the scheme file is named after it
@@ -84,18 +87,19 @@ else cp "$GD/shader_map.tsv" "$GD/pso_manifest.tsv" "$GD/c1_full.tsv" Gen/dm/ ||
   for f in shader_pairs.tsv pso_pairs.tsv; do if [ -f "$GD/$f" ]; then cp "$GD/$f" Gen/dm/ || die "copy $f"; fi; done; fi   # optional
 # The pipeline archive made offline (dm/gfx/tools/pso_offline.py): the base of every shader pair, compiled here by metal-tt for each GPU architecture in DM_PSO_GPUS (comma-separated:
 # g18p = A19 / A19 Pro; none = no archive), so the device does not build them on its first start (Breath of the Wild: 15,767 bases, 7-8 minutes on an iPhone 17 Pro Max).
-# Only the Metal 4 path reads it, which iOS turns on for a game whose profile sets pso_mtl4 on: the default is g18p for such a game and none for the others (their app would carry
-# it unread). It goes into the app as pso/ (main.m hands it to the host as DM_PSO_BUNDLE), with the pulling vertex libraries the bases are made of. Each architecture adds about
-# 650 MB to the app (Breath of the Wild; 220 MB in the IPA) and 4 minutes to the first build; made again only when its inputs change (the libraries, the pairs, the profile's depth_mode, metal-tt)
-PSO=; P4=$(python3 "$DM/games/game.py" "$GAME" pso_mtl4 off) || die "game profile $GD: pso_mtl4"
-if [ -n "${DM_PSO_GPUS+set}" ]; then GPUS=$DM_PSO_GPUS; elif [ "$P4" = on ]; then GPUS=g18p; else GPUS=none; fi
+# Only the Metal 4 path reads it: on iOS the profile's pso_mtl4, or the launcher's Metal 4 pipelines choice, which every NVN game offers. So the default is g18p for every NVN
+# game: with it a player who turns Metal 4 on gets the stand-ins at once instead of a first start that builds them. It goes into the app as pso/ (main.m hands it to the host
+# as DM_PSO_BUNDLE), with the pulling vertex libraries the bases are made of. Each architecture adds about 650 MB to the app (Breath of the Wild; 220 MB in the IPA) and
+# 4 minutes to the first build; made again only when its inputs change (the libraries, the pairs, the profile's depth_mode, metal-tt). DM_PSO_GPUS=none leaves it out
+PSO=
+if [ -n "${DM_PSO_GPUS+set}" ]; then GPUS=$DM_PSO_GPUS; else GPUS=g18p; fi
 if [ "$GFXAPI" = nvn ] && [ -n "$GPUS" ] && [ "$GPUS" != none ] && [ -f "$GD/shader_pairs.tsv" ]; then
   PSO=$W/build/ios/pso/bundle
   t "pipeline archive for $GPUS (metal-tt; minutes when its inputs changed)"
   python3 "$DM/gfx/tools/pso_offline.py" --game "$GAME" --msl "$MSL_IOS/b-$V" --out "$PSO" --work "$W/build/ios/pso/work" --gpu "$GPUS" ${DM_PSO_IOS_MIN:+--os-min "$DM_PSO_IOS_MIN"} \
     | while IFS= read -r ln; do t "$ln"; done
   [ "${PIPESTATUS[0]}" = 0 ] || die "pipeline archive (dm/gfx/tools/pso_offline.py; DM_PSO_GPUS=none builds the app without it)"
-else [ "$GFXAPI" != nvn ] || t "no pipeline archive ($([ -n "${DM_PSO_GPUS+set}" ] && echo "DM_PSO_GPUS=${GPUS:-empty}" || echo "the profile does not set pso_mtl4 on; DM_PSO_GPUS=g18p builds one")$([ -f "$GD/shader_pairs.tsv" ] || echo ', no shader_pairs.tsv'))"; fi
+else [ "$GFXAPI" != nvn ] || t "no pipeline archive (DM_PSO_GPUS=${GPUS:-empty}$([ -f "$GD/shader_pairs.tsv" ] || echo ', no shader_pairs.tsv'))"; fi
 # The launcher's settings for this game (Launcher.swift): dm/games/settings.tsv filtered by the profile, main's rewriter table and the game's languages (dm/games/settings.py)
 L=$(GFXAPI="$GFXAPI" python3 "$DM/games/settings.py" "$GAME" "$PATCHED" "$VNACP" Gen/dm/launcher.json) || die "launcher settings (dm/games/settings.py)"; t "launcher: $L"
 # The packed language (DMLanguage) is the Game language row's default, which settings.py makes the game's first language when it lacks DM_LANG: the screen and DM_LAUNCHER=0 then agree
@@ -126,6 +130,13 @@ if [ "$PREPARE_XCODE" = YES ] && [ -n "${DM_ENTITLEMENTS-default}" ]; then
   if [ -n "${DM_ENTITLEMENTS:-}" ]; then cp "$DM_ENTITLEMENTS" Gen/DmIOS.entitlements || die "copy DM_ENTITLEMENTS"
   else printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
     '<plist version="1.0"><dict><key>com.apple.developer.kernel.increased-memory-limit</key><true/></dict></plist>' > Gen/DmIOS.entitlements || die "entitlements"; fi
+  # DM_ICLOUD_CONTAINER=<iCloud container ID> (the maintainer's: iCloud.io.github.icosisenpai.horizonnative, as Info.plist's NSUbiquitousContainers names it): automatic iCloud saves
+  # (CloudSaves.h). Only for a project signed with a team that owns the container; Xcode registers it on the App ID. An unsigned IPA never asks for it: a sideloader cannot grant it
+  if [ -n "${DM_ICLOUD_CONTAINER:-}" ]; then
+    plutil -insert com.apple.developer.icloud-container-identifiers -json "[\"$DM_ICLOUD_CONTAINER\"]" Gen/DmIOS.entitlements &&
+    plutil -insert com.apple.developer.ubiquity-container-identifiers -json "[\"$DM_ICLOUD_CONTAINER\"]" Gen/DmIOS.entitlements &&
+    plutil -insert com.apple.developer.icloud-services -json '["CloudDocuments"]' Gen/DmIOS.entitlements || die "iCloud entitlements ($DM_ICLOUD_CONTAINER)"
+  fi
   echo "CODE_SIGN_ENTITLEMENTS = Gen/DmIOS.entitlements" >> Gen/dm.xcconfig
   t "entitlements: $(plutil -convert json -o - Gen/DmIOS.entitlements)"
 fi
@@ -187,15 +198,17 @@ if [ "${DM_COPY_ROMFS:-YES}" = NO ]; then
     MAPS=("$P/romfs.id=$O/romfs.id"); t "game files identity: $(cat "$O/romfs.id")"
   fi
 elif [ -f "$ROMFS" ]; then MAPS=("$P/romfs.img=$ROMFS"); else MAPS=("$P/romfs=$ROMFS"); fi
-if [ -n "$AOC" ] && [ -d "$AOC" ]; then MAPS+=("$P/aoc=$AOC"); t "add-on content: $(ls "$AOC" | tr '\n' ' ')"; fi
+# DM_COPY_AOC=NO leaves the add-on content out of the IPA, as DM_COPY_ROMFS=NO the game files: for DLC as large as a game (Assassin's Creed The Ezio Collection: 19 GB in four
+# packages), copied to the phone's Documents/aoc instead (scripts/push_aoc.sh <device UDID> <bundle ID> "$AOC"), which main.m reads before the app's own
+if [ -n "$AOC" ] && [ -d "$AOC" ] && [ "${DM_COPY_AOC:-YES}" = NO ]; then t "add-on content left out (DM_COPY_AOC=NO): copy it with scripts/push_aoc.sh <device UDID> <bundle ID> \"$AOC\""
+elif [ -n "$AOC" ] && [ -d "$AOC" ]; then MAPS+=("$P/aoc=$AOC"); t "add-on content: $(ls "$AOC" | tr '\n' ' ')"; fi
 if [ -n "${PSO:-}" ]; then MAPS+=("$P/pso=$PSO"); fi
 MAPS+=("$P/msl/$MSLDIR=$MSL_IOS/$MSLDIR" "$P=$APP")
 t "pack IPA (already-compressed game files stored, everything else deflated)"
-# The pulling vertex libraries (<key>_bp, dm/gfx/tools/dmsh_pull.py) serve the hybrid pipelines. Default to the same pso_mtl4 setting compiled by gen_build.py; IOS_PULL=0 / 1 overrides it.
-# The pipeline archive's bases are made of them, so an IPA with an archive (pso/) always carries them, whatever IOS_PULL says (an Xcode build copies them always).
-PULL=$(sed -n 's/^#define DM_GAME_PSO_MTL4 //p' "$DM/host/gen/$GAME/game_profile.h") || die "read game profile header"
-case "$PULL" in 0|1) ;; *) die "no DM_GAME_PSO_MTL4 in generated game profile";; esac
+# The pulling vertex libraries (<key>_bp, dm/gfx/tools/dmsh_pull.py) serve the hybrid pipelines of the Metal 4 path, which the launcher offers for every NVN game (DM_PSO_MTL4):
+# they are always packed (about 10 MB for Fire Emblem: Three Houses), as an Xcode build copies them. Leaving them out made the launcher's Metal 4 choice wait for every
+# pipeline instead of drawing with the stand-ins ("pulling library ... not usable"). IOS_PULL=0 leaves them out of an IPA without a pipeline archive, whose bases are made of them.
 # Keep this array nonempty: macOS Bash 3.2 treats an empty array as unset under set -u.
-PACK_OPTS=(--store "$(gp zip_store)"); [ -n "${PSO:-}" ] || [ "${IOS_PULL:-$PULL}" = 1 ] || PACK_OPTS+=(--skip-suffix _bp.metallib)
+PACK_OPTS=(--store "$(gp zip_store)"); [ -n "${PSO:-}" ] || [ "${IOS_PULL:-1}" = 1 ] || PACK_OPTS+=(--skip-suffix _bp.metallib)
 python3 tools/pack_ipa.py "$OUT_IPA" "${PACK_OPTS[@]}" --skip $P/_CodeSignature --skip $P/embedded.mobileprovision --skip $P/msl --skip $P/aoc --skip $P/romfs --skip $P/romfs.img --skip $P/romfs.id "${MAPS[@]}" || die "pack_ipa"
 t "done: $OUT_IPA ($(du -h "$OUT_IPA" | cut -f1))"

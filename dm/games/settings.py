@@ -72,7 +72,7 @@ def build(gid, patched, control):
         if cond == 'always': return True
         if cond == 'languages>1': return len(langs) > 1
         if cond.startswith('fixups:'): return cond[7:] in keys
-        if cond.startswith('gfxapi:'): return os.environ.get('GFXAPI', '') == cond[7:]
+        if cond.startswith('gfxapi:'): return os.environ.get('GFXAPI', '') in cond[7:].split('|')
         if cond.startswith('platform:'): return platform == cond[9:]
         m = re.fullmatch(r'(DM_GAME_\w+)(!=|==)(.*)', cond)
         if m: return (macro(m[1], n) == m[3]) == (m[2] == '==')

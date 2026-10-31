@@ -9,7 +9,11 @@
 set -eu
 [ "$#" = 3 ] || { [ "$#" = 4 ] && [ "$4" = --repack ]; } || { echo "usage: $0 <device UDID> <bundle ID> <resources.env> [--repack]" >&2; exit 1; }
 dev=$1 id=$2
-case "$3" in *.env) source "$3";; *) DM_RESOURCE_ROMFS=$3; DM_RESOURCE_MARKER=;; esac
+DM_RESOURCE_ROMFS= DM_RESOURCE_MARKER=
+# A resources.env is read as data (read_resources.py: DM_RESOURCE_ names, one value each), never run as shell
+case "$3" in *.env) while IFS= read -r -d '' k && IFS= read -r -d '' v; do printf -v "$k" '%s' "$v"; done < <(python3 -I "$(dirname "$0")/../dm/ios/tools/read_resources.py" "$3" || echo "[RED] cannot read $3" >&2)
+                    [ -n "$DM_RESOURCE_ROMFS" ] || { echo "no DM_RESOURCE_ROMFS in $3" >&2; exit 1; };;
+             *) DM_RESOURCE_ROMFS=$3;; esac
 if [ -f "$DM_RESOURCE_ROMFS" ]; then img=$DM_RESOURCE_ROMFS
 else
     img=${DM_RESOURCE_ROMFS%/}.img

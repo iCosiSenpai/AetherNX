@@ -279,8 +279,8 @@ static class P {
         long n = 0, cloned = 0, bytes = 0, written = 0; byte[] buf = new byte[4 << 20], cb = new byte[4 << 20];
         foreach (DirectoryEntryEx e in fs.EnumerateEntries("*", SearchOptions.RecurseSubdirectories)) {
             string rel = e.FullPath.TrimStart('/'), op = Path.Combine(dst, rel);
-            if (e.Type == DirectoryEntryType.Directory) { Directory.CreateDirectory(op); continue; }
-            Directory.CreateDirectory(Path.GetDirectoryName(op)); n++; bytes += e.Size;
+            if (e.Type == DirectoryEntryType.Directory) { Directory.CreateDirectory(op); NoLink(dst, op); continue; }
+            Directory.CreateDirectory(Path.GetDirectoryName(op)); NoLink(dst, Path.GetDirectoryName(op)); n++; bytes += e.Size;
             using var f = new UniqueRef<IFile>();
             fs.OpenFile(ref f.Ref, e.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
             string cp = cmpDir == null ? null : Path.Combine(cmpDir, rel);
@@ -302,8 +302,17 @@ static class P {
         }
         Console.WriteLine($"{dst}: {n} files {bytes / 1048576.0:F1} MB, {cloned} identical to the compare dir (cloned), {written / 1048576.0:F1} MB newly written");
     }
+    // The destination may be a folder extracted into before, shared or downloaded: a folder in it that is a link is refused (Directory.CreateDirectory goes through one), and a file
+    // already there is removed and made new (CreateNew), so a link at a file's name is never followed and the file it points at never truncated
+    static void NoLink(string root, string dir) {
+        string full = Path.GetFullPath(root), d = Path.GetFullPath(dir);
+        for (; d.Length > full.Length && d.StartsWith(full, StringComparison.Ordinal); d = Path.GetDirectoryName(d))
+            if (new DirectoryInfo(d).LinkTarget != null) throw new IOException($"{d} is a link inside the extraction folder {root}: not followed; delete it and extract again");
+    }
     static void Write(IFile f, string op, long size, byte[] buf) {
-        using var o = File.Create(op);
+        var fi = new FileInfo(op);
+        if (fi.LinkTarget != null || fi.Exists) File.Delete(op);
+        using var o = new FileStream(op, FileMode.CreateNew, FileAccess.Write);
         for (long off = 0; off < size;) {
             f.Read(out long got, off, buf.AsSpan(0, (int)Math.Min(buf.Length, size - off)), ReadOption.None).ThrowIfFailure();
             if (got <= 0) throw new IOException($"cannot read @{off}");

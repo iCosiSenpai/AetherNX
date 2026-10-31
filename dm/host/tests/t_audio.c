@@ -129,6 +129,20 @@ int main(void) {
     // The virtual output of a CI Mac can also pause by itself for more than 200 ms after the restart: the watchdog then rightly stands the silent sink in again and retries 1 s later, which can fall after the
     // last release (CI: "AudioUnit restarted", a second "has not called back for 204 ms", then Close 1 s later, "calling back again=0"). So the backend is followed on every poll until a restarted AudioUnit
     // has called back, up to 20 s (the watchdog's back-off of 1, 2, 4 s fits), instead of being read once 100 ms after the last release; it still fails when no restarted AudioUnit ever calls back
+    {   // Admission counts the buffers played but not taken back: 64 appended, one played (released), a 65th refused until the game reclaims one, so a stop never overflows
+        char outq[64]; static gbuf bq[66]; static int16_t pcmq[66][2];
+        if (h_au_Open(outq, ev, NULL, prm)) return 1;
+        aout *aq = ao(outq); int took = 0;
+        for (int i = 0; i < 66; i++) h_au_SetBuf(&bq[i], pcmq[i], sizeof pcmq[i], sizeof pcmq[i]);
+        for (int i = 0; i < 64; i++) took += h_au_Append(outq, &bq[i]) != 0;
+        atomic_store(&aq->state, STATE_STARTED); uint8_t tmp[sizeof pcmq[0]]; pull(aq, tmp, sizeof tmp); atomic_store(&aq->state, STATE_STOPPED);   // one played: now in the released queue
+        int refused = !h_au_Append(outq, &bq[64]);
+        int reclaimed = h_au_Released(outq) == &bq[0], again = h_au_Append(outq, &bq[64]) != 0;
+        h_au_Close(outq);
+        int okq = took == 64 && refused && reclaimed && again;
+        printf("AudioOut admission: 64 taken=%d, 65th refused while one is unreclaimed=%d, accepted after reclaiming=%d %s\n", took, refused, reclaimed && again, okq ? "✓" : "✗");
+        if (!okq) return 1;
+    }
     char out3[64]; gbuf b3[20]; static int16_t pcm3[20][4800 * 2]; g_sig = 0;
     if (h_au_Open(out3, ev, NULL, prm)) return 1;
     for (int i = 0; i < 20; i++) h_au_SetBuf(&b3[i], pcm3[i], sizeof pcm3[i], sizeof pcm3[i]);

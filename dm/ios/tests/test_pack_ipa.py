@@ -239,6 +239,28 @@ class PackIpa(unittest.TestCase):
         self.assertEqual(json.loads(Path(str(self.out) + '.idx').read_text())['ipa'], expected[0])
         self.assertEqual(target.read_bytes(), b'unchanged')
 
+    def test_link_made_during_the_pack_is_not_followed(self):
+        # A link put at <ipa>.idx.partial or <ipa>.partial after the startup cleanup (the window is the whole compression) is refused, its target untouched
+        self.run_pack()
+        target = self.tmp / 'protected'; target.write_bytes(b'unchanged')
+        (self.app / 'exe').write_bytes(b'changed')
+        def main(*opts):
+            with patch.object(sys, 'argv', ['pack_ipa', *opts, str(self.out), *self.maps]), contextlib.redirect_stdout(io.StringIO()) as log: pack.main()
+            return log.getvalue()
+        real = pack.Zip.close
+        def plant(z):
+            real(z); Path(str(self.out) + '.idx.partial').symlink_to(target)
+        with patch.object(pack.Zip, 'close', plant): log = main()
+        self.assertIn('index not written', log); self.assertEqual(target.read_bytes(), b'unchanged')
+        Path(str(self.out) + '.idx.partial').unlink()
+        start = pack.Zip.__init__
+        def plant_part(z, path, keep=0):
+            if not keep: os.symlink(target, path)
+            start(z, path, keep)
+        with patch.object(pack.Zip, '__init__', plant_part):
+            with self.assertRaises(FileExistsError): main('--no-reuse')
+        self.assertEqual(target.read_bytes(), b'unchanged')
+
     def test_failure_preserves_old_ipa_and_index(self):
         self.run_pack(); before, idx = self.out.read_bytes(), Path(str(self.out) + '.idx').read_bytes()
         (self.app / 'exe').write_bytes(b'changed')

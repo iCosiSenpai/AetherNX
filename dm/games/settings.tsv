@@ -7,7 +7,7 @@
 #             toggle: values - (on sets 1, off 0) or <on>/<off>, the two values the variable takes (on/off)
 #   default   a value (a toggle's: 1 on, 0 off); DM_GAME_<NAME>: the host's own default from the game profile (game_profile.h, game.py); build:<VAR>: the IPA build's setting (build_ipa.sh)
 #             <ios>|<mac> selects the platform's default before resolving a profile macro or build variable
-#   shown     always; DM_GAME_<NAME>!=<value> or ==<value>; fixups:<KEY>: main's rewriter table has that key (a stub in the game's build, patch_nso.py); languages>1; gfxapi:<API>: the packer's GFXAPI;
+#   shown     always; DM_GAME_<NAME>!=<value> or ==<value>; fixups:<KEY>: main's rewriter table has that key (a stub in the game's build, patch_nso.py); languages>1; gfxapi:<API>[|<API>...]: the packer's GFXAPI is one of them;
 #             platform:<ios | mac>: the app's platform (SETTINGS_PLATFORM, ios when unset), for a switch only that platform's front end reads
 #   section   Game, Controls or Performance: a heading on the single settings screen. Rows appear in table order within each section
 #             Reset to tested defaults clears all launcher choices; values fixed by an env file stay
@@ -19,6 +19,10 @@ DM_DYNAMIC_RESOLUTION	toggle	-	0	fixups:DYNAMIC_RESOLUTION	Game	Dynamic resoluti
 DM_RENDER_SCALE	range	0.5:1.0:0.05	1.0	fixups:RENDER_SCALE	Game	Render scale		level=basic
 DM_OPMODE	choice	1=Docked,0=Handheld	DM_GAME_OPMODE	always	Game	Console mode		level=basic
 DM_PRESENT_UPSCALE	choice	off=Standard,metalfx=MetalFX	off	always	Game	Upscaling	Uses more GPU time and can increase heat.
+DM_PRESENT_SHARPEN	range	0:1:0.05	0	always	Game	Sharpness	Uses a little GPU time.
+DM_PRESENT_FILTER	choice	linear=Smooth,nearest=Sharp pixels	linear	always	Game	Pixels
+DM_PRESENT_FIT	choice	aspect=Game's shape,stretch=Fill the screen	aspect	always	Game	Screen
+DM_ANISO	choice	0=Game,2=2×,4=4×,8=8×,16=16×	0	gfxapi:nvn|vulkan	Game	Texture filtering	Sharper textures seen at an angle; uses a little more GPU time.
 DM_LANG	choice	languages	build:DM_LANG	languages>1	Game	Game language		level=basic
 DM_FULLSCREEN	choice	0=Window,1=Fullscreen	0	platform:mac	Game	Display mode		level=basic
 DM_SHOW_FPS	toggle	-	build:DM_SHOW_FPS	platform:ios	Game	Frame-rate counter
@@ -28,7 +32,7 @@ DM_RUMBLE_GAIN	range	0:3:0.1	1.0	always	Controls	Rumble strength		needs=DM_RUMBL
 DM_RUMBLE_MIN	range	0:0.9:0.05	0	always	Controls	Rumble cutoff
 DM_PRESENT_SNAP	toggle	-	DM_GAME_PRESENT_SNAP	gfxapi:nvn	Performance	Frame buffering	Up to one frame more display latency.
 DM_PSO_MTL4	toggle	-	DM_GAME_PSO_MTL4|1	gfxapi:nvn	Performance	Metal 4 pipelines	Keeps a pipeline archive; uses more memory.
-DM_PSO_PREBUILD	toggle	-	1	gfxapi:nvn	Performance	Pipeline prebuild	The first start waits a few minutes for it, once.
+DM_PSO_PREBUILD	toggle	-	1	gfxapi:nvn	Performance	Pipeline prebuild	The first start waits a few minutes for it, once.	needs=DM_PSO_MTL4=1
 DM_NVN_ENC_THREAD	toggle	-	1|DM_GAME_ENC_THREAD	gfxapi:nvn	Performance	Encode thread
-DM_FPS_HOLD	toggle	on/off	DM_GAME_FPS_HOLD	DM_GAME_FPS_TARGET!=0	Performance	Hold frames when late
+DM_FPS_HOLD	toggle	on/off	DM_GAME_FPS_HOLD	fixups:FPS_STATE_OFF	Performance	Hold frames when late
 DM_METAL_HUD	toggle	-	0	always	Performance	Performance HUD

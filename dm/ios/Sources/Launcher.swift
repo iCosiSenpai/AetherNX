@@ -13,7 +13,7 @@ import os
 
 private func info(_ key: String) -> Any? { Bundle.main.object(forInfoDictionaryKey: key) }
 
-private func appIcon() -> UIImage? {
+func appIcon() -> UIImage? {   // also the in-game menu's header (InGameMenu.swift)
     if let i = UIImage(named: "AppIcon") { return i }
     guard let icons = info("CFBundleIcons") as? [String: Any], let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
           let files = primary["CFBundleIconFiles"] as? [String], let last = files.last else { return nil }
@@ -31,17 +31,24 @@ private let cloudOverride: String? = {
 /// and sends it there after each save (dm/host/save_sync.h); the folder is a bookmark (CloudSaves.m).
 @MainActor private final class CloudSavesState: ObservableObject {
     @Published var folder = ""
+    @Published var container = ""   // automatic iCloud's folder (CloudSaves.h): empty when the build has no iCloud container or iCloud is off
+    @Published var auto = true
     @Published var note = ""
     @Published var picking = false
     func refresh() {
         var stale: ObjCBool = false
         folder = dm_cloud_saves_path(&stale) ?? ""
+        container = dm_cloud_container_path() ?? ""
+        auto = dm_cloud_auto()
         if stale.boolValue && folder.isEmpty { note = "The folder chosen before can no longer be read (the app is signed differently now). Choose it again." }
     }
-    func turnOff() { dm_clear_cloud_saves(); refresh(); note = "" }
+    /// No folder picked, automatic iCloud on and available: the game syncs through the app's iCloud container
+    var usingICloud: Bool { folder.isEmpty && auto && !container.isEmpty }
+    func turnOff() { dm_clear_cloud_saves(); dm_cloud_set_auto(false); refresh(); note = "" }
+    func useICloud() { dm_clear_cloud_saves(); dm_cloud_set_auto(true); refresh(); note = "Saved. The game syncs through iCloud when you press Play." }
     var summary: String {
         if let o = cloudOverride { return o == "0" || o.isEmpty ? "Off" : "env.txt" }
-        return folder.isEmpty ? "Off" : "On"
+        return !folder.isEmpty ? "On" : usingICloud ? "iCloud" : "Off"
     }
 }
 
@@ -50,6 +57,7 @@ private struct CloudSavesSection: View {
     let tint: GameTint
     let focused: Bool
     let offFocused: Bool
+    let autoFocused: Bool
 
     var body: some View {
         Section {
@@ -59,11 +67,15 @@ private struct CloudSavesSection: View {
                     .font(.footnote).foregroundStyle(.secondary)
             } else {
                 LabeledContent("Folder") {
-                    Text(state.folder.isEmpty ? "Off" : (state.folder as NSString).lastPathComponent).lineLimit(1).truncationMode(.middle)
+                    Text(!state.folder.isEmpty ? (state.folder as NSString).lastPathComponent : state.usingICloud ? "iCloud (automatic)" : "Off").lineLimit(1).truncationMode(.middle)
                 }
                 Button(state.folder.isEmpty ? "Choose a Folder in iCloud Drive…" : "Choose a Different Folder…") { state.picking = true }
                     .focusRing(focused, tint)
-                if !state.folder.isEmpty {
+                if !state.container.isEmpty && !state.usingICloud {
+                    Button("Use iCloud Automatically") { state.useICloud() }
+                        .focusRing(autoFocused, tint)
+                }
+                if !state.folder.isEmpty || state.usingICloud {
                     Button("Turn Off Cloud Saves", role: .destructive) { state.turnOff() }
                         .focusRing(offFocused, tint)
                 }
@@ -71,9 +83,9 @@ private struct CloudSavesSection: View {
         } header: {
             Text("Cloud Saves")
         } footer: {
-            Text(state.note.isEmpty
-                 ? "Choose a folder in iCloud Drive, and the same one in the Mac app's Cloud Saves. The save comes in when the game starts and goes out after each save; a save that is replaced is kept in save-backups."
-                 : state.note)
+            Text(!state.note.isEmpty ? state.note : !state.container.isEmpty
+                 ? "Saves sync through iCloud by themselves (iCloud Drive › HorizonNative): on the Mac, choose that folder in the app's Cloud Saves. The save comes in when the game starts and goes out after each save; a save that is replaced is kept in save-backups."
+                 : "Choose a folder in iCloud Drive, and the same one in the Mac app's Cloud Saves. The save comes in when the game starts and goes out after each save; a save that is replaced is kept in save-backups.")
         }
         .id("cloud")
         .sheet(isPresented: $state.picking) {
@@ -129,6 +141,7 @@ private struct LauncherView: View {
     @State private var headerGone = false
     @Environment(\.verticalSizeClass) private var vertical
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.openURL) private var openURL
 
     private let icon = appIcon()
     private let tint = GameTint.from(appIcon()?.cgImage)
@@ -143,7 +156,12 @@ private struct LauncherView: View {
         o += items.map(\.focus)
         for section in m.sections { o += m.rows(in: section).map { .row($0.env) } }
         if m.changed { o.append(.reset) }
-        if cloudOverride == nil { o.append(.cloud); if !cloud.folder.isEmpty { o.append(.cloudOff) } }
+        if cloudOverride == nil {
+            o.append(.cloud)
+            if !cloud.container.isEmpty && !cloud.usingICloud { o.append(.cloudAuto) }
+            if !cloud.folder.isEmpty || cloud.usingICloud { o.append(.cloudOff) }
+        }
+        o += SupportLink.allCases.map { .support($0.rawValue) }
         return o
     }
 
@@ -213,7 +231,8 @@ private struct LauncherView: View {
                                 }
                             }
                         }
-                        CloudSavesSection(state: cloud, tint: tint, focused: nav.isFocused(.cloud), offFocused: nav.isFocused(.cloudOff))
+                        CloudSavesSection(state: cloud, tint: tint, focused: nav.isFocused(.cloud), offFocused: nav.isFocused(.cloudOff), autoFocused: nav.isFocused(.cloudAuto))
+                        SupportSection(tint: tint) { nav.isFocused(.support($0.rawValue)) }
                     }
                     .listStyle(.insetGrouped)
                     .listSectionSpacing(.compact)
@@ -261,11 +280,14 @@ private struct LauncherView: View {
                 case .reset: m.reset()
                 case .cloud: if cloudOverride == nil { cloud.picking = true }
                 case .cloudOff: cloud.turnOff(); nav.focus = .cloud
+                case .cloudAuto: cloud.useICloud(); nav.focus = .cloud
+                case .support(let e): if let l = SupportLink(rawValue: e) { openURL(l.url) }
                 default: break
                 }
             }
         }
         .task { await nav.run() }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMCloudContainerResolved"))) { _ in cloud.refresh() }   // automatic iCloud became known
         .task {
             while !Task.isCancelled {
                 memory = os_proc_available_memory()

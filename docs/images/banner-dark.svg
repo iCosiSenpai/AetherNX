@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-labelledby="title desc">
+  <title id="title">HorizonNative</title>
+  <desc id="desc">Your own Nintendo Switch games, running natively on iPhone, iPad and Mac</desc>
+  <defs><clipPath id="sky"><rect x="0" y="0" width="1280" height="232"/></clipPath></defs>
+  <rect width="1280" height="360" rx="28" fill="#0D1117"/>
+  <!-- the horizon: a disc rising behind the line, its reflection in three strokes below -->
+  <circle cx="1052" cy="232" r="118" fill="#0A84FF" clip-path="url(#sky)"/>
+  <g stroke="#0A84FF" stroke-linecap="round">
+    <line x1="964" y1="254" x2="1140" y2="254" stroke-width="6" opacity="0.55"/>
+    <line x1="996" y1="274" x2="1108" y2="274" stroke-width="5" opacity="0.35"/>
+    <line x1="1024" y1="292" x2="1080" y2="292" stroke-width="4" opacity="0.2"/>
+  </g>
+  <line x1="72" y1="232" x2="1208" y2="232" stroke="#30363D" stroke-width="2"/>
+  <text x="76" y="176" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="96" font-weight="700" letter-spacing="-2.5" fill="#F0F6FC">HorizonNative</text>
+  <text x="80" y="292" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="30" fill="#9198A1">Your own Switch games, natively on iPhone, iPad and Mac</text>
+</svg>

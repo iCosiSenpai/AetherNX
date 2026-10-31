@@ -30,10 +30,14 @@ def guest(parent, name):
 
 
 def children(path):
+    # A RomFS folder holds folders and plain files only: a link (in a downloaded or shared folder) could point at any file on the Mac and copy it into the image, so the
+    # packer refuses it instead of following it, as it refuses a FIFO or a device
     out = []
     with os.scandir(path) as it:
         for e in it:
-            out.append((guest(path, e.name).encode(), e.path, e.is_dir(follow_symlinks=True)))
+            if e.is_symlink() or not (e.is_dir(follow_symlinks=False) or e.is_file(follow_symlinks=False)):
+                raise ValueError(f'{e.path}: a link or special file in a RomFS folder; it holds folders and plain files only')
+            out.append((guest(path, e.name).encode(), e.path, e.is_dir(follow_symlinks=False)))
     out.sort()
     return out
 
@@ -90,7 +94,7 @@ def pack(src, dst, reuse=False):
             off = HEAD.size
             for e in ents:
                 if e[2]: continue
-                with open(e[1], 'rb') as f:
+                with os.fdopen(os.open(e[1], os.O_RDONLY | os.O_NOFOLLOW), 'rb') as f:   # a file swapped for a link after the listing is refused too
                     n = 0
                     while True:
                         b = f.read(8 << 20)
@@ -192,5 +196,6 @@ if __name__ == '__main__':
     ap.add_argument('--reuse', action='store_true', help='keep the image only while its source tree, packer and image are unchanged')
     ap.add_argument('source'); ap.add_argument('image')
     args = ap.parse_args()
-    n = pack(args.source, args.image, reuse=args.reuse)
+    try: n = pack(args.source, args.image, reuse=args.reuse)
+    except ValueError as e: sys.exit(f'[RED] {e}')
     print(f'{args.image}: {n} entries, {os.path.getsize(args.image)} bytes')

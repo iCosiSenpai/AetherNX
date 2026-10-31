@@ -98,9 +98,18 @@ int main(void) {
     h_ro_UnloadModule(&handles[1]); assert(!g_mod[last].loaded && !guest_sym("shared"));
 
     memcpy(g_refused[0], g_mod[1].sha256, 32); g_nrefused = 1;
-    uint8_t nrr[0x380] = {0}; memcpy(nrr, "NRR0", 4); *(uint32_t *)(nrr + 0x340) = 0x350; *(uint32_t *)(nrr + 0x344) = 1;
+    uint8_t nrr[0x380] = {0}; memcpy(nrr, "NRR0", 4); *(uint32_t *)(nrr + 0x338) = sizeof nrr; *(uint32_t *)(nrr + 0x340) = 0x350; *(uint32_t *)(nrr + 0x344) = 1;
     memcpy(nrr + 0x350, g_mod[1].sha256, 32);
-    assert(h_ro_RegisterModuleInfo(NULL, nrr) != 0);
+    assert(h_ro_RegisterModuleInfo(NULL, nrr) != 0);   // its one hash is a refused SDK's
+    {   // a hash table outside the NRR, or in memory that is not readable, is refused before a hash is read (it used to be compared wherever it pointed)
+        uint8_t bad[0x380]; memcpy(bad, nrr, sizeof bad); *(uint32_t *)(bad + 0x340) = 0x1000;
+        assert(h_ro_RegisterModuleInfo(NULL, bad) == RO_FAIL);
+        size_t pg = (size_t)getpagesize(); uint8_t *two = mmap(NULL, 2 * pg, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); assert(two != MAP_FAILED);
+        assert(!munmap(two + pg, pg));
+        memcpy(two, "NRR0", 4); *(uint32_t *)(two + 0x338) = (uint32_t)(2 * pg); *(uint32_t *)(two + 0x340) = (uint32_t)pg; *(uint32_t *)(two + 0x344) = 1;   // its table in the unmapped page
+        assert(h_ro_RegisterModuleInfo(NULL, two) == RO_FAIL);
+        munmap(two, pg);
+    }
     assert(h_ro_LoadModule(&handles[0], raw[0], NULL, 32, 1) != 0 && !g_mod[1].loaded);
     {   // A header that claims more bytes than are mapped behind it is refused before the image is hashed (256 MiB over one page faulted in CC_SHA256)
         size_t pg = (size_t)getpagesize(); uint8_t *two = mmap(NULL, 2 * pg, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); assert(two != MAP_FAILED);

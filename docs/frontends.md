@@ -64,13 +64,13 @@ Each app keeps the player's choices in its own preferences domain, its bundle ID
 - **Checked when read.** The launcher uses a saved value only when this build still offers it: one of a `choice`'s options, a `toggle`'s `on` or `off`, or a number from a `range`'s `min` to `max`. It checks against the app's own list, which the packer copies into `Info.plist` as `DMSettings`. Any other value, a value that is not a string, or a key no setting has is ignored; it stays saved until the settings screen's Play replaces it with the player's choice. So a rebuild that stops offering a value falls back to its tested default.
 - **The order**, the first that sets a variable wins:
   1. the launch environment (a front end's launch overrides, a terminal);
-  2. the player's `env.txt` (`~/Library/Application Support/HorizonNative/<title ID>/env.txt`; on the iPhone, `Documents/env.txt`);
+  2. the player's `env.txt` (`~/Library/Application Support/HorizonNative/<title ID>/env.txt`; on the iPhone, `Documents/env.txt`), which may come from anyone, so it sets only what `dm/host/env_file.h` allows: `DM_` and `MTL_` switches, not the folders the app sets (`DM_ROMFS`, `DM_SAVE`, `DM_TEMP`, `DM_AOC_DIR` …), and no value with a `/` except `DM_SAVE_SYNC`;
   3. the bundle's `dm/env.txt`;
   4. saved choices;
   5. the tested defaults (the host's own, from the game's profile).
 - **Launch overrides are temporary.** A front end that starts the game with a variable in its environment overrides the saved choice for that start only. It writes the store only when the player means to keep the choice.
 - **`DM_SAVED_CHOICES=0`** (in the environment or an `env.txt`) starts with the tested defaults and leaves the saved choices as they are. **`DM_LAUNCHER=0`** only skips the settings screen (the iPhone's, or a Mac app's window): the saved choices still apply.
-- **A sandboxed front end** cannot write another app's preferences domain; this store is for front ends outside the App Sandbox, as NX2Apple is.
+- **A sandboxed front end** cannot write another app's preferences domain; this store is for unsandboxed front ends that integrate with HorizonNative.
 
 ### The cloud saves folder
 
@@ -80,7 +80,15 @@ The folder a Mac app's save is synced through ([Cloud saves](settings.md#cloud-s
 - **The order** is that of the saved choices: `DM_SAVE_SYNC` in the launch environment wins (a folder for this start only, or `0` to start without cloud saves), then an `env.txt`, then this key. `DM_SAVE_SYNC=icloud` is iCloud Drive › HorizonNative Saves.
 - **The sync state belongs to one cloud file.** `<DM_SAVE>.sync` records the save last known to be the same here and in the cloud, and since this version the cloud file it was in step with (a `cloud` line). After the folder changes, the next start treats the new folder as a first sync and sends the save there even if it did not change. A state file without the line counts for any folder.
 - **One folder serves every game.** Each game keeps its own `<title ID>/save.dmsync` in it, so a front end can write the same path into each app's domain to give its whole library one cloud folder. A path that already ends in the game's title ID is taken as that game's own folder.
-- **The iPhone app** keeps its folder as a security-scoped bookmark that only its own folder picker can make, so it is chosen there.
+- **The iPhone app** keeps its folder as a security-scoped bookmark that only its own folder picker can make, so it is chosen there. Without one, an app signed with an iCloud container (`DM_ICLOUD_CONTAINER`, the maintainer's team) syncs through that container's `Documents` folder ("automatic iCloud", `CloudSaves.h`), which iCloud Drive shows as **HorizonNative**: a Mac front end that writes `cloudSaves.folder = $HOME/Library/Mobile Documents/iCloud~io~github~icosisenpai~horizonnative/Documents` into each Mac app's domain puts the whole library on the same saves. The preference `cloudSavesAutoOff` (a boolean in the iPhone app's own domain) turns automatic iCloud off.
+
+### Add-on content outside the app
+
+`DM_AOC_DIR` may list several folders separated by `:`; the first that holds an index (`<index>.img` or `<index>/`) wins, and the game is told about every index any of them holds. The iPhone app puts its `Documents/aoc` before the DLC packed into it, and a Mac app its `~/Library/Application Support/HorizonNative/<title ID>/aoc`: a front end adds a DLC bought after the app was built by writing its image there (`scripts/push_aoc.sh` does it for an iPhone), with no rebuild. A game update changes the code built into the app and needs a new build.
+
+## The in-game menu (iPhone)
+
+The iPhone app has a menu of its own while the game runs (`dm/ios/Sources/InGameMenu.swift`, [The in-game menu](settings.md#the-in-game-menu)): the touch controls' menu button, a controller's Home button or − and + held together open it, and the game is paused meanwhile (the guest clock's reason 3, `hle_os.c`). Its picture settings act at once through the host's present (`dm_present_set_upscale`, `dm_present_set_sharpen`, `dm_present_set_nearest`, `dm_present_set_stretch` in `nvn_mtl.m`, declared for Swift in `ingame.h`); the next present shows them. It saves the rows the settings list also has under the same `launcher.<env>` keys and by the same rules as the settings screen ([Saved choices](#saved-choices)): only values that differ from the default, nothing for a variable an `env.txt` or the launch environment sets. The touch controls' own options (layout, opacity, size, hidden, each group's position) are kept in the app's defaults as `DmPadLayout`, `DmPadOpacity`, `DmPadScale`, `DmPadHidden` and `DmPadOffsets` (one offset pair per control group, in the layout's units).
 
 ## What a front end cannot see yet
 

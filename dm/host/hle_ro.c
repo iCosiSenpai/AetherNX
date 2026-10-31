@@ -112,8 +112,11 @@ HLE_FORCE("_ZN2nn2ro12UnloadModuleEPNS0_6ModuleE", "unload an NRO: its fini, the
 // (dm/tools/nro_collect.py), so there is nothing to check: success
 HLE_FORCE("_ZN2nn2ro18RegisterModuleInfoEPNS0_16RegistrationInfoEPKv", "register an NRR: nothing to check, the host's NROs were collected by its hashes", Result, h_ro_RegisterModuleInfo, void *info, const void *nrr) {
     const uint8_t *r = nrr;
-    if (!r || memcmp(r, "NRR0", 4)) return RO_FAIL;
-    uint32_t off = *(const uint32_t *)(r + 0x340), cnt = *(const uint32_t *)(r + 0x344), refused = 0;
+    if (!r || !image_readable(r, 0x350) || memcmp(r, "NRR0", 4)) return RO_FAIL;
+    // The hash table lies inside the NRR as its header sizes it (size +0x338, table +0x340, count +0x344), all of it readable: a guest NRR is not trusted to point within itself
+    uint32_t size = *(const uint32_t *)(r + 0x338), off = *(const uint32_t *)(r + 0x340), cnt = *(const uint32_t *)(r + 0x344), refused = 0;
+    if (off < 0x350 || (uint64_t)off + 32ull * cnt > size || !image_readable(r, size)) {
+        LOG("[RED] ro::RegisterModuleInfo: an NRR whose hash table (offset 0x%x, %u hashes) is not inside its %u readable bytes: refused", off, cnt, size); return RO_FAIL; }
     for (uint32_t i = 0; i < cnt; i++) refused += nro_refused(r + off + 32 * i);
     // An NRR that registers only online SDKs the host refuses (Hades and Hades II: game.nrr with the one EOS SDK hash) fails as every registration did before the host loaded NROs,
     // so such a game takes the path it took then (it never asked for the module)

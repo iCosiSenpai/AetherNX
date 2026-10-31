@@ -24,6 +24,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include "env_file.h"
 #include "romfs_image.h"
 #include "save_sync.h"
 
@@ -73,7 +74,7 @@ static void mkdirs(const char *path) {   // mkdir -p
     mkdir(p, 0755);
 }
 
-static void env_file(const char *path) {   // KEY=VALUE lines, # starts a comment; a variable already set stays
+static void env_file(const char *path, int player) {   // KEY=VALUE lines, # starts a comment; a variable already set stays. The player's file sets only what env_file.h allows
     FILE *f = fopen(path, "r"); if (!f) return;
     char ln[4096];
     while (fgets(ln, sizeof ln, f)) {
@@ -82,6 +83,7 @@ static void env_file(const char *path) {   // KEY=VALUE lines, # starts a commen
         char *eq = strchr(s, '=');
         if (*s == '#' || !eq || eq == s) continue;
         *eq = 0; char *k = s; for (char *t = eq - 1; t > k && (*t == ' ' || *t == '\t'); t--) *t = 0;
+        if (player && !dm_env_file_ok(k, eq + 1)) { fprintf(stderr, "launcher: env %s ignored: not a setting the player's env.txt may change (env_file.h: DM_ and MTL_ switches, not the app's folders, no path out of them) (%s)\n", k, path); continue; }
         if (!getenv(k)) { setenv(k, eq + 1, 0); add_key(&g_file_keys, k); fprintf(stderr, "launcher: env %s=%s (%s)\n", k, eq + 1, path); }
     }
     fclose(f);
@@ -180,8 +182,8 @@ int main(int argc, char **argv) {
     fprintf(stderr, "launcher: %s (%s), host %s\n", name, id, host);
     CFArrayRef rules = setting_rules();   // the settings the launch environment already set: the window shows them, fixed
     for (CFIndex i = 0; rules && i < CFArrayGetCount(rules); i++) { char env[128]; if (rule_env(CFArrayGetValueAtIndex(rules, i), env, sizeof env) && getenv(env)) add_key(&g_launch_keys, env); }
-    snprintf(p, sizeof p, "%s/env.txt", sup); env_file(p);
-    snprintf(p, sizeof p, "%s/env.txt", dm); env_file(p);
+    snprintf(p, sizeof p, "%s/env.txt", sup); env_file(p, 1);   // the player's: may come from anyone
+    snprintf(p, sizeof p, "%s/env.txt", dm); env_file(p, 0);    // packed in the signed app
     setenv("DM_ENV_FILE_KEYS", g_file_keys ? g_file_keys : "", 1); setenv("DM_ENV_LAUNCH_KEYS", g_launch_keys ? g_launch_keys : "", 1);
     free(g_file_keys); free(g_launch_keys);
     int window = !(getenv("DM_LAUNCHER") && !strcmp(getenv("DM_LAUNCHER"), "0"));
@@ -195,7 +197,12 @@ int main(int argc, char **argv) {
     snprintf(p, sizeof p, "%s/msl", res); setenv("DM_MSL_DIR", p, 0);
     snprintf(p, sizeof p, "%s/font", dm); setenv("DM_FONT_DIR", p, 0);
     snprintf(p, sizeof p, "%s/shader_map.tsv", dm); if (!stat(p, &st)) setenv("DM_NVN_SHMAP", p, 0);
-    snprintf(p, sizeof p, "%s/aoc", res); if (!stat(p, &st)) setenv("DM_AOC_DIR", p, 0);
+    {   // add-on content: <Application Support>/aoc first (DLC added after the app was built: hle_fs.c aoc_dir), then the app's own
+        char user[PATH_MAX], packed[PATH_MAX], both[2 * PATH_MAX + 2]; int u, b;
+        snprintf(user, sizeof user, "%s/aoc", sup); snprintf(packed, sizeof packed, "%s/aoc", res);
+        u = !stat(user, &st); b = !stat(packed, &st);
+        if (u || b) { snprintf(both, sizeof both, "%s%s%s", u ? user : "", u && b ? ":" : "", b ? packed : ""); setenv("DM_AOC_DIR", both, 0); }
+    }
     snprintf(p, sizeof p, "%s/pso", res); if (!stat(p, &st)) setenv("DM_PSO_BUNDLE", p, 0);   // the bases of every shader pair: the first start builds none
     if (*lang) setenv("DM_LANG", lang, 0);
     setenv("DM_WINDOW", "1", 0); setenv("DM_AUDIO", "1", 0);

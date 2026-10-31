@@ -1,12 +1,46 @@
-# HorizonNative
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/banner-dark.svg">
+    <img src="docs/images/banner-light.svg" width="880" alt="HorizonNative: your own Switch games, natively on iPhone, iPad and Mac">
+  </picture>
+</h1>
 
-An independent project maintained by **iCosiSenpai**, with its own repository, issue tracker and development direction. This repository contains the complete reusable engine, build tools, game profiles, tests and technical documentation. The imported compatibility reports describe upstream testing; HorizonNative has not yet repeated those gameplay runs.
+<p align="center">
+  <img alt="iOS and iPadOS 26 or later" src="https://img.shields.io/badge/iOS%20%26%20iPadOS-26%2B-000000?logo=apple&logoColor=white">
+  <img alt="macOS 26 or later" src="https://img.shields.io/badge/macOS-26%2B-000000?logo=apple&logoColor=white">
+  <img alt="Apple silicon" src="https://img.shields.io/badge/Apple%20silicon-native-0A84FF">
+  <img alt="Metal 4" src="https://img.shields.io/badge/Metal-4-0A84FF">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2EA043"></a>
+</p>
 
-Start with the [reusable components](docs/foundation.md) or the [upstream review process](docs/upstream.md). Report problems in [this repository's issue tracker](https://github.com/iCosiSenpai/HorizonNative/issues).
+<p align="center">
+  <a href="#how-to-play"><b>How to play</b></a> &nbsp;·&nbsp;
+  <a href="#games"><b>Games</b></a> &nbsp;·&nbsp;
+  <a href="docs/settings.md"><b>Settings</b></a> &nbsp;·&nbsp;
+  <a href="docs/playing.md"><b>Playing</b></a> &nbsp;·&nbsp;
+  <a href="#for-developers"><b>For developers</b></a> &nbsp;·&nbsp;
+  <a href="#support-the-project"><b>Support</b></a>
+</p>
 
-Play your own Nintendo Switch games natively on iPhone and iPad. Bring your game (its NSP files) and your `prod.keys`; one script turns them into an IPA that you sideload.
+<p align="center">
+  <a href="https://github.com/iCosiSenpai"><img alt="GitHub: iCosiSenpai" src="https://img.shields.io/badge/GitHub-iCosiSenpai-181717?logo=github&logoColor=white"></a>
+  <a href="https://paypal.me/AlessioCosi"><img alt="Donate with PayPal" src="https://img.shields.io/badge/PayPal-Donate-blue?logo=paypal&logoColor=white"></a>
+  <a href="https://buymeacoffee.com/icosisenpai"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Support-yellow?logo=buy-me-a-coffee&logoColor=black"></a>
+</p>
+
+Play your own Nintendo Switch games natively on iPhone, iPad and Mac. Bring your game (its NSP files) and your `prod.keys`; one script turns them into an app of that game.
 
 It is not an emulator: the game's own code runs directly on the Apple chip, with Switch graphics rebuilt on Metal. Nothing from any game is in this repository, and the project is not affiliated with Nintendo or any game publisher.
+
+### Highlights
+
+- **Each game is its own app**, with a settings screen before it starts: the game's icon and name, Play, and the settings it was tested with, all reachable with a game controller.
+- **An in-game menu** from the touch controls, a controller's Home button or − and + held: pause, then change upscaling (MetalFX), sharpness, sharp pixels, the screen's fit and the touch controls, which you can move, resize and fade.
+- **Shaders ready before you play**: the pipelines a game uses are prepared before its first frame and an archive built for the iPhone's GPU ships with the app, so a new scene does not freeze.
+- **Saves through iCloud**, shared between iPhone, iPad and Mac, with the replaced save always kept as a backup.
+- **DLC** packed into the app, or added later without building it again.
+
+HorizonNative is made by **[iCosiSenpai](https://github.com/iCosiSenpai)**, with its own repository, issue tracker and development direction; report problems in [the issue tracker](https://github.com/iCosiSenpai/HorizonNative/issues). It began from an imported base, whose compatibility reports are kept as historical evidence: a game verified here says so in its note (Fire Emblem: Three Houses was played on an iPhone 17 Pro Max). Start with the [reusable components](docs/foundation.md) or the [upstream review process](docs/upstream.md).
 
 ## How to play
 
@@ -44,7 +78,7 @@ To play on the Mac instead, add `--platform mac-app`: you get a Mac app of the g
 
 ### Install
 
-Install the IPA on your iPhone or iPad with a sideloading tool such as AltStore, Sideloadly or LiveContainer. If your tool offers **Increased Memory Limit**, turn it on: the bigger games need it.
+Install the IPA on your iPhone or iPad with a sideloading tool such as AltStore, Sideloadly or LiveContainer. If your tool offers **Increased Memory Limit**, turn it on: the bigger games need it. With an Apple developer account you can instead let Xcode sign and install it, with Increased Memory Limit and iCloud saves ([Building with Xcode](docs/development.md#the-packing-script-in-detail), `--prepare-xcode`).
 
 Game too big to install? Build again with `--romfs separate`, and run the command the script prints once to copy the game files to your phone ([Quick reinstalls](docs/development.md#quick-reinstalls)).
 
@@ -251,6 +285,10 @@ Under a game, "60 fps with 1.2.0" means it runs at 60 fps (30 on the Switch) wit
 
 HorizonNative's imported base traces back to **[d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)** (MIT), which developed this native-execution approach for Diablo II: Resurrected: its NSO rewriter, Horizon host, NVN-on-Metal layer and iOS app shell. It also builds on **Ryujinx** (MIT; its shader translator, in `dm/third_party/ryujinx` with [a few fixes](dm/third_party/ryujinx/README.md), and a reference for system services), **[Atmosphère](https://github.com/Atmosphere-NX/Atmosphere)** (Horizon's synchronization semantics), **yuzu** (Maxwell encodings, kernel cross-checks), **[LibHac](https://github.com/Thealexbarney/LibHac)** and **hactool** (reading NSPs), **[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)** and **[glslang](https://github.com/KhronosGroup/glslang)** (shaders to Metal), **deko3d** (zlib; texture layout sizes), **libvpx**, **stb_vorbis**, the **Vulkan headers** and **NVIDIA FLIP** ([licenses](dm/third_party/README.md)), and **Capstone**, **lz4**, **fontTools** and **XcodeGen** in the build.
 
+### Support the project
+
+HorizonNative is free and made by [iCosiSenpai](https://github.com/iCosiSenpai). If it lets you play your games, a donation keeps it going: [PayPal](https://paypal.me/AlessioCosi) or [Buy Me a Coffee](https://buymeacoffee.com/icosisenpai). The same links are at the bottom of every game's settings screen, on the iPhone and the Mac.
+
 ### License
 
-MIT ([LICENSE](LICENSE)). Third-party code keeps its own license ([dm/third_party](dm/third_party/README.md)).
+MIT ([LICENSE](LICENSE)), © Alessio Cosi (iCosiSenpai). Fork it, change it and send pull requests: the one condition is that copies and forks keep the copyright line and the license, which name the author; [NOTICE](NOTICE) asks the same of forks, plus a link back here. Contributions are accepted under the same license ([Contributing](CONTRIBUTING.md#license-of-contributions)). Third-party code keeps its own license ([dm/third_party](dm/third_party/README.md)).

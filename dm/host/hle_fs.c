@@ -493,10 +493,19 @@ static size_t romfs_work_size(const char *dir) {
     } else romfs_tables(dir, &ndir, &dbytes, &nfile, &fbytes, 0);
     return 4 * romfs_buckets(ndir) + dbytes + 4 * romfs_buckets(nfile) + fbytes;
 }
+// DM_AOC_DIR may list several folders, separated by ':', the first holding an index wins: the iPhone app puts Documents/aoc before the DLC packed in the app (main.m),
+// so a DLC copied there later (the Files app, scripts/push_aoc.sh) is used without building the app again; a Mac app does the same with its Application Support folder
 static int aoc_dir(char *dir, size_t n, int index) {
-    const char *base = getenv("DM_AOC_DIR"); struct stat st;
-    if (base && *base && snprintf(dir, n, "%s/%d.img", base, index) < (int)n && !stat(dir, &st) && S_ISREG(st.st_mode)) return 1;
-    return base && *base && snprintf(dir, n, "%s/%d", base, index) < (int)n && !stat(dir, &st) && S_ISDIR(st.st_mode);
+    const char *list = getenv("DM_AOC_DIR"); struct stat st;
+    for (const char *b = list; b && *b; ) {
+        const char *end = strchr(b, ':'); size_t len = end ? (size_t)(end - b) : strlen(b);
+        if (len && len < 900) {
+            if (snprintf(dir, n, "%.*s/%d.img", (int)len, b, index) < (int)n && !stat(dir, &st) && S_ISREG(st.st_mode)) return 1;
+            if (snprintf(dir, n, "%.*s/%d", (int)len, b, index) < (int)n && !stat(dir, &st) && S_ISDIR(st.st_mode)) return 1;
+        }
+        b = end ? end + 1 : NULL;
+    }
+    return 0;
 }
 HLE_FORCE("_ZN2nn2fs31QueryMountAddOnContentCacheSizeEPmi", "fsp-srv; add-on content reads the host directory directly, the cache is the size of its RomFS file table", Result, h_fs_QueryAocCache, size_t *out, int index) {
     char dir[1024];
@@ -874,16 +883,26 @@ HLE_FORCE("_ZN2nn2fs15CreateDirectoryEPKc", "fsp-srv → mkdir(2)", Result, h_fs
     if (mkdir(hp, 0755)) return err_res("mkdir", hp);
     if (set_guest_name(hp, path)) { int e = errno; rmdir(hp); errno = e; return err_res("mkdir name", hp); }
     return RES_OK; }
-static int rm_tree(const char *p) {
-    DIR *d = opendir(p); if (!d) return -1;
-    struct dirent *e; char c[1024]; int rc = 0;
+// Recursive deletes never follow a link: each folder is opened from its parent with O_NOFOLLOW, so a link (put in a save or temporary folder from outside, or swapped in
+// for a folder after it was listed) is removed itself and the folder it points at is untouched. rm_fd_contents empties the folder fd names and closes fd.
+static int rm_fd_contents(int fd) {
+    DIR *d = fdopendir(fd); if (!d) { close(fd); return -1; }
+    struct dirent *e; int rc = 0;
     while ((e = readdir(d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-        snprintf(c, sizeof c, "%s/%s", p, e->d_name);
-        rc |= e->d_type == DT_DIR ? rm_tree(c) : unlink(c);
+        int sub = e->d_type == DT_DIR || e->d_type == DT_UNKNOWN ? openat(dirfd(d), e->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) : -1;
+        if (sub >= 0) rc |= rm_fd_contents(sub) | unlinkat(dirfd(d), e->d_name, AT_REMOVEDIR);
+        else rc |= unlinkat(dirfd(d), e->d_name, 0);
     }
     closedir(d);
-    return rc | rmdir(p);
+    return rc;
+}
+// Deletes p and what is in it. A p that is itself a link (a save.work or save.new left beside a save, a writable mount's root) loses only the link
+static int rm_tree(const char *p) {
+    struct stat st;
+    if (!lstat(p, &st) && S_ISLNK(st.st_mode)) { LOG("[RED] fs: %s is a link: removing the link, not the folder it points at", p); return unlink(p); }
+    int fd = open(p, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC); if (fd < 0) return -1;
+    return rm_fd_contents(fd) | rmdir(p);
 }
 HLE_FORCE("_ZN2nn2fs26DeleteDirectoryRecursivelyEPKc", "fsp-srv → recursive delete (only inside writable mounts)", Result, h_fs_DeleteDirRec, const char *path) {
     HP(path); RW(); return rm_tree(hp) ? err_res("rmtree", hp) : RES_OK;
@@ -891,15 +910,10 @@ HLE_FORCE("_ZN2nn2fs26DeleteDirectoryRecursivelyEPKc", "fsp-srv → recursive de
 // empty a directory and keep the directory itself (13 Sentinels)
 HLE_FORCE("_ZN2nn2fs25CleanDirectoryRecursivelyEPKc", "fsp-srv → recursively deletes the directory's contents and keeps the directory (only inside writable mounts)", Result, h_fs_CleanDirRec, const char *path) {
     HP(path); RW();
-    DIR *d = opendir(hp); if (!d) return err_res("cleandir", hp);
-    struct dirent *e; char c[1024]; int rc = 0;
-    while ((e = readdir(d))) {
-        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-        snprintf(c, sizeof c, "%s/%s", hp, e->d_name);
-        rc |= e->d_type == DT_DIR ? rm_tree(c) : unlink(c);
-    }
-    closedir(d);
-    return rc ? err_res("cleandir", hp) : RES_OK;
+    // O_NOFOLLOW: a writable mount's root that is a link (Documents/temp made a link to ../Library from the Files app) is refused, not emptied
+    int fd = open(hp, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) { if (errno == ELOOP) LOG("[RED] fs: %s is a link: not cleaned", hp); return err_res("cleandir", hp); }
+    return rm_fd_contents(fd) ? err_res("cleandir", hp) : RES_OK;
 }
 // file data cache (a global read cache in the fs process): the host reads through the page cache and leaves the buffer unused
 HLE_FORCE("_ZN2nn2fs25EnableGlobalFileDataCacheEPvm", "fsp-srv global read cache; unused by the host", void, h_fs_EnableGlobalCache, void *buf, size_t sz) { (void)buf; (void)sz; }

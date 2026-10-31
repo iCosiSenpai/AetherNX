@@ -7,10 +7,12 @@ A dot beside a setting means it differs from the game's tested default; touch an
 **With a game controller**: up and down move through the screen, left and right change the setting that is selected (or move along the summary row), A chooses (opens a menu's next value, turns a switch on or off, follows a summary entry to its setting), B goes back to **Play**, and + (Menu) starts the game from anywhere. The selected item has a coloured ring, and a line under the summary row shows the buttons in your controller's own symbols. The same works in the Mac window, where the controller also reaches **Show this window at launch** and **Quit**.
 
 - [Tested defaults](#tested-defaults)
-- [Game](#game): [Frame rate](#frame-rate), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Game language](#game-language), [Frame-rate counter](#frame-rate-counter)
+- [Game](#game): [Frame rate](#frame-rate), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Sharpness](#sharpness), [Pixels](#pixels), [Screen](#screen), [Game language](#game-language), [Frame-rate counter](#frame-rate-counter), [Texture filtering](#texture-filtering)
 - [Controls](#controls): [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff)
 - [Performance](#performance): [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
+- [The in-game menu](#the-in-game-menu): [Touch controls](#touch-controls)
 - [The Mac settings window](#the-mac-settings-window): [Display mode](#display-mode)
+- [Cloud saves](#cloud-saves), [Add-on content bought later](#add-on-content-bought-later), [Support the project](#support-the-project)
 - [Settings in a file](#settings-in-a-file)
 
 ## Tested defaults
@@ -54,6 +56,20 @@ Breath of the Wild renders 1280x720 in handheld mode. Docked it renders its worl
 - **Cost:** more GPU time each frame, which can increase heat on an iPhone. [Breath of the Wild's measurements](../dm/games/01007EF00011E000/README.md#upscaling-current) cover Mac and iPhone; the matching iPhone Standard run and MetalFX's share of the thermal cost remain unmeasured. Nothing changes while the game's picture is as large as the screen. Unsupported devices and sizes use Standard scaling.
 - **On the Mac:** choose **MetalFX** under **Upscaling** in the [settings window](#the-mac-settings-window)'s Advanced settings, or set `DM_PRESENT_UPSCALE=metalfx` in its `env.txt` (off by default). It helps in a large window or on a 4K screen.
 
+### Sharpness
+
+Sharpens the picture as it goes to the screen, after the upscaling: edges and small text get crisper, flat areas stay as they are (the sharpening adapts to the contrast around each pixel, so edges do not get halos). **0 %**, the default, is off. 30–50 % suits most games; more can look grainy. It also works with Standard upscaling, where it sharpens the game's own pixels before they are scaled.
+
+- **Cost:** a little GPU time each frame. Change it during the game in the [in-game menu](#the-in-game-menu) to see the difference at once.
+
+### Pixels
+
+**Smooth**, the default, filters the picture as it is scaled. **Sharp pixels** shows each pixel of the game as a block, for pixel-art games that look blurred when smoothed; MetalFX is not used while it is on.
+
+### Screen
+
+**Game's shape**, the default, keeps the game's 16:9 picture with black bars at the sides of a wider screen. **Fill the screen** stretches it over the whole screen (on an iPhone about 22 % wider than the game drew it).
+
 ### Game language
 
 The game's own languages. The app was packed with one of them; pick another here without repacking.
@@ -61,6 +77,12 @@ The game's own languages. The app was packed with one of them; pick another here
 ### Frame-rate counter
 
 Shows the frames per second at the top left.
+
+### Texture filtering
+
+Textures seen at a slant (floors, roads, walls along the view) keep their detail further away instead of blurring. **Game**, the default, keeps the game's own filtering; **2×** to **16×** raise it to at least that. It applies at the next start. Textures the game draws without filtering (pixel art, lookup tables) and depth comparisons are left as they are.
+
+- **Cost:** a little GPU time; 16× on an iPhone in long sessions may add heat.
 
 ## Controls
 
@@ -141,7 +163,7 @@ At start, before the game's first frame, the app prepares what it already knows:
 
 ### Pipeline prebuild
 
-Builds a stand-in for every pair of shaders the game has (15,767 for Breath of the Wild) and puts them into the pipeline archive, so that a scene you have never seen has a stand-in for each of its draws instead of a stutter. It runs before the game's first frame, behind a **Preparing pipelines** screen: the first start waits a few minutes for it, once, and so does the first start after a game update or an app update that brings new shaders. Every other start skips it. It needs Metal 4 pipelines.
+Shown while **Metal 4 pipelines** is on. Builds a stand-in for every pair of shaders the game has (15,767 for Breath of the Wild) and puts them into the pipeline archive, so that a scene you have never seen has a stand-in for each of its draws instead of a stutter. It runs before the game's first frame, behind a **Preparing pipelines** screen: the first start waits a few minutes for it, once, and so does the first start after a game update or an app update that brings new shaders. Every other start skips it. It needs Metal 4 pipelines.
 
 Built in the background while playing instead, the stand-ins took an iPhone 17 Pro Max's GPU from about 13 to 15–18 ms a frame in Breath of the Wild, so the app does the work up front.
 
@@ -156,7 +178,7 @@ The app turns the game's graphics commands into Metal commands on a thread of it
 
 ### Hold frames when late
 
-For games whose frame rate the app controls ([Frame rate](#frame-rate)). With 60 fps chosen, each frame is meant to stay on screen for one refresh. When a frame comes late, the app can either slow the game down to 30 fps for a while, or keep 60 and show late frames as they come.
+For games whose frame rate the app controls with its frame step (Breath of the Wild and Tears of the Kingdom, [Frame rate](#frame-rate)); other games do not show it, as it would change nothing there. With 60 fps chosen, each frame is meant to stay on screen for one refresh. When a frame comes late, the app can either slow the game down to 30 fps for a while, or keep 60 and show late frames as they come.
 
 ```mermaid
 flowchart LR
@@ -184,6 +206,24 @@ Apple's performance overlay over the game: frame rate, frame and GPU times, memo
 
 Sets every setting back to the game's tested default; **Play** then forgets your choices, so those defaults apply, and those of later builds too ([Tested defaults](#tested-defaults)). Settings fixed by `Documents/env.txt` stay as the file says.
 
+## The in-game menu
+
+While you play, the **menu button** at the top centre of the touch controls (three short lines, where the layout button used to be) pauses the game and opens a panel beside its last picture. A controller opens it with its **Home** button, or by holding **−** and **+** together for half a second (a controller without Home). The game stays paused while the menu is open: its clock stops, its sound stops, and nothing you touch or press reaches it. **Resume**, a tap beside the panel, or B, + or Home on a controller closes it.
+
+**Picture**: Upscaling, Sharpness, Pixels, Screen, Frame-rate counter and Performance HUD change the picture at once, so you can compare while the game waits; Texture filtering applies at the next start. **Performance**: Metal 4 pipelines, at the next start. What you choose here is kept as the settings screen keeps it: the screen before the next start shows it, and a value an `env.txt` sets is shown, not changed.
+
+With a controller: up and down move, left and right change the selected setting, A chooses, B resumes.
+
+### Touch controls
+
+- **Layout**: **2D**, **3D** (adds the D-pad, a right stick in the right third of the screen and L3 / R3) and, in handheld mode, **Tap** (only the menu button; every touch goes to the game's touch screen).
+- **Opacity** (20–100 %) and **Size** (70–130 %) of the controls.
+- **Move the controls…** closes the menu and shows the controls with **Reset** and **Done**: drag the stick, the D-pad, the buttons, each shoulder pair, − and +, L3 and R3 or the menu button where they suit your hands. **Done** keeps the places and resumes the game; **Reset** puts every control back.
+- **Touch feedback**, and **Show touch controls**: off leaves only the menu button, for games you play with a controller or by touch.
+- **Reset touch controls** brings back the default places, size, opacity and visibility.
+
+Each game keeps its own choices. The touch controls hide while a controller is connected; the menu button stays.
+
 ## The Mac settings window
 
 A Mac app ([A Mac app](development.md#a-mac-app)) shows its settings in a window before the game starts, laid out as the iPhone's screen: the game with **Play** at the top, the summary row, then the settings. They are the same settings as on the iPhone, with the same defaults. The window shows the most used ones first: **Frame rate**, **Render scale**, **Console mode**, **Game language**, **Display mode** and **Game rumble**, when the game has them. **Render scale** shows the picture's size in pixels beside the percentage for the chosen **Console mode**, when the game's profile has it (Breath of the Wild: 1600 × 900 docked, 1280 × 720 handheld at 100 %). Opening **Advanced settings** shows the others in the same sections; **Reset to tested defaults** is always at the bottom of the window. The window remembers whether Advanced settings is open. **Frame-rate counter** and **Touch feedback** are only on the iPhone.
@@ -202,6 +242,8 @@ Turn off **Show this window at launch** to start the game at once with your choi
 
 ## Cloud saves
 
+**Automatic iCloud.** An iPhone app signed with the maintainer's team (installed from Xcode or `xcrun devicectl`, not through a sideloading tool) syncs through its own iCloud folder with nothing to choose: the launcher's **Cloud saves** shows **iCloud (automatic)**. In iCloud Drive that folder is **HorizonNative**, shared by every HorizonNative game; on the Mac, choose **iCloud Drive › HorizonNative** in the settings window's **Cloud saves** to share the same saves. **Choose a Folder in iCloud Drive…** picks another folder instead, **Turn Off Cloud Saves** stops syncing, and **Use iCloud Automatically** turns it back on. Without an iCloud account, or with iCloud Drive off for the app, it stays off. A sideloaded app cannot get its own iCloud folder: choose a folder as below.
+
 The Mac app and the iPhone app of one game can share a save through iCloud Drive. Choose the same iCloud Drive folder on both: **Cloud saves** › **Choose a folder…** in the Mac settings window, and **Cloud saves** in the iPhone launcher (any folder, for instance one named **HorizonNative Saves**). Each game keeps one file there, `<title ID>/save.dmsync`, which holds the whole save.
 
 When the game starts, it brings the save from iCloud Drive in if that one is the one to keep; a few seconds after the game saves, it sends its save. The iPhone app also sends when it goes to the background, and the Mac app once the game has quit. If you played on both without the save getting across in between, the newer save wins: a newer one in iCloud Drive is never replaced by an older one from this device, also not by the Mac app after a game that stopped before it loaded its save; it comes in at the next start. After you choose another folder, the save goes there at the next start even if it did not change.
@@ -212,9 +254,19 @@ A save that is replaced, on the device or in iCloud Drive, is kept first, beside
 
 iCloud Drive takes a moment to carry a file from one device to the other. Quit the game on one device and give it a few seconds before you start it on the other. Without a connection the game plays on with the save it has and sends it later. The game log says what came in and what went out (lines starting with `save sync:`).
 
+## Add-on content bought later
+
+The DLC in the game's folder when you pack the app go into it. For a DLC you get later you do not need to pack the app again: put its NSP in the game's folder and run the packing script once (it extracts it to `<title ID>_build/aoc/<index>.img`), then copy that file to the phone: with the Files app into the app's folder as `aoc/<index>.img`, or with `scripts/push_aoc.sh <device UDID> <bundle ID> "<title ID>_build/aoc"`. The game lists it at its next start; a copy in the app's folder wins over the one packed in the app. DLC as large as the game itself can stay out of the app from the start: pack it with `DM_COPY_AOC=NO` and copy it the same way. A game **update** is different: it changes the game's code, which is built into the app, so pack the app again with the update in the folder.
+
+On the Mac, put the files in `~/Library/Application Support/HorizonNative/<title ID>/aoc/`.
+
+## Support the project
+
+HorizonNative is free and made by [iCosiSenpai](https://github.com/iCosiSenpai). At the bottom of every game's settings screen (on the iPhone and in the Mac window), **Support HorizonNative** opens the project on [GitHub](https://github.com/iCosiSenpai/HorizonNative) and the donation pages on [PayPal](https://paypal.me/AlessioCosi) and [Buy Me a Coffee](https://buymeacoffee.com/icosisenpai).
+
 ## Settings in a file
 
-A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under the app's name) sets a setting from the file: the settings screen shows it greyed out, and the file wins over your choice and the game's default. Fully close and reopen the app after editing the file. The variables:
+A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under the app's name) sets a setting from the file: the settings screen shows it greyed out, and the file wins over your choice and the game's default. Fully close and reopen the app after editing the file. The file takes only HorizonNative's own settings (`DM_…`) and Metal's (`MTL_…`), never the app's folders (game files, saves, temporary storage, DLC), and no value with a `/` except the cloud saves folder: an `env.txt` someone else wrote cannot load a library, empty your saves or write a log over another file. The app's log says which lines it ignored (`env … ignored`). The variables:
 
 | Setting | Variable | Values |
 |---|---|---|
@@ -230,6 +282,10 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Rumble strength | `DM_RUMBLE_GAIN` | `0` to `3` |
 | Rumble cutoff | `DM_RUMBLE_MIN` | `0` to `0.9` |
 | Upscaling | `DM_PRESENT_UPSCALE` | `off`, `metalfx` |
+| Sharpness | `DM_PRESENT_SHARPEN` | `0` to `1` |
+| Pixels | `DM_PRESENT_FILTER` | `linear`, `nearest` |
+| Screen | `DM_PRESENT_FIT` | `aspect`, `stretch` |
+| Texture filtering | `DM_ANISO` | `0` (the game's own), `2`, `4`, `8`, `16` |
 | Frame buffering | `DM_PRESENT_SNAP` | `1`, `0` |
 | Metal 4 pipelines | `DM_PSO_MTL4` | `1`, `0` |
 | Pipeline prebuild | `DM_PSO_PREBUILD` | `1`, `0` |

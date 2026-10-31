@@ -12,6 +12,8 @@
 #include "romfs_image.h"
 #include "romfs_identity.h"
 #include "player_env.h"
+#include "env_file.h"
+#import "CloudSaves.h"
 #ifndef DM_PLAYER_BUILD
 #define DM_PLAYER_BUILD 0
 #endif
@@ -118,12 +120,15 @@ static int boot_env(void) {
     NSDictionary *settings_file = settings_data ? [NSJSONSerialization JSONObjectWithData:settings_data options:0 error:nil] : nil;
     for (NSDictionary *row in settings_file[@"settings"]) if ([row[@"env"] isKindOfClass:NSString.class]) [launcher_keys addObject:row[@"env"]];
 #endif
-    for (NSString *ef in @[[doc stringByAppendingPathComponent:@"env.txt"], [[res stringByAppendingPathComponent:@"dm"] stringByAppendingPathComponent:@"env.txt"]]) {
+    NSString *player_env = [doc stringByAppendingPathComponent:@"env.txt"];   // the player's: may come from anyone, so it sets only what env_file.h allows
+    for (NSString *ef in @[player_env, [[res stringByAppendingPathComponent:@"dm"] stringByAppendingPathComponent:@"env.txt"]]) {
         NSString *txt = [NSString stringWithContentsOfFile:ef encoding:NSUTF8StringEncoding error:nil];
         for (NSString *raw in [txt componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
             NSString *ln = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]; NSRange eq = [ln rangeOfString:@"="];
             if (!ln.length || [ln hasPrefix:@"#"] || eq.location == NSNotFound || !eq.location) continue;
             NSString *k = [ln substringToIndex:eq.location], *v = [ln substringFromIndex:eq.location + 1];
+            if (ef == player_env && !dm_env_file_ok(k.UTF8String, v.UTF8String)) {
+                fprintf(stderr, "boot: env %s ignored: not a setting Documents/env.txt may change (env_file.h: DM_ and MTL_ switches, not the app's folders, no path out of them)\n", k.UTF8String); continue; }
 #if DM_PLAYER_BUILD
             if (dm_player_diagnostic_key(k.UTF8String) || [launcher_keys containsObject:k] ||
                 ([launcher_keys containsObject:@"DM_METAL_HUD"] && [k isEqualToString:@"MTL_HUD_ENABLED"])) continue;
@@ -134,6 +139,7 @@ static int boot_env(void) {
     setenv("DM_ENV_FILE_KEYS", [from_file componentsJoinedByString:@" "].UTF8String, 1);   // the launcher keeps what an env file set (LauncherSettings.swift)
     setenv("DM_ENV_LAUNCH_KEYS", [from_launch componentsJoinedByString:@" "].UTF8String, 1);   // and what the launch environment set (docs/frontends.md, Saved choices)
     front_hud_env();   // before the early loading below can make a device
+    dm_cloud_container_resolve();   // automatic iCloud saves (CloudSaves.h): known by the time the player presses Play
     // Game language (nn::oe::GetDesiredLanguage, hle_oe.c): the one the IPA was packed with (the NSP script's LANGUAGE / --language → DMLanguage in Info.plist), unless an env file sets DM_LANG
     // (or the launcher, which replaces this default before the game starts)
     NSString *lang = [NSBundle.mainBundle objectForInfoDictionaryKey:@"DMLanguage"];
@@ -149,8 +155,15 @@ static int boot_env(void) {
     setenv("DM_NVN_SHMAP", [dm stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation, 0);
     setenv("DM_MSL_DIR", [res stringByAppendingPathComponent:@"msl"].fileSystemRepresentation, 0);
     setenv("DM_FONT_DIR", [dm stringByAppendingPathComponent:@"font"].fileSystemRepresentation, 0);   // Shared-font stand-ins (standard.ttf / nintendo_ext.ttf): iOS lacks the macOS font path
-    NSString *aoc = [res stringByAppendingPathComponent:@"aoc"];   // add-on content: build_ipa.sh puts the RomFS extracted from the player's DLC NSPs at <App>/aoc/<index>/
-    if ([fm fileExistsAtPath:aoc]) setenv("DM_AOC_DIR", aoc.fileSystemRepresentation, 0);
+    // Add-on content: build_ipa.sh puts the DLC extracted from the player's NSPs at <App>/aoc (<index>.img or <index>/); Documents/aoc comes first, for DLC added after the app was
+    // built (copied there with the Files app or scripts/push_aoc.sh): no rebuild for a new DLC. A game update changes the game's code, which is built into the app, so it needs a new build
+    NSString *aoc = [res stringByAppendingPathComponent:@"aoc"], *docAoc = [doc stringByAppendingPathComponent:@"aoc"]; NSMutableArray<NSString *> *aocs = [NSMutableArray array];
+    if ([fm fileExistsAtPath:docAoc]) {
+        [aocs addObject:docAoc];
+        NSURL *u = [NSURL fileURLWithPath:docAoc]; [u setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:nil];   // game data, not a save
+    }
+    if ([fm fileExistsAtPath:aoc]) [aocs addObject:aoc];
+    if (aocs.count) { setenv("DM_AOC_DIR", [aocs componentsJoinedByString:@":"].fileSystemRepresentation, 0); fprintf(stderr, "boot: add-on content from %s\n", getenv("DM_AOC_DIR")); }
     NSString *pso = [res stringByAppendingPathComponent:@"pso"];   // the pipeline archive made offline (build_ipa.sh, dm/gfx/tools/pso_offline.py): the shader pairs' bases, which the device then does not build
     if ([fm fileExistsAtPath:pso]) setenv("DM_PSO_BUNDLE", pso.fileSystemRepresentation, 0);
     chdir(doc.fileSystemRepresentation);

@@ -381,7 +381,7 @@ static tex_t *bound_tex(GLenum target) { GLuint *s = unit_slot(S.unit, target); 
 static struct { int made; uint32_t w, h; __strong id<MTLTexture> col[NWIN], ds; uint64_t serial[NWIN], ticket[NWIN]; int cur; } g_win;
 static void win_make(uint32_t w, uint32_t h) {
     @autoreleasepool {
-        for (int i = 0; i < NWIN; i++) if (g_win.ticket[i]) mtl_present_wait(g_win.ticket[i]);
+        for (int i = 0; i < NWIN; i++) { if (g_win.ticket[i]) mtl_present_wait(g_win.ticket[i]); if (g_win.made) mtl_ext_tex_release(g_win.serial[i]); }   // the old window's textures leave the present path
         MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:w height:h mipmapped:NO];
         td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead; td.storageMode = MTLStorageModePrivate;
         for (int i = 0; i < NWIN; i++) { g_win.col[i] = [g_dev newTextureWithDescriptor:td]; g_win.serial[i] = mtl_ext_tex((__bridge void *)g_win.col[i]); g_win.ticket[i] = 0; }

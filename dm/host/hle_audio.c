@@ -444,7 +444,10 @@ HLE_FORCE("_ZN2nn5audio20AppendAudioOutBufferEPNS0_8AudioOutEPNS0_14AudioOutBuff
     pthread_mutex_lock(&a->m);
     uint32_t qt = atomic_load_explicit(&a->q_tail, memory_order_relaxed);
     uint32_t qh = atomic_load_explicit(&a->q_head, memory_order_acquire);
-    int ok = qt - qh < QMAX;
+    // Every accepted buffer the game has not taken back counts: the ones still to play and the ones played but not reclaimed (GetReleasedAudioOutBuffer). Each pending one
+    // moves to the released queue when it is played or the output stops, which then must hold them all (pull, au_release_pending stop the host on overflow)
+    uint32_t rr = atomic_load_explicit(&a->rel_head, memory_order_relaxed), rw = atomic_load_explicit(&a->rel_tail, memory_order_acquire);
+    int ok = qt - qh < QMAX && (qt - qh) + (rw - rr) < RELMAX;
     if (ok) { a->q[qt & (QMAX - 1)] = b; atomic_store_explicit(&a->q_tail, qt + 1, memory_order_release); }
     pthread_mutex_unlock(&a->m);
     return ok;      // bool: false when the queue is full (the real device has a limit too)

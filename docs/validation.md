@@ -60,3 +60,30 @@ The published branch starts with a new HorizonNative import commit rather than r
 - `dmsh_build.py` is a shader chain input, so the chain is now `5ba3d294ee74`. Game shader libraries and the host must be rebuilt together on the next build.
 
 No game was launched, no gameplay regression route was run, and no app was installed on a device.
+
+## In-game menu, picture options, pipelines and fourth audit round: 2026-10-30
+
+[Functional code review](code-review.md#fourth-audit-round) records the fixes; [settings.md](settings.md#the-in-game-menu) the features. The first iPhone run (Fire Emblem: Three Houses, iPhone 17 Pro Max, iOS 27.2) and its log are in the [game note](../dm/games/010055D009F78000/README.md#on-the-iphone).
+
+- The graphics tests the CI runs (23) and `t_present_crop` (107 checks: stretch, sharp pixels, sharpening against real GPU output, the MetalFX switch, the anisotropy rule), `t_pso_bundle` (54, with the same-run prebuild check), `t_pso_archive` (74) and `t_pso_stall` (41) passed.
+- The host's `run`, `asan` and `tsan` targets passed for `010055D009F78000`, including the new checks of `t_fs` (DLC from two folders, 106 checks), `t_nro` (NRR hash tables outside the NRR or its mapping), `t_swkbd` (UTF-16 Strings under one unit) and `t_audio` (AudioOut admission with unreclaimed buffers).
+- Python: all 94 test files passed in isolated processes with `DM_GAME=010015100B514000` (804 cases, 22 skipped), among them the launcher storage test with the brand marks and the SVG path reader, the packaging, pipeline-archive default and environment-switch tests; the pinned ruff/pyright ratchet reported no new finding.
+- A Codex cross-review of this round's changes found eight defects in them (an alert over the in-game menu, controls pushed off screen, the iCloud resolution race, external textures waiting for an NVN fence, the − + hold, a shake while paused, the sharpness step, a fixed Touch feedback); all are fixed ([code review](code-review.md#fourth-audit-round)).
+- On the iPhone 17 Pro Max, the final build booted with no red line: the 511-row prewarm list prepared before the first frame, the bundled `g18p` archive held every pair's base, no pipeline was compiled on the submit thread, 60 fps (p99 16.67 ms). A player session on the same build opened the in-game menu, used the layout editor and changed Screen live, with no red line.
+- The iOS sources (the launcher, `InGameMenu.swift`, `SupportLinks.swift`) type-check against the iOS 26 SDK with no warning, `DmGamepad.m`, `front_ios.m`, `CloudSaves.m` and `main.m` compile for iOS (only the existing `mainScreen` deprecation warnings), and the Mac launcher with the support section type-checks against the macOS SDK.
+- Xcode on this Mac is 27.2 now, whose Metal compiler (32023.922) is not the one `dmsh_chain.lock` names (32023.921): the device build below was made with `--allow-other-metal`. The libraries built with the tested compiler are kept beside it (`shader/ios/b-5ba3d294ee74.metal921`).
+- Automatic iCloud saves need the iCloud container on the App ID, which an App Store Connect API key cannot create: until the account holder signs in to Xcode with the Apple ID once, device builds are signed without it and the launcher offers the folder picker as before.
+
+Not verified: the first battle on the new package (the run did not reach it), controller shortcuts (Home, − and + held) on a physical controller, VoiceOver and accessibility text sizes on the device, and automatic iCloud (it needs the container on the App ID).
+
+## Security audit, README and license: 2026-10-31
+
+[Functional code review](code-review.md#security-audit-round) records the security round: 15 findings from four Codex passes, each checked against the code; twelve fixed, the loader hardened, the build folder documented as trusted, one concerning only the imported base's own history.
+
+- The host's `run`, `asan` and `tsan` targets passed for `010015100B514000`, with the new checks: `t_fs` 6f (a linked `save.new` or `save.work` loses only the link, a linked writable root is not cleaned; 115 checks), `t_save_sync` (the upload ignores a link at the old staging name; 57 checks, 49 fault checks) and `t_symbols` (relocation tables and slots outside a synthetic module refused, inside ones applied).
+- Python: all 94 test files passed in isolated processes with `DM_GAME=010015100B514000` (812 cases, 22 skipped), among them the player `env.txt` filter (`test_player_env`), RomFS links and FIFOs refused and `resources.env` read as data (`test_romfs_image`), NRR tables and provisional shader-map rows (`test_untrusted_inputs`), and links planted during an IPA pack (`test_pack_ipa`). The pinned ruff/pyright ratchet reported no new finding; `env_switches.py --check` and `git diff --check` passed. The graphics tests passed.
+- The shader chain version is unchanged (`5ba3d294ee74`): the shader-map check lives in the packing script, not in `dmsh_build.py`, so no game's shader libraries need building again.
+- `nx_extract` builds with the link checks (.NET 10); no synthetic NSP fixture runs it. The Mac launcher and `crash.c` compile with the new code; `main.m` compiles for iOS.
+- The README's banner renders in GitHub's Markdown (checked through GitHub's Markdown API); `test_docs` passed.
+
+Not verified: a device run with the filtered `env.txt`, the watchdog's sampler on a real stall, and the Mac app rebuilt with the new launcher.

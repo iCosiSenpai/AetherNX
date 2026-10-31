@@ -326,14 +326,22 @@ static void register_gates(module_t *m, const char *dir) {
 // DT_RELR (from SDK 20; all three modules of The Legend of Zelda: Breath of the Wild 1.9.0 have it): a compact table of relative relocations with the addend in the slot (*slot += base).
 // Each 8-byte entry: even = a new start offset (relocate it, the pointer moves to the next slot); odd = a bitmap whose bits 1-63 stand for the 63 slots after the pointer, which then moves on by 63 slots.
 // Without it main's GOT and vtables hold module offsets (main's RELA keeps only symbol relocations)
+// Every table and every slot a relocation writes lies inside the module (mod_span; RELR tables and their slots are 8-byte aligned): a damaged or crafted table stops the load with its name instead of
+// writing outside the module (an r_offset of 0xfffffffffffffff8 wrote 8 bytes before its base)
+static uint64_t *reloc_slot(module_t *m, uint64_t off, const char *what) {
+    if (!mod_span(m, off, 8)) die("%s: %s writes at %#llx, outside the module (%#zx bytes)", m->name, what, (unsigned long long)off, m->size);
+    return (uint64_t *)(m->base + off);
+}
 static unsigned relr_apply(module_t *m, uint64_t relr, uint64_t relrsz, uint64_t delta) {
-    const uint64_t *e = (const uint64_t *)(m->base + relr); uint64_t *where = NULL; unsigned n = 0;
+    if ((relr & 7) || (relrsz & 7) || !mod_span(m, relr, relrsz)) die("%s: DT_RELR (%#llx, %#llx bytes) outside the module", m->name, (unsigned long long)relr, (unsigned long long)relrsz);
+    const uint64_t *e = (const uint64_t *)(m->base + relr); uint64_t at = 0; int started = 0; unsigned n = 0;
     for (uint64_t i = 0; i < relrsz / 8; i++) {
         uint64_t v = e[i];
-        if (!(v & 1)) { where = (uint64_t *)(m->base + v); *where++ += delta; n++; continue; }
-        if (!where) die("%s: DT_RELR bitmap entry with no start before it", m->name);
-        for (unsigned b = 0; (v >>= 1); b++) if (v & 1) { where[b] += delta; n++; }
-        where += 63;
+        if (!(v & 1)) { if (v & 7) die("%s: DT_RELR start %#llx is not 8-byte aligned", m->name, (unsigned long long)v); *reloc_slot(m, v, "DT_RELR") += delta; at = v + 8; started = 1; n++; continue; }
+        if (!started) die("%s: DT_RELR bitmap entry with no start before it", m->name);
+        for (unsigned b = 0; (v >>= 1); b++) if (v & 1) { *reloc_slot(m, at + 8ull * b, "DT_RELR") += delta; n++; }
+        if (at > UINT64_MAX - 63 * 8) die("%s: DT_RELR runs past the address space", m->name);
+        at += 63 * 8;
     }
     return n;
 }
@@ -371,6 +379,9 @@ static relocs_t relocs_of(const module_t *m) {
         case DT_RELR: r.relr = d->d_un.d_ptr; break;
         case DT_RELRSZ: r.relrsz = d->d_un.d_val; break;
     }
+    if ((relasz && !mod_span(m, rela, relasz)) || (pltsz && !mod_span(m, jmprel, pltsz)) || (rela | jmprel) & 7)
+        die("%s: relocation tables (DT_RELA %#llx, %#llx bytes; DT_JMPREL %#llx, %#llx bytes) outside the module (%#zx bytes)", m->name,
+            (unsigned long long)rela, (unsigned long long)relasz, (unsigned long long)jmprel, (unsigned long long)pltsz, m->size);
     r.tab[0] = (const Elf64_Rela *)(m->base + rela); r.tab[1] = (const Elf64_Rela *)(m->base + jmprel);
     r.n[0] = relasz / sizeof(Elf64_Rela); r.n[1] = pltsz / sizeof(Elf64_Rela);
     return r;
@@ -383,7 +394,7 @@ static void relocate(module_t *m) {
     for (int t = 0; t < 2; t++)
         for (uint64_t i = 0; i < rl.n[t]; i++) {
             const Elf64_Rela *r = &rl.tab[t][i];
-            uint64_t *where = (uint64_t *)(m->base + r->r_offset);
+            uint64_t *where = reloc_slot(m, r->r_offset, t ? "DT_JMPREL" : "DT_RELA");
             unsigned type = ELF64_R_TYPE(r->r_info), si = ELF64_R_SYM(r->r_info);
             if (type == R_AARCH64_RELATIVE) { *where = (uint64_t)m->base + r->r_addend; cnt[0]++; continue; }
             if (si >= m->nsym) die("%s: relocation %llu names symbol %u of %u", m->name, (unsigned long long)i, si, m->nsym);

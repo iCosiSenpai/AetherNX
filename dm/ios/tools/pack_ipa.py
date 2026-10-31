@@ -100,7 +100,10 @@ def fs_type(root):
 
 class Zip:
     def __init__(self, path, keep=0):   # keep: the bytes of a clone at path that stay (the leading entries kept)
-        self.f = open(path, 'r+b' if keep else 'wb', buffering=1 << 20)
+        # Never through a link put at the staging name while the pack runs (the output folder may be shared): a new archive is created exclusively, a kept clone opened
+        # without following a link
+        fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW) if keep else os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+        self.f = os.fdopen(fd, 'r+b' if keep else 'wb', buffering=1 << 20)
         if keep: self.f.seek(keep)
         self.pos, self.cd, self.written = keep, [], 0   # written: the bytes this pack writes (entries, header patches, the central directory; main adds the index)
         self.stats = collections.Counter()
@@ -296,7 +299,7 @@ def main():
     if old: old.close()
     try:   # the index only after the rename: an IPA it does not describe (size, time) makes it ignored
         blob = json.dumps({'version': IDX_VERSION, 'level': LEVEL, 'zlib': zlib.ZLIB_RUNTIME_VERSION, 'ipa': [st.st_size, st.st_mtime_ns], 'files': files})
-        with open(ipart, 'w') as f: f.write(blob)
+        with os.fdopen(os.open(ipart, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644), 'w') as f: f.write(blob)   # a link made there during the pack is refused, its target untouched
         os.replace(ipart, a.out + '.idx'); z.written += len(blob)
     except OSError as x: print(f'[RED] pack_ipa: index not written, the next pack packs every file again: {x}', flush=True)
     s, dt = z.stats, time.time() - t0

@@ -116,6 +116,15 @@ import CoreGraphics
         expect(red.map { $0.r > 0.8 && $0.g < 0.3 } == true && fill.map { 1.05 / (GameTint.luminance($0) + 0.05) >= 4.5 } == true
                && mark.map { (GameTint.luminance($0) + 0.05) / (0.0116 + 0.05) >= 3 } == true, "icon tint: white on the fill passes 4.5:1, the mark 3:1 on a dark grouped surface")
         expect(GameTint.dominant(solid(0.5, 0.5, 0.5)) == nil, "a grey icon has no tint of its own")
+        for link in SupportLink.allCases {   // the brand marks (SupportLinks.swift): every command read, inside the 24 × 24 view box, covering most of it
+            let b = SVGPath.parse(link.mark).cgPath.boundingBoxOfPath
+            expect(!b.isNull && b.minX >= -0.01 && b.minY >= -0.01 && b.maxX <= 24.01 && b.maxY <= 24.01 && b.width > 15 && b.height > 15, "\(link.title) mark drawn inside its view box (\(b))")
+            expect(link.url.scheme == "https" && link.url.host != nil, "\(link.title) opens an https page")
+        }
+        let half = SVGPath.parse("M0 0a5 5 0 0110 0z").cgPath.boundingBoxOfPath   // flags 0 and 1 touching the next number: a half circle on the 10-unit chord
+        expect(abs(half.width - 10) < 0.01 && abs(half.height - 5) < 0.05, "touching arc flags read as flags (\(half))")
+        let dots = SVGPath.parse("M0 0l.5.5l1e1 0").cgPath.boundingBoxOfPath
+        expect(abs(dots.maxX - 10.5) < 0.001 && abs(dots.maxY - 0.5) < 0.001, "'.5.5' is two numbers and 1e1 is ten (\(dots))")
         failed += checkLauncherLayout(LauncherModel(mac.settings, defaults: d), defaults: d)
         print("launcher storage: \(failed) failed")
         exit(failed == 0 ? 0 : 1)

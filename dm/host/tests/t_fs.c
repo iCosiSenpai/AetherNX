@@ -110,6 +110,16 @@ int main(void) {
         size_t cache = 0;
         CHECK(h_fs_QueryAocCache(&cache, 2) == RES_OK && cache == 176, "DLC image reports Horizon table size (176, got %zu)", cache);
         CHECK(h_fs_MountAoc("aoc", 2, NULL, 0) == RES_OK && read_fs("aoc:/data/a", got, sizeof got) && !strcmp(got, "hello"), "DLC mounts and reads directly from its image");
+        g_nmnt = 0;
+        {   // DLC added after the app was built: a second folder listed first (main.m: Documents/aoc:<App>/aoc), each index from the first folder holding it
+            char later[1100], both[2300]; snprintf(later, sizeof later, "%s/later", root); mkdir(later, 0755);
+            snprintf(fn, sizeof fn, "%s/3.img", later); CHECK(!link(ip, fn), "stage a DLC image in the later folder");
+            snprintf(both, sizeof both, "%s:%s", later, root); setenv("DM_AOC_DIR", both, 1);
+            CHECK(h_fs_MountAoc("aoc3", 3, NULL, 0) == RES_OK && read_fs("aoc3:/data/a", got, sizeof got) && !strcmp(got, "hello"), "a DLC only the first folder holds mounts");
+            CHECK(h_fs_MountAoc("aoc2", 2, NULL, 0) == RES_OK && read_fs("aoc2:/data/a", got, sizeof got) && !strcmp(got, "hello"), "a DLC only the second folder holds mounts too");
+            CHECK(h_fs_MountAoc("aoc9", 9, NULL, 0) == RES_TARGET_NOT_FOUND, "an index no folder holds is not found");
+            setenv("DM_AOC_DIR", "::", 1); CHECK(h_fs_MountAoc("aocx", 2, NULL, 0) == RES_TARGET_NOT_FOUND, "an empty list finds nothing");
+        }
         unsetenv("DM_AOC_DIR"); g_nmnt = 0;
         f = fopen(ip, "wb"); fwrite(img, 1, 39 + 50, f); fclose(f);   // cut off inside the index, as a copy stopped partway
         CHECK(!img_open(ip), "a cut-off image is refused");
@@ -217,6 +227,25 @@ int main(void) {
         CHECK(h_fs_CreateFile("save:/link/x", 0) != RES_OK, "so is creating a file through it");
         CHECK(same(keep, "keep"), "the folder it points at keeps its files");
         unlink(link); unlink(keep); rmdir(outside);
+    }
+    // 6f A save.new or save.work left beside the save as a link (put there from outside) loses only the link at the next commit or mount: its target keeps its files.
+    //    A writable mount's root that is a link is not emptied either
+    {   char outside[1200], keep[1300], neu[1200]; snprintf(outside, sizeof outside, "%s.outside", work); mkdir(outside, 0755);
+        snprintf(keep, sizeof keep, "%s/precious", outside); FILE *f = fopen(keep, "w"); fputs("keep", f); fclose(f);
+        h_fs_Commit("save");   // 6e's refused write refuses this one commit and reclones the work directory
+        snprintf(neu, sizeof neu, "%s.new", save); symlink(outside, neu);
+        CHECK(write_save("save:/a", "ok5") == RES_OK && h_fs_Commit("save") == RES_OK, "a commit with a linked save.new beside the save succeeds");
+        CHECK(same(keep, "keep"), "the folder save.new pointed at keeps its files");
+        snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok5"), "committed a = ok5");
+        g_nmnt = 0; snprintf(p, sizeof p, "rm -rf '%s'", work); system(p); symlink(outside, work);
+        CHECK(h_fs_MountSave("save", NULL) == RES_OK && write_save("save:/a", "ok6") == RES_OK && h_fs_Commit("save") == RES_OK, "a mount with a linked save.work replaces the link and works as usual");
+        CHECK(same(keep, "keep"), "the folder save.work pointed at keeps its files");
+        struct stat ls; CHECK(!lstat(work, &ls) && S_ISDIR(ls.st_mode), "save.work is a real folder again");
+        char tmp_link[1200]; snprintf(tmp_link, sizeof tmp_link, "%s.tmplink", work);
+        symlink(outside, tmp_link); CHECK(mount("lnk", tmp_link, 0) == RES_OK, "mount a writable folder whose root is a link");
+        CHECK(h_fs_CleanDirRec("lnk:/") != RES_OK, "cleaning that root is refused");
+        CHECK(same(keep, "keep"), "the folder it points at keeps its files");
+        unlink(tmp_link); unlink(keep); rmdir(outside);
     }
 
     printf("⑦ backslash paths on a save\n");

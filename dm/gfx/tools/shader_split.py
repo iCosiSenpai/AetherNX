@@ -2616,7 +2616,8 @@ def main():
         f.write(f'# kind: evidence  {NOTE} ({kinds} in RomFS + main) → control section + code area keys (dm/gfx/tools/shader_split.py)\n')
         f.write('# column 5 records where each key first appears; no PC shader pairing supplied\n')
         f.write('package\tindex\tstage\tdm_ctl_sha16\tsource\n')
-        for r in rows: f.write('\t'.join(map(str, r)) + '\n')
+        # A field is one cell: a tab or line break in it (a name from an archive member) would start a new column or a new row, so it becomes a space
+        for r in rows: f.write('\t'.join(' '.join(str(x).splitlines()).replace('\t', ' ') for x in r) + '\n')
     # Hand-written facts the machine code cannot give (the profile's shader_facts_manual.tsv, same row format) are merged over the generated ones, so the table stays reproducible
     manual = GAME.table('shader_facts_manual.tsv')
     if os.path.exists(manual):

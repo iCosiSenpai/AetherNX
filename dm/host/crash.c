@@ -11,6 +11,12 @@
 #include <mach/mach.h>
 #include <stdatomic.h>
 #include <time.h>
+#if TARGET_OS_OSX
+#include <fcntl.h>
+#include <spawn.h>
+#include <sys/wait.h>
+extern char **environ;
+#endif
 
 static _Atomic uint64_t g_watch_last_ns;
 static _Atomic uint64_t g_watch_count;
@@ -61,7 +67,14 @@ static void *watchdog_main(void *arg) {
             if (g_wait_dump) g_wait_dump();   // State of all blocking wait points on the graphics side (registered when nvn_mtl.m initializes)
 #if TARGET_OS_OSX
             { const char *d = getenv("DM_WATCH_SAMPLE");   // Mac diagnostics: when stuck, sample itself for 1 second and write the thread stacks to this path
-              if (d) { char c[1200]; snprintf(c, sizeof c, "/usr/bin/sample %d 1 -f '%s' >/dev/null 2>&1", (int)getpid(), d); if (system(c)) LOG("watchdog: sampling failed"); else LOG("watchdog: thread stacks written to %s", d); } }
+              // The path is one argument of sample, never shell text: a quote in it cannot start a command (it used to go through system())
+              if (d && *d) { char pid[16]; snprintf(pid, sizeof pid, "%d", (int)getpid());
+                  char *av[] = {"/usr/bin/sample", pid, "1", "-f", (char *)d, NULL}; posix_spawn_file_actions_t fa; pid_t sp; int st = 0, err;
+                  posix_spawn_file_actions_init(&fa);
+                  posix_spawn_file_actions_addopen(&fa, 1, "/dev/null", O_WRONLY, 0); posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0);
+                  err = posix_spawn(&sp, av[0], &fa, NULL, av, environ); posix_spawn_file_actions_destroy(&fa);
+                  if (!err) while (waitpid(sp, &st, 0) < 0 && errno == EINTR) {}
+                  if (err || !WIFEXITED(st) || WEXITSTATUS(st)) LOG("watchdog: sampling failed"); else LOG("watchdog: thread stacks written to %s", d); } }
 #endif
             _exit(128 + SIGALRM);
         }

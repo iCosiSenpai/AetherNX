@@ -47,7 +47,7 @@ Choose offline mode at the network prompt, then New Game and English voices. Adv
 
 ## Open
 
-- Rebuild the complete game libraries and host on the current upstream chain, then repeat gameplay validation.
+- Rebuild the complete game libraries and host on the current HorizonNative shader chain (pinned by `dm/gfx/tools/dmsh_chain.lock`), then repeat gameplay validation.
 - Test battles, later story scenes and save/load over a longer playthrough.
 - `SetRenderEnableConditional` still reports that the host draws unconditionally. No visual failure was identified in the tested opening; conditional rendering remains unvalidated.
 - Device validation remains for the user after sideloading.

@@ -18,10 +18,11 @@ BOTW, WONDER = '01007EF00011E000', '010015100B514000'
 PERFORMANCE_NVN = ['DM_PRESENT_SNAP', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
 
 
-def build(gid, api, platform=None):
+def build(gid, api, platform=None, fixups=()):   # fixups: the keys main's rewriter table declares (FPS_STATE_OFF: the frame step of Breath of the Wild 1.9.0)
     env = {'GFXAPI': api, **({'SETTINGS_PLATFORM': platform} if platform else {})}
     with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=['en-US']), patch.dict(os.environ, env):
         if not platform: os.environ.pop('SETTINGS_PLATFORM', None)
+        if fixups: (Path(tmp) / 'main.fixups.tsv').write_text(''.join(f'# {k}\t1\n' for k in fixups))
         return {s['env']: s for s in settings.build(gid, tmp, Path(tmp) / 'control.nacp')['settings']}
 
 
@@ -43,18 +44,32 @@ class LauncherSettingsTests(unittest.TestCase):
                     self.assertEqual((s['kind'], s['section'], s['default']), ('toggle', 'Performance', '1'))   # Breath of the Wild's profile: present_snap on
                     self.assertIn('latency', s['note'])
 
+    def test_picture_rows_and_texture_filtering(self):
+        for api, gid in [('nvn', BOTW), ('vulkan', '0100535012974000'), ('gl', '010014E00DB56000')]:
+            with self.subTest(api=api):
+                rows = build(gid, api)
+                self.assertEqual(rows['DM_PRESENT_SHARPEN']['kind'], 'range'); self.assertEqual(rows['DM_PRESENT_SHARPEN']['default'], '0')
+                self.assertEqual([o[0] for o in rows['DM_PRESENT_FILTER']['options']], ['linear', 'nearest'])
+                self.assertEqual([o[0] for o in rows['DM_PRESENT_FIT']['options']], ['aspect', 'stretch'])
+                self.assertEqual('DM_ANISO' in rows, api in ('nvn', 'vulkan'))   # the GL layer's samplers do not take it (aniso.h)
+                if 'DM_ANISO' in rows: self.assertEqual([o[0] for o in rows['DM_ANISO']['options']], ['0', '2', '4', '8', '16'])
+
+    def test_prebuild_only_with_metal4(self):   # the prebuild runs only on the Metal 4 path (nvn_mtl.m prepare_prebuild)
+        self.assertEqual(build(WONDER, 'nvn')['DM_PSO_PREBUILD'].get('needs'), 'DM_PSO_MTL4=1')
+
     def test_sections_keep_the_profile_defaults(self):
-        botw, wonder = build(BOTW, 'nvn'), build(WONDER, 'nvn')
+        botw, wonder = build(BOTW, 'nvn', fixups=('FPS_STATE_OFF',)), build(WONDER, 'nvn')
         self.assertEqual([e for e, s in botw.items() if s['section'] == 'Performance'], PERFORMANCE_NVN)
         self.assertEqual(botw['DM_PSO_MTL4']['default'], '1')   # pso_mtl4 on
         self.assertEqual((wonder['DM_PRESENT_SNAP']['default'], wonder['DM_PSO_MTL4']['default']), ('0', '0'))
         self.assertEqual((botw['DM_PSO_PREBUILD']['default'], botw['DM_NVN_ENC_THREAD']['default'], botw['DM_METAL_HUD']['default']), ('1', '1', '0'))   # the host's iOS defaults
         self.assertEqual(list(dict.fromkeys(s['section'] for s in botw.values())), ['Game', 'Controls', 'Performance'])
         self.assertNotIn('DM_FPS_HOLD', wonder)   # no frame step, as the Frame rate row
+        self.assertNotIn('DM_FPS_HOLD', build(BOTW, 'nvn'))   # a build without the frame step state (FPS_STATE_OFF): holding frames does nothing there
         self.assertIn('first start', botw['DM_PSO_PREBUILD']['note'])   # it runs once in the prepare step, before the first frame
 
     def test_hold_frames_takes_on_and_off(self):   # the host reads DM_FPS_HOLD as on / off (hle_nvn.c), not 1 / 0
-        s = build(BOTW, 'nvn')['DM_FPS_HOLD']
+        s = build(BOTW, 'nvn', fixups=('FPS_STATE_OFF',))['DM_FPS_HOLD']
         self.assertEqual((s['on'], s['off'], s['default']), ('on', 'off', 'on'))
         s = build(BOTW, 'nvn')['DM_SHOW_FPS']
         self.assertEqual((s['on'], s['off']), ('1', '0'))

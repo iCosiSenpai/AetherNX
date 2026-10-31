@@ -49,6 +49,7 @@ static inline uint64_t tex_slot_h(const uint64_t *tex, const uint64_t *img, unsi
 static uint64_t c2_handle(int stage, unsigned b);   // the handle c2 holds at byte b (defined with the draw state, TEXA / SAMPA)
 #include "nvn_hmap.h"
 #include "../../host/dm.h"
+#include "../../host/aniso.h"   // DM_ANISO: samp_by_id
 #import <CommonCrypto/CommonDigest.h>
 #include <stdarg.h>
 #include <mach-o/dyld.h>
@@ -96,6 +97,7 @@ static int g_vbuf_cache = 1;   // DM_NVN_VBUF_CACHE=0 restores the uncached path
 static uint64_t g_vt_addr[31]; static uint32_t g_vt_valid;
 static uint64_t g_vbuf_resolve, g_vbuf_reuse, g_vbuf_set, g_vbuf_skip, g_vbuf_copies, g_vbuf_copy_bytes;   // copies: vertex streams at addresses not 4-byte aligned (vbuf_unaligned)
 static id<MTL4ArgumentTable> g_present_args;
+#define PRESENT_CONSTS 12   // floats in the present shader's constants (Crop: rect, edge, opt)
 static id<MTLBuffer> g_present_uv[3];
 static uint64_t g_present_alloc_fence[3];
 // Under g_pq_mu: per present allocator, the newest ticket its commit feedback reported done on the GPU. present_now resets an allocator only once this reaches the ticket that
@@ -112,6 +114,7 @@ static uint64_t g_link_dropped;
 static uint64_t g_link_empty;   // Under g_pq_mu: ticks that found no new frame queued (counted here, not as ticks minus presents: presents before the link starts and while it is rescued are not on ticks)
 static double g_link_hold_until; static uint64_t g_link_held;   // Changed only on the display-link callback thread: the time the previous frame must stay on screen until by its present interval (0 = no hold), and the ticks that took no new frame because of it
 static int g_pq_inflight;   // Under g_pq_mu: number of presents committed to the GPU whose completion callback has not arrived yet
+static int g_pq_encoding;   // Under g_pq_mu: frames the display-link callback has taken and is still encoding (taken before g_pq_inflight counts them at their commit); the suspend waits for both
 int g_dm_present_link;   // Present pacing mode (runtime value of DM_PRESENT_LINK, modified directly during same-process alternating measurement): 0 = acquire the drawable itself; 1 = display link at 60 Hz; 2 = display link at 120 Hz, the game presents a frame every other display-link tick
 static int g_present_latency;   // DM_PRESENT_LATENCY: the display link's frame latency in a window and in fullscreen alike (0 = not set: link_latency picks it)
 static uint64_t g_pq_done;
@@ -453,7 +456,7 @@ void mtl_init(void) {
     g_present_args = [g_dev newArgumentTableWithDescriptor:pad error:&ate];
     if (!g_present_args) MDIE("failed to create the present argument table: %s", ate.localizedDescription.UTF8String);
     for (int i = 0; i < 3; i++) {
-        g_present_uv[i] = [g_dev newBufferWithLength:sizeof(float) * 8 options:MTLResourceStorageModeShared];
+        g_present_uv[i] = [g_dev newBufferWithLength:sizeof(float) * PRESENT_CONSTS options:MTLResourceStorageModeShared];   // the shader's Crop: rect, edge, opt
         if (!g_present_uv[i]) MDIE("failed to create present UV buffer[%d]", i);
         res_add(g_present_uv[i]);
     }
@@ -3155,6 +3158,7 @@ static void xv_forward(void);
 static int tbdr_on(void);
 static int xv_on(void) { static int off = -1; if (off < 0) { const char *e = getenv("DM_NVN_XV"); off = e && !strcmp(e, "0"); } return !off && tbdr_on(); }
 void mtl_xv_window_tex(uint64_t serial) { if (!xv_present(serial) && g_xv_npresent < 128) g_xv_present[g_xv_npresent++] = serial; }   // Window (swapchain) texture: never enters the ledger
+static void xv_window_untex(uint64_t serial) { for (int i = 0; i < g_xv_npresent; i++) if (g_xv_present[i] == serial) { g_xv_present[i] = g_xv_present[--g_xv_npresent]; break; } }   // mtl_ext_tex_release
 void xv_test_counts(int *dc, int *viol) { if (dc) *dc = (int)g_xv_dc; if (viol) *viol = (int)g_xv_viol; }
 static void sd_finish(void);
 // Load elision (fully covering first draw): if the draw that opens the pass can be proven to cover a color attachment in full (first_draw_covers), that attachment's load becomes DontCare -
@@ -4515,6 +4519,11 @@ static id<MTLSamplerState> samp_by_id(int sid) {   // Caller holds g_rmu
     d.lodBias = p.lod_bias < -16 ? -16 : p.lod_bias > 15.99f ? 15.99f : p.lod_bias;   // SetLodBias: Maxwell's sampler bias, Metal 26's range [-16, 15.99]
     d.maxAnisotropy = p.aniso < 1 ? 1 : p.aniso > 16 ? 16 : (NSUInteger)p.aniso;
     if (p.cmp_mode) d.compareFunction = (MTLCompareFunction)(p.cmp_func - 1);
+    {   // DM_ANISO (aniso.h): at least that anisotropy on mipmapped linear samplers
+        NSUInteger a = dm_aniso_apply((unsigned)d.maxAnisotropy, d.minFilter == MTLSamplerMinMagFilterLinear, d.mipFilter != MTLSamplerMipFilterNotMipmapped, p.cmp_mode, p.reduction == 1 || p.reduction == 2);
+        static _Atomic int told; if (dm_aniso_force() && !atomic_exchange(&told, 1)) MLOG("anisotropic filtering: at least %dx on the game's mipmapped linear samplers (DM_ANISO)", dm_aniso_force());
+        d.maxAnisotropy = a;
+    }
     // Reduction (NVN 1 min / 2 max): the minimum or maximum of the texels a filtered sample covers, per channel (Metal 26). Pokémon Legends: Z-A builds its depth pyramid with a min sampler
     // (151607c7a92386cc reads the level above at an explicit LOD) and tests occlusion boxes against it; averaged, the pyramid is nearer than the scene at depth edges. Metal ignores the reduction
     // with a nearest or no mip filter, so such samplers filter mips linearly: at the integer LODs reductions are used with that gives the same level, and a sampler without mips keeps to the base
@@ -5473,6 +5482,10 @@ static id<MTL4Compiler> g_comp4;
 // g_arch4: the files that may hold bases with a vertex layout, g_arch4p: the files that hold none (p<seq>.mtl4a: the prebuild's, and any flush whose bases all read their vertices
 // themselves). A base with a layout is looked up in g_arch4 alone: each file a lookup misses in costs about 0.06 ms, and a cold start's misses were for such bases, in the 13 prebuilt files
 static NSArray<id<MTL4Archive>> *g_arch4, *g_arch4p; static NSString *g_arch_dir; static int g_arch_seq;
+// The lists are replaced, never changed in place: a file the prebuild writes during the run joins g_arch4p at once (arch_write, arch_publish), so its bases serve the hybrid
+// draws of this very run instead of the next one. Readers take the current list under g_arch_lk (arch_lists) and enumerate their own reference
+static os_unfair_lock g_arch_lk = OS_UNFAIR_LOCK_INIT;
+static void arch_lists(NSArray<id<MTL4Archive>> **a, NSArray<id<MTL4Archive>> **p) { os_unfair_lock_lock(&g_arch_lk); if (a) *a = g_arch4; if (p) *p = g_arch4p; os_unfair_lock_unlock(&g_arch_lk); }
 // Compaction: every start writes a file or more (each flush captures only what is new), Breath of the Wild 5-7 per start, and each file a base is not in costs a lookup about 0.06 ms.
 // With more than PSO_ARCH_COMPACT files of bases with a vertex layout, the bases the prewarm takes from them are captured again from the original shader functions, so the flush
 // after the prewarm writes them into one file; the old files are then removed (open archives stay usable for the rest of the run). Bases the
@@ -5681,7 +5694,7 @@ static void pso4_init(void) {
             MLOG("pipeline archive %s: %lu files (%lu of bases without a vertex layout), %.1f MB, opened in %.1f ms", g_arch_dir.UTF8String, (unsigned long)(arch.count + archp.count - (g_arch_bundle != nil)),
                  (unsigned long)archp.count - (g_arch_bundle != nil), bytes / 1048576.0, (bp_now() - t0) / 1e6);
         }
-        g_arch4 = arch; g_arch4p = archp;
+        os_unfair_lock_lock(&g_arch_lk); g_arch4 = arch; g_arch4p = archp; os_unfair_lock_unlock(&g_arch_lk);
         NSError *ce = nil; g_comp4 = [g_dev newCompilerWithDescriptor:[MTL4CompilerDescriptor new] error:&ce];
         if (!g_comp4) MLOG("[RED] no Metal 4 compiler (%s): render pipelines are built through the MTLDevice", ce.localizedDescription.UTF8String);
         else if (g_arch_dir) {
@@ -5710,6 +5723,11 @@ static void arch_write(ArchEpoch *ep) {
         g_arch_flush_ok = 1;
         MLOG("pipeline archive: %d new pipeline bases written to %s (%.1f MB, %.0f ms)", n, path.lastPathComponent.UTF8String,
              [[NSFileManager.defaultManager attributesOfItemAtPath:path error:nil] fileSize] / 1048576.0, (bp_now() - t0) / 1e6);
+        if (!vd) {   // bases without a vertex layout (the prebuild's pulling bases): looked up from now on, this run included
+            NSError *oe = nil; id<MTL4Archive> a = [g_dev newArchiveWithURL:[NSURL fileURLWithPath:path] error:&oe];
+            if (a) { os_unfair_lock_lock(&g_arch_lk); g_arch4p = [(g_arch4p ?: @[]) arrayByAddingObject:a]; os_unfair_lock_unlock(&g_arch_lk); }
+            else MLOG("[RED] pipeline archive: %s was written but does not open (%s); its bases serve from the next start", path.lastPathComponent.UTF8String, oe ? oe.localizedDescription.UTF8String : "no error");
+        }
     }
     if (ep->compacting) arch_compact_finish();
 }
@@ -5810,9 +5828,10 @@ static id<MTLRenderPipelineState> pso_build_ex(MTLRenderPipelineDescriptor *d, N
     else {
         uint64_t t0 = bp_now();
         int vd = 0; for (int i = 0; i < 31 && !vd; i++) vd = bk.va[i][0] != 0;   // a vertex layout (MTLVertexFormatInvalid is 0)
-        if (!vd) for (id<MTL4Archive> a in g_arch4p) if ((base = [a newRenderPipelineStateWithDescriptor:b error:nil])) break;
+        NSArray<id<MTL4Archive>> *al, *alp; arch_lists(&al, &alp);
+        if (!vd) for (id<MTL4Archive> a in alp) if ((base = [a newRenderPipelineStateWithDescriptor:b error:nil])) break;
         int from_run = 0;
-        if (!base) for (id<MTL4Archive> a in g_arch4) if ((base = [a newRenderPipelineStateWithDescriptor:b error:nil])) { from_run = 1; break; }
+        if (!base) for (id<MTL4Archive> a in al) if ((base = [a newRenderPipelineStateWithDescriptor:b error:nil])) { from_run = 1; break; }
         uint64_t t1 = bp_now();
         if (base) { g_pb_archived++; g_pt_hit_n++; g_pt_hit_ns += t1 - t0; }
         if (base && from_run && g_compact_enabled && atomic_load(&g_warm_running)) {
@@ -5822,7 +5841,7 @@ static id<MTLRenderPipelineState> pso_build_ex(MTLRenderPipelineDescriptor *d, N
             if (cb) { base = cb; g_compacted++; }
         }
         if (!base) {
-            if (g_arch4.count + g_arch4p.count) { g_pt_miss_n++; g_pt_miss_ns += t1 - t0; }
+            if (al.count + alp.count) { g_pt_miss_n++; g_pt_miss_ns += t1 - t0; }
             if (compile) {
                 NSError *be = nil; base = arch_capture(b, &be, vd); job->error = be; job->compiled = 1;
                 g_pt_comp_ns += bp_now() - t1;
@@ -6070,8 +6089,9 @@ static void pre_pair(NSString *vk, NSString *fk, int zero) {
         if (g_pre_known.count && g_pre_known[[NSString stringWithFormat:@"%@\t%@", vk, fk]]) { g_pre_skipped++; g_pre_known_n++; return; }
         MTL4RenderPipelineDescriptor *m = pre_desc(vk, fk, zero);
         if (!m) { g_pre_skipped++; return; }
-        for (id<MTL4Archive> a in g_arch4p) if ([a newRenderPipelineStateWithDescriptor:m error:nil]) { g_pre_archived++; return; }
-        for (id<MTL4Archive> a in g_arch4) if ([a newRenderPipelineStateWithDescriptor:m error:nil]) { g_pre_archived++; return; }
+        NSArray<id<MTL4Archive>> *al, *alp; arch_lists(&al, &alp);
+        for (id<MTL4Archive> a in alp) if ([a newRenderPipelineStateWithDescriptor:m error:nil]) { g_pre_archived++; return; }
+        for (id<MTL4Archive> a in al) if ([a newRenderPipelineStateWithDescriptor:m error:nil]) { g_pre_archived++; return; }
         NSError *e = nil; id ps = arch_capture(m, &e, 0);
         if (ps) g_pre_built++;
         else {
@@ -6144,6 +6164,10 @@ static int pso_prebuild(int threads, int wait, dispatch_qos_class_t qos) {
         txt = rest; want = pre_stamp(rest, zero); pairs = pre_parse(rest); pp = rp; txt2 = nil;
     }
     if (!g_arch_cap) { g_pre_running = 0; return -1; }
+    // The device's stamp also counts the pulling libraries the app carries: a prebuild made while the package left them out (pre_desc found no <key>_bp, every such pair left
+    // to the draws) is made again once they are there, instead of passing for done (Fire Emblem: Three Houses, launcher Metal 4 pipelines on a build with the path off)
+    int nbp = 0; for (NSString *f in [NSFileManager.defaultManager contentsOfDirectoryAtPath:g_msl_dir error:nil]) nbp += [f hasSuffix:@"_bp.metallib"];
+    want = [want stringByAppendingFormat:@"pull\t%d\n", nbp];
     NSString *stamp = [g_arch_dir stringByAppendingPathComponent:@"prebuilt.tsv"], *failp = [g_arch_dir stringByAppendingPathComponent:@"prebuild_failed.tsv"];
     int other = 0; g_pre_known = pre_fail_load(failp, want, &other); g_pre_fails = [NSMutableArray array]; g_pre_known_n = 0;
     // done, unless its failures were found on another system build: then they are tried again (the rest are taken from the archive)
@@ -10900,14 +10924,53 @@ int mtl_display_hz(void) {
 static _Atomic uint64_t g_present_stall_ns;   // For unit tests: an extra pause before each present on the present thread (simulating a drawable that stays unavailable)
 static CAMetalLayer *g_present_layer_resident;
 void mtl_present_test_stall(uint64_t ns) { g_present_stall_ns = ns; }
+// ---------- Picture options of the present (DM_PRESENT_SHARPEN, DM_PRESENT_FILTER, DM_PRESENT_FIT; DM_PRESENT_UPSCALE below) ----------
+// Read from the environment on first use (the launcher sets it before the game starts) and changed live by a front end's in-game menu (dm_present_set_*); the present reads
+// them for every frame, so a change shows on the next present. Sharpening is a contrast-adaptive pass in the present's own fragment shader: the centre and its four neighbours
+// one texel away, weighted less where the neighbourhood already has contrast, so edges do not ring and flat areas do not turn noisy. It works on the picture as the present
+// samples it: the MetalFX output 1:1, or the game's picture before the bilinear scale. Sharp pixels samples the texel under each screen pixel and leaves MetalFX out.
+// Stretch draws the picture over the whole canvas instead of keeping the game's aspect ratio (iPhone: about 19.5:9 against the game's 16:9)
+static _Atomic int g_po_init, g_po_sharpen, g_po_nearest, g_po_stretch;   // sharpening in thousandths (0..1000)
+static void present_opts_init(void) {
+    int expect = 0; if (!atomic_compare_exchange_strong(&g_po_init, &expect, 1)) return;
+    const char *e = getenv("DM_PRESENT_SHARPEN");
+    if (e && *e) { char *end; double v = strtod(e, &end); if (*end || !(v >= 0 && v <= 1)) MLOG("[RED] DM_PRESENT_SHARPEN=%s: 0 to 1; keeping 0", e); else atomic_store(&g_po_sharpen, (int)lround(v * 1000)); }
+    e = getenv("DM_PRESENT_FILTER");
+    if (e && *e) { if (!strcmp(e, "nearest")) atomic_store(&g_po_nearest, 1); else if (strcmp(e, "linear")) MLOG("[RED] DM_PRESENT_FILTER=%s: linear or nearest; keeping linear", e); }
+    e = getenv("DM_PRESENT_FIT");
+    if (e && *e) { if (!strcmp(e, "stretch")) atomic_store(&g_po_stretch, 1); else if (strcmp(e, "aspect")) MLOG("[RED] DM_PRESENT_FIT=%s: aspect or stretch; keeping aspect", e); }
+    MLOG("present picture: sharpening %.2f, %s pixels, %s", atomic_load(&g_po_sharpen) / 1000.0, atomic_load(&g_po_nearest) ? "sharp (nearest)" : "smooth (linear)",
+         atomic_load(&g_po_stretch) ? "stretched to the canvas (DM_PRESENT_FIT=stretch)" : "the game's aspect ratio");
+}
+void dm_present_set_sharpen(float v) { present_opts_init(); int n = isfinite(v) ? (int)lroundf(fminf(fmaxf(v, 0), 1) * 1000) : 0; if (atomic_exchange(&g_po_sharpen, n) != n) MLOG("present picture: sharpening %.2f (front end)", n / 1000.0); }
+float dm_present_sharpen(void) { present_opts_init(); return atomic_load(&g_po_sharpen) / 1000.f; }
+void dm_present_set_nearest(int on) { present_opts_init(); if (atomic_exchange(&g_po_nearest, !!on) != !!on) MLOG("present picture: %s pixels (front end)", on ? "sharp" : "smooth"); }
+int dm_present_nearest(void) { present_opts_init(); return atomic_load(&g_po_nearest); }
+void dm_present_set_stretch(int on) { present_opts_init(); if (atomic_exchange(&g_po_stretch, !!on) != !!on) MLOG("present picture: %s (front end)", on ? "stretched to the canvas" : "the game's aspect ratio"); }
+int dm_present_stretch(void) { present_opts_init(); return atomic_load(&g_po_stretch); }
+// The shader's options (Crop.opt): sharpening, sharp pixels, the sampled texture's texel size
+static void present_opts_fill(float *o, NSUInteger tw, NSUInteger th) {
+    present_opts_init(); o[0] = atomic_load(&g_po_sharpen) / 1000.f; o[1] = atomic_load(&g_po_nearest) ? 1.f : 0.f; o[2] = tw ? 1.f / tw : 0; o[3] = th ? 1.f / th : 0;
+}
 static void present_pipeline(MTLPixelFormat format) {
     if (!g_blit_pso || g_blit_fmt != format) {
         static const char *src_msl =
             "#include <metal_stdlib>\nusing namespace metal;\n"
             "struct V { float4 p [[position]]; float2 uv; };\n"
             "vertex V vs(uint id [[vertex_id]]) { float2 uv = float2((id << 1) & 2, id & 2); V o; o.p = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1); o.uv = uv; return o; }\n"
-            "struct Crop { float4 rect; float4 edge; };\n"
-            "fragment float4 fs(V in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]], constant Crop& c [[buffer(0)]]) { return t.sample(s, clamp(in.uv * c.rect.zw + c.rect.xy, c.edge.xy, c.edge.zw)); }\n";
+            "struct Crop { float4 rect; float4 edge; float4 opt; };\n"   // opt: sharpening (0..1), sharp pixels, texel size
+            "static float3 tap(texture2d<float> t, sampler s, constant Crop& c, float2 uv) { return t.sample(s, clamp(uv, c.edge.xy, c.edge.zw)).rgb; }\n"
+            "fragment float4 fs(V in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]], constant Crop& c [[buffer(0)]]) {\n"
+            "  float2 uv = in.uv * c.rect.zw + c.rect.xy;\n"
+            "  if (c.opt.y > 0.5) uv = (floor(uv / c.opt.zw) + 0.5) * c.opt.zw;\n"   // sharp pixels: the centre of the texel under this pixel
+            "  float4 m = t.sample(s, clamp(uv, c.edge.xy, c.edge.zw));\n"
+            "  if (c.opt.x <= 0) return m;\n"
+            "  float2 d = c.opt.zw;\n"
+            "  float3 n = tap(t, s, c, uv - float2(0, d.y)), w = tap(t, s, c, uv - float2(d.x, 0)), e = tap(t, s, c, uv + float2(d.x, 0)), so = tap(t, s, c, uv + float2(0, d.y));\n"
+            "  float3 lo = min(m.rgb, min(min(n, w), min(e, so))), hi = max(m.rgb, max(max(n, w), max(e, so)));\n"
+            "  float3 k = sqrt(saturate(min(lo, 1 - hi) / max(hi, 1e-4))) * (-1.0 / mix(8.0, 5.0, c.opt.x));\n"   // little where the neighbourhood already has contrast
+            "  return float4(saturate((m.rgb + (n + w + e + so) * k) / (1 + 4 * k)), m.a);\n"
+            "}\n";
         NSError *e = nil;
         id<MTLLibrary> lib = [g_dev newLibraryWithSource:@(src_msl) options:nil error:&e];
         if (!lib) MDIE("present shader compile failed %s", e.localizedDescription.UTF8String);
@@ -10941,6 +11004,7 @@ static id<MTLTexture> present_raw_src(id<MTLTexture> src) {
 // differs from the game's, e.g. iPhone about 19.5:9 against the game's 16:9); when the ratios differ by under 1 % (the remainder from a game width that is a multiple of 8 in the
 // full-screen setup, e.g. 1952x900 against 2868x1320 differs by 0.17 %) the whole canvas, leaving no border of a few pixels
 static MTLViewport present_viewport(double cw, double ch, double dw, double dh) {
+    if (dm_present_stretch()) return (MTLViewport){0, 0, dw, dh, 0, 1};   // DM_PRESENT_FIT=stretch: the whole canvas
     double s = fmin(dw / cw, dh / ch);
     MTLViewport vp = {floor((dw - cw * s) / 2), floor((dh - ch * s) / 2), round(cw * s), round(ch * s), 0, 1};
     if (fabs((dw / dh) / (cw / ch) - 1) < 0.01) vp = (MTLViewport){0, 0, dw, dh, 0, 1};
@@ -10977,9 +11041,10 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
     id<MTLRenderCommandEncoder> en = [cb renderCommandEncoderWithDescriptor:rp];
     [en setViewport:vp];
     [en setRenderPipelineState:g_blit_pso]; [en setFragmentTexture:present_raw_src(src) atIndex:0]; [en setFragmentSamplerState:g_blit_samp atIndex:0];
-    float uv[8] = {(float)cx / src.width, (float)cy / src.height, (float)cw / src.width, (float)ch / src.height,
+    float uv[PRESENT_CONSTS] = {(float)cx / src.width, (float)cy / src.height, (float)cw / src.width, (float)ch / src.height,
                    (cx + 0.5f) / src.width, (cy + 0.5f) / src.height, (cx + cw - 0.5f) / src.width, (cy + ch - 0.5f) / src.height};
     if (atomic_load_explicit(&g_origin_ll, memory_order_relaxed)) { uv[1] += uv[3]; uv[3] = -uv[3]; }   // lower-left origin: the window image is stored bottom-up
+    present_opts_fill(uv + 8, src.width, src.height);
     [en setFragmentBytes:uv length:sizeof uv atIndex:0];
     [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [en endEncoding];
@@ -10993,17 +11058,30 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
 typedef struct { id<MTL4FXSpatialScaler> sc; id<MTLTexture> in, out; uint64_t made_at; int made; NSUInteger refused[6]; } fx_state;
 static fx_state g_fx_present;   // only the present thread encodes or replaces the scaler
 static id<MTL4Compiler> g_fx_comp;
-static int g_fx_mode = -1;   // 1 = metalfx, 0 = off
-static int fx_mode(void) {
-    if (g_fx_mode >= 0) return g_fx_mode;
-    const char *e = getenv("DM_PRESENT_UPSCALE"); int v = 0;
-    if (e && (!strcmp(e, "metalfx") || !strcmp(e, "1"))) v = 1;
-    else if (e && (!strcmp(e, "off") || !strcmp(e, "0"))) v = 0;
-    else if (e && *e) MLOG("[RED] DM_PRESENT_UPSCALE=%s: metalfx or off; keeping %s", e, v ? "metalfx" : "off");
-    if (v && !(g_q4 && [MTLFXSpatialScalerDescriptor supportsMetal4FX:g_dev])) { MLOG("present upscaling: this GPU has no Metal 4 MetalFX spatial scaler; the present scales bilinearly"); v = 0; }
-    MLOG("present upscaling (DM_PRESENT_UPSCALE): %s", v ? "metalfx, MetalFX's spatial scaler where the picture is shown larger than the game renders it" : "off, bilinear");
-    return g_fx_mode = v;
+static _Atomic int g_fx_mode = -1;   // 1 = metalfx, 0 = off; decided on first use after the device exists, then changed only by dm_present_set_upscale
+static int fx_env(void) {   // DM_PRESENT_UPSCALE as asked
+    const char *e = getenv("DM_PRESENT_UPSCALE");
+    return e && (!strcmp(e, "metalfx") || !strcmp(e, "1"));
 }
+static int fx_supported(void) { return g_dev && g_q4 && [MTLFXSpatialScalerDescriptor supportsMetal4FX:g_dev]; }
+static int fx_mode(void) {
+    int m = atomic_load(&g_fx_mode); if (m >= 0) return m;
+    int v = fx_env();
+    if (!g_dev) return v;   // asked before the device exists (a front end's menu): the environment's wish, decided for good at the first present
+    const char *e = getenv("DM_PRESENT_UPSCALE");
+    if (e && *e && strcmp(e, "metalfx") && strcmp(e, "1") && strcmp(e, "off") && strcmp(e, "0")) MLOG("[RED] DM_PRESENT_UPSCALE=%s: metalfx or off; keeping off", e);
+    if (v && !fx_supported()) { MLOG("present upscaling: this GPU has no Metal 4 MetalFX spatial scaler; the present scales bilinearly"); v = 0; }
+    MLOG("present upscaling (DM_PRESENT_UPSCALE): %s", v ? "metalfx, MetalFX's spatial scaler where the picture is shown larger than the game renders it" : "off, bilinear");
+    atomic_store(&g_fx_mode, v); return v;
+}
+// The in-game menu's switch: MetalFX from the next present (its scaler is made then, as for a new size), or bilinear. A GPU without the Metal 4 spatial scaler stays bilinear
+void dm_present_set_upscale(int on) {
+    if (!g_dev) { setenv("DM_PRESENT_UPSCALE", on ? "metalfx" : "off", 1); return; }   // before the device: the first present decides from it
+    int v = on && fx_supported(); fx_mode();
+    if (atomic_exchange(&g_fx_mode, v) != v) MLOG("present upscaling: %s (front end)%s", v ? "metalfx" : "off, bilinear", on && !v ? "; this GPU has no Metal 4 MetalFX spatial scaler" : "");
+}
+int dm_present_upscale(void) { return fx_mode(); }
+int dm_present_upscale_supported(void) { return g_dev ? fx_supported() : 1; }   // unknown before the device: offered
 // MetalFX scales the content (cw x ch) to its rectangle on the canvas (vp) when the rectangle is at least as large in both directions and larger in one
 static int fx_wanted(MTLViewport vp, NSUInteger cw, NSUInteger ch) {
     NSUInteger w = (NSUInteger)vp.width, h = (NSUInteger)vp.height;
@@ -11013,7 +11091,7 @@ static int fx_wanted(MTLViewport vp, NSUInteger cw, NSUInteger ch) {
 // remake_wait: fx is the present thread's, whose textures presents still on the GPU may read: a new scaler waits for them and for FX_REMAKE_PRESENTS presents since the last
 static id<MTLTexture> fx_encode(fx_state *fx, id<MTL4CommandBuffer> cb, id<MTLTexture> raw, const NSUInteger r[4], MTLViewport vp, MTLPixelFormat out_pf, int remake_wait) {
     NSUInteger cw = r[2], ch = r[3], ow = (NSUInteger)vp.width, oh = (NSUInteger)vp.height;
-    if (fx_mode() != 1 || !fx_wanted(vp, cw, ch)) return nil;
+    if (fx_mode() != 1 || dm_present_nearest() || !fx_wanted(vp, cw, ch)) return nil;   // sharp pixels: no MetalFX smoothing
     if (!fx->sc || fx->in.width != cw || fx->in.height != ch || fx->in.pixelFormat != raw.pixelFormat || fx->out.width != ow || fx->out.height != oh || fx->out.pixelFormat != out_pf) {
         NSUInteger key[6] = {cw, ch, raw.pixelFormat, ow, oh, out_pf};
         if (!memcmp(key, fx->refused, sizeof key)) return nil;
@@ -11077,6 +11155,7 @@ static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MT
     uv[0] = (float)cx / tw; uv[1] = (float)cy / th; uv[2] = (float)cw / tw; uv[3] = (float)ch / th;
     uv[4] = (cx + 0.5f) / tw; uv[5] = (cy + 0.5f) / th; uv[6] = (cx + cw - 0.5f) / tw; uv[7] = (cy + ch - 0.5f) / th;
     if (atomic_load_explicit(&g_origin_ll, memory_order_relaxed)) { uv[1] += uv[3]; uv[3] = -uv[3]; }   // lower-left origin: the window image is stored bottom-up
+    present_opts_fill(uv + 8, tw, th);
     [g_present_args setAddress:uvb.gpuAddress atIndex:0];
     [en setViewport:vp]; [en setRenderPipelineState:g_blit_pso];
     [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
@@ -11087,7 +11166,7 @@ static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MT
 // returns whether it was submitted. Completion reports the encoding kind, or PRESENT_FAILED on a GPU error. Resources remain resident and retained until GPU completion.
 static int present_offscreen_m4(id<MTLTexture> src, const int crop[4], id<MTLTexture> out, void (^done)(int)) {
     id<MTL4CommandAllocator> al = [g_dev newCommandAllocator]; id<MTL4CommandBuffer> cb = [g_dev newCommandBuffer];
-    id<MTLBuffer> uvb = [g_dev newBufferWithLength:sizeof(float) * 8 options:MTLResourceStorageModeShared];
+    id<MTLBuffer> uvb = [g_dev newBufferWithLength:sizeof(float) * PRESENT_CONSTS options:MTLResourceStorageModeShared];
     if (!al || !cb || !uvb) { MLOG("[RED] offscreen present: no command allocator or buffer"); return 0; }
     id<MTLTexture> raw = present_raw_src(src);
     fx_state fx = {0};
@@ -11316,7 +11395,7 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
     static int fifo = -1; if (fifo < 0) { const char *e = getenv("DM_PRESENT_FIFO"); fifo = !(e && !strcmp(e, "0")); MLOG("display link: %s", fifo ? "frames in order, at most one behind" : "the newest frame each tick (DM_PRESENT_FIFO=0)"); }
     if (fifo && ticket > first) ticket = ticket - first >= 2 ? g_pq_in - 1 : first;
     pq_item it = g_pq[(ticket - 1) % PQ]; g_link_it_tin = it.t_in;
-    g_pq_read = ticket;
+    g_pq_read = ticket; g_pq_encoding++;
     if (ticket > first) { g_link_dropped += ticket - first; for (uint64_t k = first; k < ticket; k++) g_pres[k % PRING] = (pres_ent){k, -1}; }   // Old frames merged and dropped are recorded as "not presented", so the present statistics honestly count them as dropped frames
     if (ticket > 1 && g_pq_done < ticket - 1) g_pq_done = ticket - 1;
     g_link_ring[ticket % PRING] = (link_ent){ticket, update.targetPresentationTimestamp, (update.targetPresentationTimestamp - cb) * 1e3, gap_max * 1e3, nticks}; nticks = 0; gap_max = 0;
@@ -11326,12 +11405,11 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
     ext_wait(it.ev_val); snap_commit_wait(it.snap_v);
     @autoreleasepool { submitted = present_now(&it.t, it.period, it.frame, ticket, it.crop, update.drawable, update.targetPresentationTimestamp); }
     g_link_hold_until = submitted && it.period > 0.025 ? update.targetPresentationTimestamp + it.period : 0;
-    if (!submitted) {
-        pthread_mutex_lock(&g_pq_mu);
-        if (ticket > g_pq_done) g_pq_done = ticket;
-        pthread_cond_broadcast(&g_pq_cv);
-        pthread_mutex_unlock(&g_pq_mu);
-    }
+    pthread_mutex_lock(&g_pq_mu);
+    g_pq_encoding--;   // committed (g_pq_inflight has it) or given up
+    if (!submitted && ticket > g_pq_done) g_pq_done = ticket;
+    pthread_cond_broadcast(&g_pq_cv);
+    pthread_mutex_unlock(&g_pq_mu);
 }
 @end
 
@@ -11424,7 +11502,8 @@ static void present_drop_for_suspend(void) {
         uint64_t n = g_pq_in - g_pq_read;
         for (uint64_t k = g_pq_read + 1; k <= g_pq_in; k++) g_pres[k % PRING] = (pres_ent){k, -1};
         g_link_dropped += n; g_pq_read = g_pq_in;
-        while (g_pq_inflight) pthread_cond_wait(&g_pq_cv, &g_pq_mu);
+        // a frame the callback took but has not committed yet (making a MetalFX scaler, waiting for a drawable) would reach the GPU after the suspend: wait for it as for the committed ones
+        while (g_pq_inflight || g_pq_encoding) pthread_cond_wait(&g_pq_cv, &g_pq_mu);
         if (g_pq_done < g_pq_in) g_pq_done = g_pq_in;
         pthread_cond_broadcast(&g_pq_cv);
         if (n) MLOG("entering the background: dropping %llu queued frames not yet displayed (the display link does not fire in the background)", (unsigned long long)n);
@@ -11471,6 +11550,18 @@ void *mtl_device_classic(void) { g_classic_ok = 1; return mtl_device(); }   // t
 uint64_t mtl_ext_tex(void *tex) {
     static _Atomic uint64_t n; id<MTLTexture> t = (__bridge id<MTLTexture>)tex; uint64_t ser = (1ull << 62) + atomic_fetch_add(&n, 1) + 1;
     res_add(t); serial_put(ser, t); mtl_xv_window_tex(ser); return ser;
+}
+// The producer is done with an external texture (vkDestroySwapchainKHR, the GL window made again at another size): once the presents on the GPU are done with it, it leaves the
+// residency set, the serial map and the window list. Each destroyed swapchain used to keep its images for the rest of the run (about 24 MB for three 1920x1080 RGBA8 images), and the
+// window list (128 entries) filled up, after which new window textures were no longer kept out of the cross-submit ledger
+void mtl_ext_tex_release(uint64_t serial) {
+    if (serial < (1ull << 62)) return;
+    pthread_mutex_lock(&g_pq_mu); while (g_pq_inflight || g_pq_encoding) pthread_cond_wait(&g_pq_cv, &g_pq_mu); pthread_mutex_unlock(&g_pq_mu);   // presents still reading it on the GPU
+    // Released now, not through serial_del's deferral: that waits for an NVN fence, which a Vulkan or GL game never signals, so the textures stayed for good. The presents
+    // that read it are done (above) and the producer waited for its own work before destroying the swapchain
+    pthread_mutex_lock(&g_smu); id t = hm_get_id(&g_by_serial, &serial); if (t) { hm_del_id(&g_by_serial, &serial); g_ser_gen++; } pthread_mutex_unlock(&g_smu);
+    if (t) res_remove((id<MTLAllocation>)t);
+    xv_window_untex(serial);
 }
 // Present an external texture after the producer's event reaches ev_val (its rendering of the frame is done); returns the ticket for mtl_present_wait
 uint64_t mtl_present_ext(uint64_t serial, double period, void *ev, uint64_t ev_val, const int crop[4]) {

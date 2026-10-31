@@ -1,0 +1,15 @@
+HorizonNative
+Copyright (c) 2026 Alessio Cosi (iCosiSenpai)
+https://github.com/iCosiSenpai/HorizonNative
+
+HorizonNative is created and maintained by Alessio Cosi (iCosiSenpai). It is free software under
+the MIT License (see LICENSE): you may use, copy, fork, modify and share it.
+
+Forks, copies and redistributions, whole or in substantial part, must keep the LICENSE file with
+its copyright notices, including the name above: that is the condition of the MIT License. Please
+also keep this NOTICE, call your fork a fork of HorizonNative and link to the repository above in
+its README or about screen.
+
+HorizonNative began from an imported base under the MIT License, whose copyright notice LICENSE
+keeps, and includes third-party code under its own licenses, which stay with that code: see
+dm/third_party/README.md and the Acknowledgements in README.md.

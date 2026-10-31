@@ -56,6 +56,17 @@ class Images(unittest.TestCase):
         self.assertEqual(self.content('data/z'), b'')
         self.assertTrue(image.read_index(self.dst)['data/empty'][0])
 
+    def test_links_and_special_files_are_refused(self):
+        # A link in a downloaded RomFS folder would copy the file it points at (anything on the Mac) into the image
+        private = self.root / 'private'; private.write_bytes(b'secret')
+        (self.src / 'data').mkdir(); (self.src / 'data/a').write_bytes(b'ok')
+        for make in (lambda p: p.symlink_to(private), lambda p: p.symlink_to(self.root, target_is_directory=True), os.mkfifo):
+            make(self.src / 'data/x')
+            with self.assertRaisesRegex(ValueError, 'link or special file'): image.pack(self.src, self.dst)
+            self.assertFalse(self.dst.exists()); self.assertEqual(list(self.root.glob('romfs.img.*.part')), [])
+            (self.src / 'data/x').unlink()
+        image.pack(self.src, self.dst); self.assertEqual(self.content('data/a'), b'ok')
+
     def test_reuse_rebuilds_changed_added_removed_and_renamed_files(self):
         (self.src / 'a').write_bytes(b'old')
         image.pack(self.src, self.dst, reuse=True)
@@ -120,6 +131,22 @@ class Images(unittest.TestCase):
         self.assertIn('Documents/romfs.img', args_file.read_text())
         env['ROMFS_PUSH_RC'] = '7'; result = push()
         self.assertEqual(result.returncode, 7); self.assertNotIn('game files on the phone', result.stdout)
+
+    def test_push_helper_reads_resources_as_data(self):
+        # resources.env is read by dm/ios/tools/read_resources.py, never sourced: a command in it does not run, and a line that is no DM_RESOURCE_ setting stops the push
+        marker = self.root / 'ran'
+        bin_dir = self.root / 'bin'; bin_dir.mkdir(); (bin_dir / 'xcrun').write_text('#!/bin/sh\nexit 0\n'); (bin_dir / 'xcrun').chmod(0o755)
+        env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ['PATH'])
+        (self.src / 'a').write_bytes(b'x')
+        for text in (f'DM_RESOURCE_ROMFS={shlex.quote(str(self.src))}$(touch {shlex.quote(str(marker))})\n',
+                     f'DM_RESOURCE_ROMFS={shlex.quote(str(self.src))}\ntouch {shlex.quote(str(marker))}\n'):
+            resources = self.root / 'resources.env'; resources.write_text(text)
+            r = subprocess.run(['bash', str(REPO / 'scripts/push_romfs.sh'), 'fixture-device', 'fixture.bundle', str(resources)], env=env, capture_output=True, text=True)
+            self.assertFalse(marker.exists(), r.stderr); self.assertNotEqual(r.returncode, 0)
+        sys_path = REPO / 'dm/ios/tools/read_resources.py'
+        resources.write_text("# made by gen_resources.py\nDM_RESOURCE_ROMFS='/a b/c'\nDM_RESOURCE_MARKER=\n")
+        r = subprocess.run(['python3', '-I', str(sys_path), str(resources)], capture_output=True, check=True)
+        self.assertEqual(r.stdout, b'DM_RESOURCE_ROMFS\0/a b/c\0DM_RESOURCE_MARKER\0\0')
 
     def test_case_collision_guest_names(self):
         if not shutil.which('xattr'): self.skipTest('macOS xattr tool required')

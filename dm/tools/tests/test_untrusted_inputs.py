@@ -1,4 +1,4 @@
-"""Packing tools reading game files: bounded inflation of NRO frames (dm/tools/nro_collect.py), RomFS images staged without following a link left at the staging path
+"""Packing tools reading game files: bounded inflation of NRO frames and NRR hash tables inside their file (dm/tools/nro_collect.py), RomFS images staged without following a link left at the staging path
 (dm/tools/romfs_image.py), CPK members kept inside the output folder (dm/gfx/tools/cpk.py). Synthetic inputs only: no game files, keys or tools needed."""
 import os
 from pathlib import Path
@@ -31,6 +31,39 @@ class NroFrames(unittest.TestCase):
         frame = b'pad' + self.zstd.compress(body)
         self.assertEqual(nro_collect.frame(frame, 3, self.zstd, 0x1000), body)
         self.assertIsNone(nro_collect.frame(frame, 3, self.zstd, 0x1001))   # ends short of what the header says
+
+
+class NrrTables(unittest.TestCase):
+    def nrr(self, td, off, cnt, hashes=b''):
+        d = bytearray(0x350); d[:4] = b'NRR0'; struct.pack_into('<I', d, 0x338, 0x350 + len(hashes)); struct.pack_into('<II', d, 0x340, off, cnt)   # size +0x338, table +0x340, count +0x344
+        (Path(td) / 'game.nrr').write_bytes(bytes(d) + hashes)
+
+    def test_a_table_outside_the_file_is_skipped(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.nrr(td, 0x350, 0xffffffff)   # an 848-byte file asking for four billion hashes: skipped at once, not looped over
+            self.assertEqual(nro_collect.nrr_hashes(td), {})
+            self.nrr(td, 0x10, 1)             # a table inside the header
+            self.assertEqual(nro_collect.nrr_hashes(td), {})
+
+    def test_a_table_inside_the_file_is_read(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.nrr(td, 0x350, 2, b'a' * 32 + b'b' * 32)
+            self.assertEqual(nro_collect.nrr_hashes(td), {b'a' * 32: 'game.nrr', b'b' * 32: 'game.nrr'})
+
+
+class ShaderMapRows(unittest.TestCase):
+    def test_rows_that_name_files_outside_the_work_folder_stop_the_build(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('build_ipa_from_nsp', REPO / 'scripts/build_ipa_from_nsp.py')
+        assert spec is not None and spec.loader is not None
+        nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
+        head = '# kind: evidence\npackage\tindex\tstage\tdm_ctl_sha16\tsource\n'
+        with tempfile.TemporaryDirectory() as td:
+            m = Path(td) / 'shader_map.tsv'
+            m.write_text(head + 'p.bin\t0\tvs\t0123456789abcdef\tromfs/a.bnsh\n'); nsp.check_shader_map(m)
+            for row in ('p.bin\t0\tvs\t../../../tmp/victim\tx\n', '../p.bin\t0\tvs\t0123456789abcdef\tx\n', 'p.bin\t0\tvs\t..\tx\n'):
+                m.write_text(head + row)
+                with self.assertRaises(nsp.BuildError): nsp.check_shader_map(m)
 
 
 class RomfsStaging(unittest.TestCase):

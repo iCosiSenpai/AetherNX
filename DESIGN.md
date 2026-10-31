@@ -205,6 +205,17 @@ Continuous (squircle) corners throughout. The app icon is clipped to 22.5% of it
 ### Cloud Saves Section
 - Folder as labelled content (secondary value, truncated in the middle on iOS and at the head on the Mac, iCloud Drive paths shown as "iCloud Drive › …" on the Mac); a choose button; a turn-off button when a folder is set. When an env file or the launch fixes the folder, the buttons are replaced by a footnote lock label naming the source.
 
+### Support Section
+- Last on both screens: "Support HorizonNative" with GitHub, PayPal and Buy Me a Coffee. Each row is a link: a 30 pt round chip in the brand's own colour carrying its published mark (Simple Icons paths drawn from their SVG data, the GitHub chip with a 0.22 white hairline on the dark ground), the name in semibold over a secondary footnote, and a tertiary "arrow.up.forward". The brand chips are the one place a hue is fixed: they are the brands' marks, not the launcher's accent. On iOS the list row keeps its tap highlight; on the Mac the row is plain in the Form. One accessibility element per link, hinted "Opens in the browser"; a controller reaches each one after Cloud Saves.
+
+### In-Game Menu (iPhone and iPad)
+- Opened over the paused game by the touch controls' menu button (a 15 pt circle at the top centre with a three-line icon), a controller's Home, or − and + held together. A panel at the trailing edge on `regularMaterial` with 26 pt corners, the game's last frame dimmed (black at 45 %) beside it; a tap beside it resumes.
+- Header: the 44 pt app icon (10 pt corners, 0.5 pt separator outline), the name in headline over "Paused", and Resume as the tint-filled bordered-prominent button (the screen's Play).
+- Rows reuse the launcher's language: 12 pt corners on a white 7 % cell, the 7 pt tint changed dot for rows the launcher also has, secondary tabular readouts with the numeric transition, footnote notes ("Applies at the next start.", "Set by env.txt or at launch."). A segmented choice sits beside its name when both fit and under it otherwise; at accessibility text sizes it becomes a menu. Sliders always sit under their name. The panel's controls take the game's tint.
+- Sections: Picture, Touch controls (with "Hidden while a controller is connected." when one is), Performance.
+- Controller: the same polled navigation as the launcher; up/down move, left/right step, A chooses, B / + / Home resume; the focus ring follows the row; a pad hint "Choose · Resume" in the controller's symbols.
+- Layout editor: a blurred dark bar in the middle of the screen, "Drag the controls where you want them" with Cancel, Reset and Done; the controls show at full opacity while it is up.
+
 ### Controller Navigation (signature)
 - **Order:** Play, the strip (one stop, re-entered at the cell last used), every visible row in section order, then Advanced (Mac), Cloud Saves and its turn-off, Reset (when something changed; on the Mac it comes after Cloud Saves), and on the Mac the launch checkbox and Quit.
 - **Input:** polled every 16 ms so the game's own handlers stay untouched. Up/down move between stops; left/right move along the strip or step the focused value; A activates (steps a choice to its next value, flips a toggle, does nothing on a range, opens the folder picker on Cloud Saves); B returns to Play; Menu plays from anywhere. A held direction repeats after 0.4 s at about 11 per second.

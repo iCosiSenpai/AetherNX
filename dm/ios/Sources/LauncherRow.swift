@@ -92,7 +92,7 @@ struct GameTint {
 
 /// What a game controller can focus, in screen order: Play, the summary strip's cells (one stop going up or down), the rows, then the screen's own controls.
 enum LauncherFocus: Hashable {
-    case play, summary(String), row(String), advanced, cloud, cloudOff, reset, showAtLaunch, quit
+    case play, summary(String), row(String), advanced, cloud, cloudOff, cloudAuto, reset, showAtLaunch, quit, support(String)
     var isSummary: Bool { if case .summary = self { return true } else { return false } }
     /// The id the screen's vertical scroll brings into view
     var scrollID: String {
@@ -100,10 +100,11 @@ enum LauncherFocus: Hashable {
         case .row(let e): return "row." + e
         case .summary: return "summary"
         case .play: return "header"
-        case .cloud, .cloudOff: return "cloud"
+        case .cloud, .cloudOff, .cloudAuto: return "cloud"
         case .reset: return "reset"
         case .advanced: return "advanced"
         case .showAtLaunch, .quit: return "footer"
+        case .support(let e): return "support." + e
         }
     }
 }

@@ -173,8 +173,72 @@ int main(void) { @autoreleasepool {
         });
         grab_present(big,whole,CGSizeMake(W,H));
         EXPECT("whole-window capture callback completes",0,(int)dispatch_semaphore_wait(grabbed,dispatch_time(DISPATCH_TIME_NOW,10*NSEC_PER_SEC)));
+        // The in-game menu's switches: MetalFX off and on again without a restart, and sharp pixels leaving MetalFX out
+        int sq[4]={8,8,48,48};
+        dm_present_set_upscale(0);
+        EXPECT("MetalFX switched off live: standard present",PRESENT_STANDARD,present_offscreen_wait(big,sq,out));
+        dm_present_set_upscale(1);
+        EXPECT("MetalFX switched on live: MetalFX present",PRESENT_METALFX,present_offscreen_wait(big,sq,out));
+        dm_present_set_nearest(1);
+        EXPECT("sharp pixels leave MetalFX out",PRESENT_STANDARD,present_offscreen_wait(big,sq,out));
+        dm_present_set_nearest(0);
         res_remove(big);g_fx_mode=0;
     } else printf("no Metal 4 MetalFX spatial scaler on this GPU: the MetalFX present is not checked\n");
+    {   // DM_PRESENT_FIT=stretch: the whole canvas, no bars (the aspect case above draws black columns on both sides)
+        dm_present_set_stretch(1);
+        MTLViewport vp=present_viewport(1280,720,2868,1320);
+        EXPECT("stretch: the picture covers the canvas width",2868,(int)vp.width);EXPECT("stretch: and its height",1320,(int)vp.height);
+        MTLTextureDescriptor *d2=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:16 height:8 mipmapped:NO];d2.storageMode=MTLStorageModeShared;d2.usage=MTLTextureUsageRenderTarget;
+        id<MTLTexture> dst=[g_dev newTextureWithDescriptor:d2];id<MTLCommandBuffer> cb=[g_q commandBuffer];
+        EXPECT("stretched encode succeeds",1,ENCODE(cb,src,dst,tl));[cb commit];[cb waitUntilCompleted];
+        uint8_t o[16*8*4];[dst getBytes:o bytesPerRow:64 fromRegion:MTLRegionMake2D(0,0,16,8) mipmapLevel:0];
+        int bad=0;for(int i=0;i<16*8;i++)bad+=memcmp(o+4*i,colors[0],4)!=0;
+        EXPECT("stretch: a square crop fills a 2:1 canvas, 128 pixels red",0,bad);
+        dm_present_set_stretch(0);
+    }
+    {   // DM_PRESENT_FILTER=nearest: an 8x8 picture shown at 16x16 keeps exact colours at the quadrant borders, where bilinear blends them
+        int blended[2];
+        for(int n=0;n<2;n++){
+            dm_present_set_nearest(n);
+            MTLTextureDescriptor *d2=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:16 height:16 mipmapped:NO];d2.storageMode=MTLStorageModeShared;d2.usage=MTLTextureUsageRenderTarget;
+            id<MTLTexture> dst=[g_dev newTextureWithDescriptor:d2];id<MTLCommandBuffer> cb=[g_q commandBuffer];
+            ENCODE(cb,src,dst,zero);[cb commit];[cb waitUntilCompleted];
+            uint8_t o[16*16*4];[dst getBytes:o bytesPerRow:64 fromRegion:MTLRegionMake2D(0,0,16,16) mipmapLevel:0];
+            blended[n]=0;for(int i=0;i<256;i++){int exact=0;for(int c=0;c<4;c++)exact|=!memcmp(o+4*i,colors[c],4);blended[n]+=!exact;}
+        }
+        dm_present_set_nearest(0);
+        EXPECT("bilinear blends pixels at the quadrant borders",1,blended[0]>0);
+        EXPECT("sharp pixels: every pixel one of the four colours",0,blended[1]);
+    }
+    {   // DM_PRESENT_SHARPEN: 1:1, a grey step 100 | 150; sharpening darkens the dark side next to the step and leaves flat areas alone
+        MTLTextureDescriptor *gd=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:8 height:8 mipmapped:NO];gd.storageMode=MTLStorageModeShared;gd.usage=MTLTextureUsageShaderRead;
+        id<MTLTexture> step=[g_dev newTextureWithDescriptor:gd];uint8_t g[8*8*4];
+        for(int y=0;y<8;y++)for(int x=0;x<8;x++){uint8_t v=x<4?100:150;g[4*(y*8+x)]=g[4*(y*8+x)+1]=g[4*(y*8+x)+2]=v;g[4*(y*8+x)+3]=255;}
+        [step replaceRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0 withBytes:g bytesPerRow:32];
+        int edge[2],flat[2];
+        for(int k=0;k<2;k++){
+            dm_present_set_sharpen(k?1.f:0.f);
+            MTLTextureDescriptor *d2=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:8 height:8 mipmapped:NO];d2.storageMode=MTLStorageModeShared;d2.usage=MTLTextureUsageRenderTarget;
+            id<MTLTexture> dst=[g_dev newTextureWithDescriptor:d2];id<MTLCommandBuffer> cb=[g_q commandBuffer];
+            ENCODE(cb,step,dst,zero);[cb commit];[cb waitUntilCompleted];
+            uint8_t o[8*8*4];[dst getBytes:o bytesPerRow:32 fromRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0];
+            edge[k]=o[4*(4*8+3)];flat[k]=o[4*(4*8+1)];
+        }
+        dm_present_set_sharpen(0);
+        EXPECT("no sharpening: the pixel beside the step keeps its value",100,edge[0]);
+        EXPECT("sharpening: the dark side of the step gets darker",1,edge[1]<98);
+        EXPECT("sharpening: flat areas keep their value",1,abs(flat[1]-100)<=1);
+        dm_present_set_sharpen(NAN);EXPECT("a non-finite sharpening is off",0,(int)(dm_present_sharpen()*1000));
+    }
+    {   // DM_ANISO (aniso.h): raised only on mipmapped linear samplers without compare or reduction; a higher game value stays
+        setenv("DM_ANISO","8",1);
+        EXPECT("anisotropy raised on a mipmapped linear sampler",8,(int)dm_aniso_apply(1,1,1,0,0));
+        EXPECT("a game's own higher anisotropy stays",16,(int)dm_aniso_apply(16,1,1,0,0));
+        EXPECT("nearest samplers keep theirs",1,(int)dm_aniso_apply(1,0,1,0,0));
+        EXPECT("samplers without mips keep theirs",1,(int)dm_aniso_apply(1,1,0,0,0));
+        EXPECT("depth-compare samplers keep theirs",1,(int)dm_aniso_apply(1,1,1,1,0));
+        EXPECT("min / max reduction samplers keep theirs",1,(int)dm_aniso_apply(1,1,1,0,1));
+    }
 #endif
     int invalid[4][4]={{-1,0,4,4},{0,-1,4,4},{0,0,0,4},{7,0,4,4}};
     for(int i=0;i<4;i++) {

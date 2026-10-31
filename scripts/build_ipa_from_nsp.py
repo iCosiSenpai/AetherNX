@@ -56,7 +56,7 @@ KEEP_EXTRACTED = True                   # keep the extracted game files after th
 DM_ENV_FILE = ''                        # optional: environment switches for a diagnostic build (one KEY=VALUE per line)
 PSO_GPUS = ''                           # NVN games: GPU architectures the app gets the shader pairs' pipeline bases for, made on this Mac (metal-tt, comma-separated: 'g18p' = A19 / A19 Pro of the iPhone 17 family;
                                         #   another device's name is in its log when the app has none for it), so the device does not build them on its first start; each adds about 650 MB to the app (Breath of the Wild) and minutes to a first build; 'none' = no archive;
-                                        #   empty = by the game's profile: 'g18p' when it sets pso_mtl4 on (the Metal 4 path, the only one that reads the archive on iOS, is on for it), else 'none'
+                                        #   empty = 'g18p' (the Metal 4 path, the only one that reads the archive on iOS, is the profile's pso_mtl4 or the launcher's choice, offered for every NVN game); 'none' = no archive
                                         #   PLATFORM 'mac-app': the Mac app's archive (Resources/pso), empty = this Mac's GPU (e.g. 'g14s' for an M2 Max), 'none' = the app builds its bases on its first start
 SHOW_FPS = True                         # True shows the game's frame rate on the iPhone (frames on screen per second, top left); DM_SHOW_FPS=0 / 1 in the app's Documents/env.txt changes it without a rebuild
 MOTION = True                           # True passes a gyro controller's motion (on iOS also the phone's own) to games that read it; False builds with DM_MOTION=0, for when motion misbehaves (DM_MOTION=1 in the app's Documents/env.txt turns it back on without a rebuild)
@@ -373,6 +373,19 @@ def rmtree(p):
     and drops it when `x` is deleted, so the walk's later unlink of `._x` raised FileNotFoundError and left the folder half deleted"""
     if p.is_symlink() or p.is_file(): p.unlink()
     elif p.exists(): shutil.rmtree(p, onexc=_gone)   # Python 3.13 and later pass these by themselves
+
+
+SHADER_KEY = re.compile(r'[0-9A-Za-z_-]{1,64}')   # a file name stem: the split writes 16 hexadecimal digits; no folder, dot or space
+
+
+def check_shader_map(path):
+    """A split shader map's rows name files: dmsh_build.py writes <key>.bin and reads <package> from the package folder. A key that is not a plain file name stem or a package name
+    with a folder in it (a row a crafted archive member name could inject, before shader_split.py wrote each field as one cell) would reach outside the work folder: stop"""
+    for n, line in enumerate(Path(path).read_text(encoding='utf-8', errors='replace').splitlines(), 1):
+        c = line.split('\t')
+        if line.startswith('#') or len(c) <= 4 or not c[0].endswith('.bin'): continue
+        if not SHADER_KEY.fullmatch(c[3]) or '/' in c[0] or c[0].startswith('.'):
+            raise BuildError(f'{path}:{n}: not a shader map row (key {c[3]!r}, package {c[0]!r})')
 
 
 def build_nx_extract(repo, work, logs, env):
@@ -1685,7 +1698,8 @@ def split_shaders(py, repo, roms, mains, pkg, env, logs, g, provisional=False, o
         promote(derive_compute, 'compute')
     if provisional or g.table('pso_pairs.tsv').is_file(): names += ('pso_pairs.tsv',)
     else: shutil.copyfile(tmp / 'tables' / 'pso_pairs.tsv', pkg.with_name('pso_pairs.tsv'))
-    if provisional:   # a provisional profile takes the tables as they come
+    if provisional:   # a provisional profile takes the tables as they come, once each row names files inside the work folder (a registered profile's are compared below)
+        check_shader_map(tmp / 'tables' / 'shader_map.tsv')
         for n in names: shutil.copyfile(tmp / 'tables' / n, g.table(n))
     else:
         # Data rows byte-identical to the profile's = the same game files the tables were built from; if not, stop (the profile's tables are left alone). Only data rows are compared: the header of Engage's profile tables was written by an older shader_split
@@ -2117,7 +2131,7 @@ def parse_args(argv):
     ap.add_argument('--keep-extracted', action=argparse.BooleanOptionalAction, help='keep the extracted game files after the IPA is built, for the next build (default: the KEEP_EXTRACTED setting, on)')
     ap.add_argument('--env-file', help='environment switches for a diagnostic build (one KEY=VALUE per line)')
     ap.add_argument('--gpu', help='NVN games: GPU architectures the app gets its pipeline archive for, made on this Mac with metal-tt, comma-separated: g18p (A19 / A19 Pro), or the name a device\'s log gives when the app has no archive for its GPU; '
-                    'none = no archive, the device builds the bases on its first start (default: the PSO_GPUS setting; when that is empty, g18p for a game whose profile sets pso_mtl4 on, else none). '
+                    'none = no archive, the device builds the bases on its first start (default: the PSO_GPUS setting; when that is empty, g18p: the launcher offers the Metal 4 path, which reads it, for every NVN game). '
                     'With --platform mac-app: the Mac app\'s archive, by default for this Mac\'s GPU (none: the app builds the bases on its first start)')
     ap.add_argument('--show-fps', action=argparse.BooleanOptionalAction, help='show the game\'s frame rate on the iPhone, frames on screen per second at the top left (default: the SHOW_FPS setting, on)')
     ap.add_argument('--motion', action=argparse.BooleanOptionalAction, help='pass a gyro controller\'s motion (on iOS also the phone\'s own) to games that read it; --no-motion builds with DM_MOTION=0, for when motion misbehaves (default: the MOTION setting, on)')
@@ -2443,9 +2457,9 @@ def main(args=None):
     ipa_env['DM_SHOW_FPS'] = '1' if show_fps else '0'
     gpus = (args.gpu or PSO_GPUS).strip()
     if gpus and not re.fullmatch(r'none|(applegpu_)?g\w+(,(applegpu_)?g\w+)*', gpus): raise BuildError(f'--gpu / PSO_GPUS takes GPU architectures such as g18p,g17p, or none: {gpus}')
-    if not gpus: gpus = 'g18p' if g.get('pso_mtl4', 'off') == 'on' else 'none'   # by the profile, as build_ipa.sh decides without DM_PSO_GPUS: only the Metal 4 path reads the archive on iOS
+    if not gpus: gpus = 'g18p'   # as build_ipa.sh decides without DM_PSO_GPUS: the launcher offers the Metal 4 path, which reads the archive, for every NVN game
     ipa_env['DM_PSO_GPUS'] = gpus
-    if gfx == 'nvn': say(f'pipeline archive: {"none, the device builds the bases on its first start if it takes the Metal 4 path (--gpu g18p builds one)" if gpus == "none" else gpus + " (made on this Mac with metal-tt; --gpu none leaves it out)"}')
+    if gfx == 'nvn': say(f'pipeline archive: {"none, the device builds the bases on its first start if it takes the Metal 4 path (--gpu g18p builds one)" if gpus == "none" else gpus + " (made on this Mac with metal-tt, for the Metal 4 pipelines the launcher offers; --gpu none leaves it out)"}')
     if show_fps: say('frame-rate counter: on (DM_SHOW_FPS=0 in the app\'s Documents/env.txt turns it off)')
     if prepare_xcode:
         PROG.stage('prepare Xcode')

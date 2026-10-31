@@ -11,6 +11,7 @@
 #include "haptics_apple.h"
 #include "save_sync.h"
 #import "CloudSaves.h"
+#include "ingame.h"
 
 UIView *dm_gamepad_view(CGRect frame);
 void dm_gamepad_reset(void);
@@ -19,11 +20,17 @@ void front_ios_boot(void);
 int front_ios_boot_ok(void);
 const char *front_ios_boot_message(void);   // main.m: why a build that keeps the game files off the IPA found none usable (NULL = the generic hint)
 bool dm_show_launcher(void *view_controller, void (*done)(void));   // Launcher.swift: false = no launcher (no dm/launcher.json, or DM_LAUNCHER=0)
+bool dm_show_ingame_menu(void *view_controller, void (*closed)(void));   // InGameMenu.swift: false = not shown
+void dm_gamepad_menu_open(int on);   // DmGamepad.m: nothing reaches the game while the menu is up
+void dm_pad_edit_begin(void (*done)(void));   // DmGamepad.m: the layout editor
 
 static CAMetalLayer *g_layer;
+static UIView *g_prog;   // the prepare step's progress screen (front_progress), while up
 static void front_ios_power_watch(void);
 static void front_ios_audio_watch(void);
 static UILabel *front_ios_fps_label(void);
+static void front_ios_audio_apply(void);
+static UIViewController *top_controller(void);
 
 @interface DmGameView : UIView
 @end
@@ -77,13 +84,13 @@ static void launcher_done(void) { [g_root startGame]; }
     self.game = [[DmGameView alloc] initWithFrame:self.view.bounds];
     [self.view addSubview:self.game];
     g_layer = (CAMetalLayer *)self.game.layer;
-    if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) { g_layer.developerHUDProperties = @{@"mode": @"default"}; LOG("front end: Metal performance HUD on (DM_METAL_HUD)"); }   // Apple's HUD over the game: frame rate, frame and GPU time, memory
+    if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) front_set_metal_hud(1);   // Apple's HUD over the game: frame rate, frame and GPU time, memory
     dm_haptics_apple_init();
     self.pad = dm_gamepad_view(self.view.bounds);
     self.pad.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:self.pad];
-    self.fps = front_ios_fps_label();   // above the pad, which hides while a controller is connected
-    if (self.fps) [self.view addSubview:self.fps];
+    self.fps = front_ios_fps_label();   // above the pad, which hides while a controller is connected; hidden when off (the in-game menu turns it on and off)
+    [self.view addSubview:self.fps];
     [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     UIApplication.sharedApplication.idleTimerDisabled = YES;
     front_ios_boot();
@@ -91,10 +98,10 @@ static void launcher_done(void) { [g_root startGame]; }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds; if (!self.game) return;
-    CGFloat w = b.size.width, h = b.size.height;   // Fit 16:9 into the whole screen
-    if (w / h > 16.0 / 9.0) w = h * 16.0 / 9.0; else h = w * 9.0 / 16.0;
+    CGFloat w = b.size.width, h = b.size.height;   // Fit 16:9 into the whole screen, or the whole screen when the picture is stretched (DM_PRESENT_FIT=stretch, the in-game menu)
+    if (!dm_present_stretch()) { if (w / h > 16.0 / 9.0) w = h * 16.0 / 9.0; else h = w * 9.0 / 16.0; }
     self.game.frame = CGRectMake(floor((b.size.width - w) / 2), floor((b.size.height - h) / 2), w, h);
-    if (self.fps) {   // the top row's free stretch: right of DmGamepad.m's L3 key (102 + 17 of its units from the safe edge), level with − / + (22 units down); u is its unit
+    {   // the top row's free stretch: right of DmGamepad.m's L3 key (102 + 17 of its units from the safe edge), level with − / + (22 units down); u is its unit
         CGRect s = UIEdgeInsetsInsetRect(b, self.view.safeAreaInsets); CGFloat u = MIN(b.size.height / 430.0, 1.3);
         self.fps.frame = CGRectMake(floor(CGRectGetMinX(s) + 130 * u), floor(CGRectGetMinY(s) + 22 * u - 11), 64, 22);
     }
@@ -134,12 +141,13 @@ static void front_ios_power_watch(void) {
 }
 
 // Frame-rate counter: the frames put on screen in the last second (nvn_mtl.m counts them for NVN and for the Vulkan layer alike; frames the display link merged away are not counted).
-// On when the IPA was built with it (the NSP script's SHOW_FPS / --show-fps → DMShowFPS in Info.plist); DM_SHOW_FPS=0 / 1 in Documents/env.txt overrides that without a rebuild. NULL when off
+// On when the IPA was built with it (the NSP script's SHOW_FPS / --show-fps → DMShowFPS in Info.plist); DM_SHOW_FPS=0 / 1 (the launcher, Documents/env.txt) overrides that. Made in any
+// case, hidden while off, so the in-game menu can turn it on and off (front_set_fps_counter)
 uint64_t mtl_present_count(void);
 static UILabel *front_ios_fps_label(void) {
     const char *e = getenv("DM_SHOW_FPS");
-    if (!(e ? atoi(e) != 0 : [[NSBundle.mainBundle objectForInfoDictionaryKey:@"DMShowFPS"] boolValue])) return nil;
-    UILabel *l = [UILabel new];
+    BOOL on = e ? atoi(e) != 0 : [[NSBundle.mainBundle objectForInfoDictionaryKey:@"DMShowFPS"] boolValue];
+    UILabel *l = [UILabel new]; l.hidden = !on;
     l.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold]; l.textColor = UIColor.whiteColor; l.textAlignment = NSTextAlignmentCenter;
     l.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45]; l.layer.cornerRadius = 6; l.layer.masksToBounds = YES; l.userInteractionEnabled = NO;
     l.text = @"-- fps";
@@ -149,12 +157,47 @@ static UILabel *front_ios_fps_label(void) {
         if (now - t0 < 1.5) l.text = [NSString stringWithFormat:@"%.0f fps", (n - n0) / (now - t0)];   // a longer span is the time in the background: no reading
         n0 = n; t0 = now;
     }];
-    LOG("front end: frame-rate counter on");
+    if (on) LOG("front end: frame-rate counter on");
     return l;
 }
+int front_fps_counter(void) { return g_root.fps && !g_root.fps.hidden; }
+void front_set_fps_counter(int on) { g_root.fps.hidden = !on; LOG("front end: frame-rate counter %s (in-game menu)", on ? "on" : "off"); }
+static int g_hud_on;
+int front_metal_hud(void) { return g_hud_on; }
+void front_set_metal_hud(int on) {   // Apple's performance HUD on the game's layer, at once
+    g_hud_on = !!on; if (!g_layer) return;
+    g_layer.developerHUDProperties = on ? @{@"mode": @"default"} : nil;
+    LOG("front end: Metal performance HUD %s", on ? "on" : "off");
+}
+void front_set_stretch(int on) {   // the picture over the whole screen or in the game's aspect ratio: the present draws it so, and the game's view follows (DM_PRESENT_FIT)
+    dm_present_set_stretch(on);
+    [g_root.view setNeedsLayout]; [g_root.view layoutIfNeeded];
+}
+
+// ---- The in-game menu (InGameMenu.swift): the menu button of the touch controls, a controller's Home button, or − and + held together ----
+// The game is paused while it is up, as in the background: its clock stops and its guest threads wait at their next clock read (reason 3, hle_os.c), its sound stops, and
+// nothing the player touches or presses reaches it (DmGamepad.m). Its last picture stays on screen behind the menu. Not over another screen: the launcher, an alert (the
+// game's text input, a failed save) or the progress screen
+static int g_menu_up, g_audio_menu;
+static void ingame_resume(void) {
+    g_menu_up = 0; g_audio_menu = 0; front_ios_audio_apply();
+    guest_clock_freeze_for(3, 0); dm_gamepad_menu_open(0);
+    LOG("front end: in-game menu closed, game resumed");
+}
+void dm_ingame_menu_request(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (g_menu_up || !g_root.game || g_prog) return;
+        UIViewController *top = top_controller(); if (top != g_root || top.presentedViewController) return;
+        g_menu_up = 1; dm_gamepad_menu_open(1);
+        guest_clock_freeze_for(3, 1); g_audio_menu = 1; front_ios_audio_apply();
+        LOG("front end: in-game menu open, game paused");
+        if (!dm_show_ingame_menu((__bridge void *)g_root, ingame_resume)) ingame_resume();
+    });
+}
+void front_ingame_edit(void) { dm_pad_edit_begin(ingame_resume); }   // the menu is gone; the game stays paused until the editor's Done
 
 // Progress screen of the prepare step (front.h front_progress): a dark view over the game's view and the pad, the title, a bar and a count, centered; UIKit views, so it draws while the game's thread waits
-static UIView *g_prog; static UILabel *g_prog_count; static UIProgressView *g_prog_bar; static UILabel *g_prog_title;
+static UILabel *g_prog_count; static UIProgressView *g_prog_bar; static UILabel *g_prog_title;
 void front_progress(const char *title, long done, long total) {
     if (!g_layer) return;
     NSString *tt = title ? @(title) : nil;
@@ -195,8 +238,9 @@ static UIViewController *top_controller(void) {
 static void present_when_free(UIAlertController *ac, void (^none)(void)) {
     UIViewController *vc = top_controller();
     if (!vc) { if (none) none(); return; }
-    // Another alert up (waiting for the player), or a presentation coming or going: try again shortly
-    if (vc.isBeingPresented || vc.isBeingDismissed || vc.presentedViewController || [vc isKindOfClass:UIAlertController.class]) {
+    // Another alert up (waiting for the player), a presentation coming or going, or the in-game menu (an alert over it would be what its Resume dismissed, leaving the
+    // menu up over a running game): try again shortly
+    if (g_menu_up || vc.isBeingPresented || vc.isBeingDismissed || vc.presentedViewController || [vc isKindOfClass:UIAlertController.class]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ present_when_free(ac, none); });
         return;
     }
@@ -261,7 +305,7 @@ void front_ios_audio_session(void) {
 // Without the interruption observer the AudioUnits stayed "started" while iOS no longer called them, and a game waiting for its buffers back lost its sound until restart.
 // All of this runs on the main queue, like the scene callbacks
 static int g_audio_bg, g_audio_intr;
-static void front_ios_audio_apply(void) { dm_audio_suspend(g_audio_bg || g_audio_intr); }
+static void front_ios_audio_apply(void) { dm_audio_suspend(g_audio_bg || g_audio_intr || g_audio_menu); }
 static void front_ios_audio_watch(void) {
     NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
     [nc addObserverForName:AVAudioSessionInterruptionNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {

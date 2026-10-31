@@ -121,6 +121,16 @@ int main(void) {
         char q2[1400]; snprintf(q2, sizeof q2, "%s/pack/esc/escaped", root);
         CHECK(ss_read(p, u, &m2) && !exists(q) && !exists(q2), "a path that leaves the save is refused, and nothing is written");
     }
+    {   // the Mac's upload (front_save_sync_store) writes beside the cloud file under a random name made exclusively: a link left at a predictable staging name is not followed
+        char cloud[1300], victim[1300], lnk[1400], src[1300];
+        snprintf(cloud, sizeof cloud, "%s/pack/store/save.dmsync", root); snprintf(victim, sizeof victim, "%s/pack/victim", root); snprintf(src, sizeof src, "%s/pack/store-src", root);
+        snprintf(p, sizeof p, "%s/pack/store", root); mkd(p); put(victim, "private"); put(src, "bundle");
+        snprintf(lnk, sizeof lnk, "%s.%d.nosync", cloud, (int)getpid()); symlink(victim, lnk);
+        CHECK(front_save_sync_store(src, cloud) && same(cloud, "bundle"), "the upload writes the cloud file");
+        CHECK(same(victim, "private"), "the file a link at the old staging name points at is untouched");
+        DIR *d = opendir(p); struct dirent *e; int left = 0; while (d && (e = readdir(d))) left += e->d_name[0] != '.' && strcmp(e->d_name, "save.dmsync") && strcmp(e->d_name, lnk + strlen(p) + 1);
+        if (d) closedir(d); CHECK(!left, "no staging file is left beside it");
+    }
 
     printf("(2) which way\n");
     int both;

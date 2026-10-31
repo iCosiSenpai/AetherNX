@@ -15,6 +15,7 @@
 // Environment: DM_VK_LOG=1 logs object creation; DM_VK_CAPTURE=<dir> writes every SPIR-V module the game creates (sh_capture).
 #define VK_NO_PROTOTYPES
 #include "../../host/hle.h"
+#include "../../host/aniso.h"   // DM_ANISO: vkCreateSampler
 #include "../nvn/nvn_mtl.h"
 #include <vulkan/vulkan_core.h>
 #include <vulkan/vulkan_vi.h>
@@ -614,6 +615,7 @@ VKB(vkCreateSampler, VkResult, VkDevice d, const VkSamplerCreateInfo *ci, const 
         sd.mipFilter = ci->mipmapMode == VK_SAMPLER_MIPMAP_MODE_LINEAR ? MTLSamplerMipFilterLinear : MTLSamplerMipFilterNearest;
         sd.sAddressMode = addr_mode(ci->addressModeU); sd.tAddressMode = addr_mode(ci->addressModeV); sd.rAddressMode = addr_mode(ci->addressModeW);
         sd.maxAnisotropy = ci->anisotropyEnable ? (NSUInteger)fminf(fmaxf(ci->maxAnisotropy, 1), 16) : 1;
+        sd.maxAnisotropy = dm_aniso_apply((unsigned)sd.maxAnisotropy, sd.minFilter == MTLSamplerMinMagFilterLinear, !ci->unnormalizedCoordinates, ci->compareEnable, 0);   // DM_ANISO (aniso.h); unnormalized samplers read no mips
         if (ci->compareEnable) sd.compareFunction = (MTLCompareFunction)ci->compareOp;   // VkCompareOp and MTLCompareFunction share their values
         sd.borderColor = ci->borderColor >= VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE ? MTLSamplerBorderColorOpaqueWhite :
                          ci->borderColor >= VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK ? MTLSamplerBorderColorOpaqueBlack : MTLSamplerBorderColorTransparentBlack;
@@ -1486,7 +1488,7 @@ VKB(vkCreateSwapchainKHR, VkResult, VkDevice d, const VkSwapchainCreateInfoKHR *
 }
 VKB(vkDestroySwapchainKHR, void, VkDevice d, VkSwapchainKHR sc, const VkAllocationCallbacks *a) {
     (void)d; (void)a; if (!sc) return;
-    for (uint32_t i = 0; i < sc->n; i++) { if (sc->ticket[i]) mtl_present_wait(sc->ticket[i]); sc->img[i]->tex = nil; free(sc->img[i]); }   // the present path keeps its own reference to each texture
+    for (uint32_t i = 0; i < sc->n; i++) { if (sc->ticket[i]) mtl_present_wait(sc->ticket[i]); mtl_ext_tex_release(sc->img[i]->serial); sc->img[i]->tex = nil; free(sc->img[i]); }   // the present path lets go of each image too
     free(sc);
 }
 VK(vkGetSwapchainImagesKHR, VkResult, VkDevice d, VkSwapchainKHR sc, uint32_t *n, VkImage *out) {

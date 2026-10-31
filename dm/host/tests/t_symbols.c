@@ -109,6 +109,36 @@ static void dynamic_tables(void) {
     memset(img + 0x40, 0xff, IMG - 0x40); assert(parse_dies());                                         // no DT_NULL before the module ends
     puts("Dynamic tables: DT_HASH, DT_GNU_HASH and adjacent layouts counted; damaged layouts refused: OK");
 }
+// Relocation tables and the slots they write lie inside the module (relocs_of, reloc_slot, relr_apply): one R_AARCH64_RELATIVE at 0x400 (DT_RELA) or a DT_RELR table at 0x420
+static void reloc_layout(uint64_t rela, uint64_t relasz, uint64_t r_offset, uint64_t relr, uint64_t relrsz) {
+    layout(4, 0x200, 0x100); uint32_t *h = (uint32_t *)(img + 0x180); h[0] = 1; h[1] = 3;
+    Elf64_Dyn *d = (Elf64_Dyn *)(img + 0x40); while (d->d_tag) d++;
+    if (relasz) { *d++ = (Elf64_Dyn){.d_tag = DT_RELA, .d_un.d_ptr = rela}; *d++ = (Elf64_Dyn){.d_tag = DT_RELASZ, .d_un.d_val = relasz}; }
+    if (relrsz) { *d++ = (Elf64_Dyn){.d_tag = DT_RELR, .d_un.d_ptr = relr}; *d++ = (Elf64_Dyn){.d_tag = DT_RELRSZ, .d_un.d_val = relrsz}; }
+    *(Elf64_Rela *)(img + 0x400) = (Elf64_Rela){.r_offset = r_offset, .r_info = R_AARCH64_RELATIVE, .r_addend = 0x10};
+}
+static int relocate_dies(void) {
+    fflush(stdout); pid_t pid = fork(); assert(pid >= 0);
+    if (!pid) { struct rlimit lim = {0, 0}; setrlimit(RLIMIT_CORE, &lim); freopen("/dev/null", "w", stderr); freopen("/dev/null", "w", stdout); parse_dynamic(&dm_mod); relocate(&dm_mod); _exit(0); }
+    int status; assert(waitpid(pid, &status, 0) == pid);
+    return WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT;
+}
+static void relocation_tables(void) {
+    reloc_layout(0x400, sizeof(Elf64_Rela), 0x600, 0, 0); assert(!relocate_dies());
+    parse_dynamic(&dm_mod); relocate(&dm_mod); assert(*(uint64_t *)(img + 0x600) == (uint64_t)img + 0x10); free(dm_mod.symh);   // a slot inside: written
+    reloc_layout(0x400, sizeof(Elf64_Rela), 0xfffffffffffffff8ull, 0, 0); assert(relocate_dies());                           // 8 bytes before the base
+    reloc_layout(0x400, sizeof(Elf64_Rela), IMG - 4, 0, 0); assert(relocate_dies());                                         // a slot running past the end
+    reloc_layout(IMG - 8, sizeof(Elf64_Rela), 0x600, 0, 0); assert(relocate_dies());                                         // the table running past the end
+    reloc_layout(0x400, (uint64_t)1 << 40, 0x600, 0, 0); assert(relocate_dies());                                            // a size larger than the module
+    reloc_layout(0, 0, 0, 0x420, 16); ((uint64_t *)(img + 0x420))[0] = 0x600; ((uint64_t *)(img + 0x420))[1] = 0x3;          // start 0x600, bitmap: the next slot (0x608)
+    *(uint64_t *)(img + 0x600) = 1; *(uint64_t *)(img + 0x608) = 2;
+    parse_dynamic(&dm_mod); relocate(&dm_mod); assert(*(uint64_t *)(img + 0x600) == (uint64_t)img + 1 && *(uint64_t *)(img + 0x608) == (uint64_t)img + 2); free(dm_mod.symh);
+    reloc_layout(0, 0, 0, 0x420, 8); ((uint64_t *)(img + 0x420))[0] = IMG; assert(relocate_dies());                           // a start past the end
+    reloc_layout(0, 0, 0, 0x420, 16); ((uint64_t *)(img + 0x420))[0] = IMG - 16; ((uint64_t *)(img + 0x420))[1] = 1ull << 63 | 1;   // a bitmap bit past the end
+    assert(relocate_dies());
+    reloc_layout(0, 0, 0, IMG - 8, 64); assert(relocate_dies());                                                            // the table running past the end
+    puts("Relocation tables: slots and tables inside the module applied; outside ones refused: OK");
+}
 
 int main(void) {
     // Empty/missing sections must still give misses after lazy initialization.
@@ -155,7 +185,7 @@ int main(void) {
     }
     assert(g_nstub == MAX_STUB); expect_abort(0);
     reset_sections();
-    dynamic_tables();
+    dynamic_tables(); relocation_tables();
     puts("Symbol indexes: collisions, duplicate precedence/rejection, misses, wrappers and 4096 reusable stubs: OK");
     return 0;
 }

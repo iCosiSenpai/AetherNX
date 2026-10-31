@@ -44,3 +44,7 @@ The settings screen inside the iPhone and iPad app and the settings window insid
 ## How changes get in
 
 HorizonNative is maintained by iCosiSenpai. Changes are reviewed in this repository and merged after the relevant checks pass. Preserve authorship and any required notices when adapting third-party work. Useful upstream fixes are reviewed through [the update process](docs/upstream.md).
+
+## License of contributions
+
+HorizonNative is MIT-licensed ([LICENSE](LICENSE), [NOTICE](NOTICE)). By opening a pull request you agree that your contribution is licensed under the same terms; you keep the copyright of what you wrote, and the project's notices (the maintainer's name in `LICENSE` and `NOTICE`) stay as they are. A fork must keep them too: that is the license's one condition.

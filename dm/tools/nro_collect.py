@@ -29,8 +29,10 @@ def nrr_hashes(romfs, only=None):
         for f in sorted(fs):
             if not f.endswith('.nrr') or (only and f != only): continue
             d = open(os.path.join(dp, f), 'rb').read()
-            if d[:4] != b'NRR0': continue
+            # The hash table must lie inside the file: a crafted count (4,294,967,295 in an 848-byte file) looped over nothing for hours. hle_ro.c checks the same at run time
+            if len(d) < 0x350 or d[:4] != b'NRR0': continue
             off, cnt = struct.unpack_from('<II', d, 0x340)
+            if off < 0x350 or off + 32 * cnt > len(d): print(f'[RED] {f}: its hash table ({cnt} hashes at {off:#x}) lies outside the file; skipped', file=sys.stderr); continue
             for i in range(cnt): out.setdefault(d[off + 32 * i:off + 32 * i + 32], f)
     return out
 

@@ -645,11 +645,14 @@ __attribute__((weak)) int front_save_sync_fetch(const char *cloud, const char *l
     return r ? -1 : 1;
 }
 
-// Written beside the cloud file under a .nosync name (iCloud Drive does not upload those) and renamed over it: iCloud sees one whole new file
+// Written beside the cloud file under a .nosync name (iCloud Drive does not upload those) and renamed over it: iCloud sees one whole new file.
+// The name is random and made with mkstemps (O_CREAT | O_EXCL): a link put at a predictable name in the shared folder (the process ID's, as it was) is never opened
+// and its target never truncated
 __attribute__((weak)) int front_save_sync_store(const char *local, const char *cloud) {
-    char part[PATH_MAX]; snprintf(part, sizeof part, "%s.%d.nosync", cloud, (int)getpid());
+    char part[PATH_MAX]; int n = snprintf(part, sizeof part, "%s.XXXXXXXX.nosync", cloud); if (n < 0 || (size_t)n >= sizeof part) return 0;
     int in = open(local, O_RDONLY); if (in < 0) return 0;
-    int out = open(part, O_WRONLY | O_CREAT | O_TRUNC, 0644); if (out < 0) { close(in); return 0; }
+    int out = mkstemps(part, 7); if (out < 0) { close(in); return 0; }
+    fchmod(out, 0644);
     int r = copy_fd(in, out);
     if (!r && fsync(out)) r = -1;
     close(in);

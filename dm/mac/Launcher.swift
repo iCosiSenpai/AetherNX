@@ -21,6 +21,7 @@ struct LauncherView: View {
     @AppStorage("cloudSaves.folder") private var cloudFolder = ""
     @StateObject private var nav = LauncherNav()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.openURL) private var openURL
 
     private let tint = GameTint.from(NSApp.applicationIconImage?.cgImage(forProposedRect: nil, context: nil, hints: nil))
 
@@ -39,6 +40,7 @@ struct LauncherView: View {
         if hasAdvanced { o.append(.advanced) }
         if CloudSavesSection.fixed == nil { o.append(.cloud); if !cloudFolder.isEmpty { o.append(.cloudOff) } }
         if m.changed { o.append(.reset) }
+        o += SupportLink.allCases.map { .support($0.rawValue) }
         o += [.showAtLaunch, .quit]
         return o
     }
@@ -99,6 +101,7 @@ struct LauncherView: View {
                     } footer: {
                         Text("Brings back every setting this game was tested with. Values set by an env file or at launch stay.")
                     }
+                    SupportSection(tint: tint) { nav.isFocused(.support($0.rawValue)) }
                 }
                 .formStyle(.grouped)
                 .onScrollGeometryChange(for: CGFloat.self) {
@@ -144,6 +147,7 @@ struct LauncherView: View {
                 case .cloudOff: cloudFolder = ""; nav.focus = .cloud
                 case .showAtLaunch: show.toggle()
                 case .quit: done(false)
+                case .support(let e): if let l = SupportLink(rawValue: e) { openURL(l.url) }
                 default: break
                 }
             }

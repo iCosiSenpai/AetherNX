@@ -17,13 +17,21 @@ static void aoc_load(void) {
     g_naoc = 0;
     const char *e = getenv("DM_AOC_OWNED"), *dir = getenv("DM_AOC_DIR"); const char *why = "no DM_AOC_DIR";
     if (e && !strcmp(e, "0")) why = "DM_AOC_OWNED=0";
-    else if (dir && *dir) {
-        why = dir; DIR *d = opendir(dir); struct dirent *ent;
-        while (d && (ent = readdir(d)) && g_naoc < (int)(sizeof g_aoc / sizeof *g_aoc)) {
-            char *end; long i = strtol(ent->d_name, &end, 10);
-            if (ent->d_name[0] >= '1' && ent->d_name[0] <= '9' && (!*end || !strcmp(end, ".img")) && i <= 2000) g_aoc[g_naoc++] = (int)i;
+    else if (dir && *dir) {   // every folder of the list (hle_fs.c aoc_dir: ':'-separated, the first holding an index wins when it is mounted)
+        why = dir;
+        for (const char *b = dir; b && *b; ) {
+            const char *sep = strchr(b, ':'); size_t len = sep ? (size_t)(sep - b) : strlen(b); char one[1024];
+            if (len && len < sizeof one) {
+                memcpy(one, b, len); one[len] = 0;
+                DIR *d = opendir(one); struct dirent *ent;
+                while (d && (ent = readdir(d)) && g_naoc < (int)(sizeof g_aoc / sizeof *g_aoc)) {
+                    char *end; long i = strtol(ent->d_name, &end, 10);
+                    if (ent->d_name[0] >= '1' && ent->d_name[0] <= '9' && (!*end || !strcmp(end, ".img")) && i <= 2000) g_aoc[g_naoc++] = (int)i;
+                }
+                if (d) closedir(d);
+            }
+            b = sep ? sep + 1 : NULL;
         }
-        if (d) closedir(d);
         qsort(g_aoc, g_naoc, sizeof *g_aoc, aoc_int_cmp);
         int unique = 0; for (int i = 0; i < g_naoc; i++) if (!i || g_aoc[i] != g_aoc[i - 1]) g_aoc[unique++] = g_aoc[i];
         g_naoc = unique;   // a legacy directory and its replacement image report the same DLC once

@@ -24,7 +24,7 @@ A controller that supplies gyro data through Apple's controller support (DualSen
 
 `DM_PHONE_MOTION=0` in `Documents/env.txt` stops the phone's gyro, `DM_MOTION=0` all motion. If motion misbehaves, pack with `--no-motion` (`MOTION = False` in Spyder) for an app without it; `DM_MOTION=1` in `Documents/env.txt` turns it back on.
 
-Switch Pro Controller gyro on the Mac still needs the HID support being developed in upstream PR #296.
+On the Mac, HorizonNative reads a Switch Pro Controller's gyro through its own passive HID adapter; hardware calibration and compatibility with every controller revision are still being validated. Report problems at [iCosiSenpai/HorizonNative](https://github.com/iCosiSenpai/HorizonNative/issues).
 
 **Shaking.** Shake the iPhone to shake the controller, in games that read its motion: Super Mario Odyssey's motion moves (such as the cap throw on a shake) need it, and Odyssey only takes them in its default docked mode. A light bump does not count; a sharp flick of the phone does.
 
@@ -38,7 +38,7 @@ Lines like `DM_OPMODE=0` (handheld mode: lower resolution, higher frame rate) in
 
 ## On the Mac
 
-A Mac app shows the game's settings in a window before the game starts ([The Mac settings window](settings.md#the-mac-settings-window)). Its `env.txt` is `~/Library/Application Support/HorizonNative/<title ID>/env.txt`, and its log is `~/Library/Logs/HorizonNative/<title ID>.log`. [NX2Apple](https://github.com/LNPANDY/NX2Apple)'s library can also start it with the settings you pick there.
+A Mac app shows the game's settings in a window before the game starts ([The Mac settings window](settings.md#the-mac-settings-window)). Its `env.txt` is `~/Library/Application Support/HorizonNative/<title ID>/env.txt`, and its log is `~/Library/Logs/HorizonNative/<title ID>.log`. The settings window remembers your choices for the next start.
 
 ## Shaders on first sight
 

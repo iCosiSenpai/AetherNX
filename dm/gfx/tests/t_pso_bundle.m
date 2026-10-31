@@ -122,13 +122,26 @@ int main(void) { @autoreleasepool {
     EXPECT("other depth mode: every pair", 3, pso_prebuild(1, 1, QOS_CLASS_USER_INITIATED));
     EXPECT("other depth mode: every base compiled", 3, g_pre_built);
     atomic_store(&g_depth_zero, 0);
+    // the bases that prebuild just built serve this run's draws at once: a lookup that may not compile (a hybrid draw's, hybrid_get) finds the main0_z base in the file the
+    // prebuild wrote a moment ago, without the archives being opened again (they used to join the lookups only at the next start)
+    @autoreleasepool {
+        id<MTLLibrary> vl = lib_from_file([msl stringByAppendingPathComponent:@"v1_bp.metallib"], NULL), fl = lib_from_file([msl stringByAppendingPathComponent:@"f1_b.metallib"], NULL);
+        MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+        d.vertexFunction = fn4_note([vl newFunctionWithName:@"main0_z"], vl, @"main0_z", nil); d.fragmentFunction = fn4_note([fl newFunctionWithName:@"main0"], fl, @"main0", nil);
+        d.vertexDescriptor = [MTLVertexDescriptor vertexDescriptor]; d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
+        uint64_t built0 = g_pb_built; NSError *err = nil;
+        EXPECT("same run: the prebuilt base serves a draw that may not compile", 1, pso_build_ex(d, &err, 0) != nil);
+        EXPECT("same run: nothing compiled for it", built0, g_pb_built);
+    }
     // other pairs (a second list): the device's prebuild runs and takes the bundled bases it finds
     [NSFileManager.defaultManager removeItemAtPath:[arch stringByAppendingPathComponent:@"prebuilt.tsv"] error:nil];
     put([tables stringByAppendingPathComponent:@"more.tsv"], @"v1\tf2\nv1\tfc\n"); setenv("DM_PSO_PAIRS", [tables stringByAppendingPathComponent:@"more.tsv"].UTF8String, 1);
     reset_counts();
     EXPECT("other pairs: every pair", 3, pso_prebuild(1, 1, QOS_CLASS_USER_INITIATED));
-    EXPECT("other pairs: two bases from the bundle", 2, g_pre_archived);
-    EXPECT("other pairs: one compiled", 1, g_pre_built);
+    // two bases in the bundle, the third (the function-constant pair) in the device's own file the covered prebuild above wrote: that file joined the lookups when it was
+    // written (arch_write), so this run reuses it instead of compiling it again
+    EXPECT("other pairs: every base found, two in the bundle and one in this run's own file", 3, g_pre_archived);
+    EXPECT("other pairs: none compiled again", 0, g_pre_built);
     unsetenv("DM_PSO_PAIRS");
     // a matching stamp but an archive without the bases (here: one of the device's own files): the probe finds none, so it is not trusted
     @autoreleasepool {

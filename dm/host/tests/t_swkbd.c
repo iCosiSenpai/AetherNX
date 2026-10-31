@@ -43,6 +43,13 @@ int main(void) {
     unsetenv("DM_KBD");
     static const uint16_t hero[] = {'H', 'e', 'r', 'o'};
 
+    printf("0 UTF-16 output into a String with room for less than one UTF-16 unit, then for one\n");
+    {
+        mkarg(0, 16, hero, 4); g_ret = 1; g_reply = "Hi"; str.n = 1;
+        CHECK(swkbd_show(&str, arg, stub) == 0 && sbuf[0] == 0 && sbuf[1] == 0xAA, "a 1-byte UTF-16 String gets only its byte cleared, nothing copied (the length used to wrap)");
+        mkarg(0, 16, hero, 4); g_ret = 1; g_reply = "Hi"; str.n = 4;
+        CHECK(swkbd_show(&str, arg, stub) == 0 && sbuf[0] == 'H' && sbuf[1] == 0 && sbuf[2] == 0 && sbuf[3] == 0 && sbuf[4] == 0xAA, "a 4-byte UTF-16 String gets one unit and its terminator");
+    }
     printf("1 OK, UTF-8 output (what the game actually uses)\n");
     mkarg(1, 16, hero, 4); g_ret = 1; g_reply = "Ünï\xE5\x90\x8D";   // reply with a CJK character (U+540D, UTF-8 escaped)
     Result r = swkbd_show(&str, arg, stub);

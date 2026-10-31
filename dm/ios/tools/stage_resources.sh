@@ -6,7 +6,9 @@ set -eu
 die() { echo "[RED] $*" >&2; exit 1; }
 [ "${PLATFORM_NAME:-}" = iphoneos ] || die 'This game needs a physical iPhone or iPad; choose a device, not a simulator.'
 [ -f "${SRCROOT:?}/Gen/resources.env" ] || die 'Missing game resource paths; run build_ipa_from_nsp.py --prepare-xcode first.'
-source "$SRCROOT/Gen/resources.env"
+# Read as data (read_resources.py: DM_RESOURCE_ names, one value each), never run as shell
+while IFS= read -r -d '' k && IFS= read -r -d '' v; do printf -v "$k" '%s' "$v"; done < <(python3 -I "$(dirname "$0")/read_resources.py" "$SRCROOT/Gen/resources.env")
+[ -n "${DM_RESOURCE_ROMFS:-}" ] || die 'Unreadable game resource paths (Gen/resources.env); run build_ipa_from_nsp.py --prepare-xcode again.'
 APP="${TARGET_BUILD_DIR:?}/${UNLOCALIZED_RESOURCES_FOLDER_PATH:?}"
 case "$APP" in /*.app) ;; *) die "Unexpected app resource destination: $APP";; esac
 # Validate every source before copying or removing anything (the external drive may be disconnected).

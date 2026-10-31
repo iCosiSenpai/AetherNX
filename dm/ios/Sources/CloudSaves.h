@@ -21,6 +21,21 @@ BOOL dm_store_cloud_saves(NSURL *url);
 void dm_clear_cloud_saves(void);
 
 /// Puts the picked folder into DM_SAVE_SYNC before the game starts (front_ios.m, at Play), its
-/// security scope held for the session. A DM_SAVE_SYNC from an env file or the launch environment
-/// wins. Turning cloud saves off in the launcher clears the one this set.
+/// security scope held for the session; without a pick, the app's iCloud container (below) while
+/// automatic iCloud is on. A DM_SAVE_SYNC from an env file or the launch environment wins. Turning
+/// cloud saves off in the launcher clears the one this set.
 void dm_cloud_saves_env(void);
+
+/// Automatic iCloud: a build signed with an iCloud container (DM_ICLOUD_CONTAINER, the maintainer's
+/// team) syncs through that container's Documents folder without a pick. iCloud Drive shows it as
+/// "HorizonNative" (Info.plist NSUbiquitousContainers), holding <title ID>/save.dmsync as a picked
+/// folder does, so the Mac app can choose iCloud Drive › HorizonNative. Resolved once at launch, off
+/// the main thread (the system may take a while): main.m calls dm_cloud_container_resolve, and the
+/// notification DMCloudContainerResolved follows on the main queue.
+void dm_cloud_container_resolve(void);
+/// The container's Documents folder, or nil: not signed with a container, no iCloud account, iCloud
+/// Drive off for this app, or not resolved yet.
+NSString *dm_cloud_container_path(void);
+/// Whether automatic iCloud is on (the default); the launcher's Turn Off sets it off, Use iCloud on.
+BOOL dm_cloud_auto(void);
+void dm_cloud_set_auto(BOOL on);
