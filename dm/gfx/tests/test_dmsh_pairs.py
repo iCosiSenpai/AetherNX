@@ -114,6 +114,9 @@ class Pairing(unittest.TestCase):
         self.assertNotEqual(v1, key('v', 'pkg.bin', b'vertex'))
         f1, f2 = key('f1', 'pkg.bin', b'pixel'), key('f1', 'pkg.bin', b'changed pixel')
         self.assertNotEqual(self.ns['pair_keyed'](v1, [f1]), self.ns['pair_keyed'](v1, [f2]))
+        self.ns['DUAL_WANT'].add('f1')
+        dual = key('f1', 'pkg.bin', b'pixel')
+        self.assertNotEqual(self.ns['pair_keyed'](v1, [f1]), self.ns['pair_keyed'](v1, [dual]))
 
     def test_dual_source_request_changes_only_listed_pixel_keys(self):
         # dual_want.tsv adds main0_d to a pixel shader (fs_dual): a cached build without it must not be restored once it is listed, nor the reverse

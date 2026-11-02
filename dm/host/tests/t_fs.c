@@ -5,18 +5,28 @@
 //   (3) transaction: the failure in (1) causes this transaction's Commit to be rejected and the working directory to return to the committed version; the next transaction writes in the working directory, the committed directory is still the old version before Commit and the new version after Commit;
 //   (4) DM_TEST_FS_FAIL=write:N:errno makes only the Nth save write fail, with writes before and after proceeding normally; that transaction's Commit is rejected, the committed version is unchanged, and the front end receives one notification;
 //      the next transaction commits normally, and the final save = the content of the next transaction;
-//   (5) remounting discards uncommitted content.
+//   (5) remounting discards uncommitted content;
+//   (8) a save folder that cannot clone (ENOTSUP: HFS+, exFAT) mounts read-only and tells the front end; recursive deletes unlink symlinks and never empty their targets.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <sys/clonefile.h>                // declared before the define, so only hle_fs.c's calls go to the fake
 static ssize_t fake_pwrite(int fd, const void *buf, size_t n, off_t off);
+static int fake_clonefile(const char *src, const char *dst, uint32_t flags);
 #define pwrite fake_pwrite
+#define clonefile fake_clonefile
 #include "../hle_fs.c"
 #undef pwrite
+#undef clonefile
 ssize_t pwrite(int, const void *, size_t, off_t);
+static int g_clone_enotsup;                   // 1: clonefile fails as on HFS+ and exFAT (ENOTSUP), checked on disk images of both
+static int fake_clonefile(const char *src, const char *dst, uint32_t flags) {
+    if (g_clone_enotsup) { errno = ENOTSUP; return -1; }
+    return clonefile(src, dst, flags);
+}
 
 struct dm_flags g_flag; uint64_t g_t0_ns; uint64_t now_ns(void) { return 0; }   // stubs for log timestamps and the read path (not used by the write path)
 void dm_guest_write_prepare(void *a, size_t n) { (void)a; (void)n; }
@@ -121,6 +131,22 @@ int main(void) {
             setenv("DM_AOC_DIR", "::", 1); CHECK(h_fs_MountAoc("aocx", 2, NULL, 0) == RES_TARGET_NOT_FOUND, "an empty list finds nothing");
         }
         unsetenv("DM_AOC_DIR"); g_nmnt = 0;
+        {   // a file written as read from a damaged NSP (nx_extract --allow-damaged) still reads, and the mount counts it and the first open names it once
+            romfs_img *clean = img_open(ip); CHECK(clean && !clean->damaged, "a clean image has no damaged files"); romfs_image_close(clean);
+            e[2].flags = IMG_ENT_DAMAGED; memcpy(img + 39, e, sizeof e);
+            f = fopen(ip, "wb"); fwrite(img, 1, sizeof img, f); fclose(f);
+            CHECK(h_fs_MountRom("rom", NULL, 0) == RES_OK && g_mnt[0].img && g_mnt[0].img->damaged == 1, "a damaged file mounts, and is counted");
+            CHECK(g_mnt[0].img->e[2].flags == IMG_ENT_DAMAGED, "not named before its first open");
+            CHECK(read_fs("rom:/data/c", got, sizeof got) && !strcmp(got, "xy") && g_mnt[0].img->e[4].flags == 0, "opening a clean file names nothing");
+            CHECK(read_fs("rom:/data/a", got, sizeof got) && !strcmp(got, "hello") && g_mnt[0].img->e[2].flags == (IMG_ENT_DAMAGED | IMG_ENT_REPORTED), "the damaged file reads as written, and is named");
+            CHECK(read_fs("rom:/data/a", got, sizeof got) && !strcmp(got, "hello"), "and reads again");
+            g_nmnt = 0;
+            e[2].flags = 2; memcpy(img + 39, e, sizeof e); f = fopen(ip, "wb"); fwrite(img, 1, sizeof img, f); fclose(f);
+            CHECK(!img_open(ip), "an unknown flag on a file is refused");
+            e[2].flags = 0; e[1].flags = IMG_ENT_DAMAGED; memcpy(img + 39, e, sizeof e); f = fopen(ip, "wb"); fwrite(img, 1, sizeof img, f); fclose(f);
+            CHECK(!img_open(ip), "a damaged flag on a directory is refused");
+            e[1].flags = 0; memcpy(img + 39, e, sizeof e);
+        }
         f = fopen(ip, "wb"); fwrite(img, 1, 39 + 50, f); fclose(f);   // cut off inside the index, as a copy stopped partway
         CHECK(!img_open(ip), "a cut-off image is refused");
     }
@@ -256,6 +282,25 @@ int main(void) {
         h = 0; CHECK(h_fs_OpenDirectory(&h, "save:\\dir", DIRMODE_FILE) == RES_OK && h_fs_ReadDirectory(&cnt, de, h, 4) == RES_OK && cnt == 1 && !strcmp(de[0].name, "g"), "the directory lists g, not a name with backslashes (%s)", cnt ? de[0].name : "-"); h_fs_CloseDirectory(h);
     }
 
+    printf("⑧ a save folder that cannot clone, and symlinks in recursive deletes\n");
+    {   g_nmnt = 0; g_clone_enotsup = 1; int nf1 = g_nfail;
+        CHECK(h_fs_MountSave("save", NULL) == RES_OK && g_mnt[0].ro && g_nfail == nf1 + 1, "clonefile ENOTSUP: the committed save mounts read-only and the front end is told once");
+        CHECK(read_fs("save:/a", got, sizeof got) && !strcmp(got, "ok6"), "the committed save still reads (a = %s)", got);   // ok6: the last commit of ⑥'s link cases
+        CHECK(write_save("save:/a", "lost") != RES_OK, "a write is refused");
+        snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok6"), "committed a is still ok6");
+        g_clone_enotsup = 0; g_nmnt = 0;
+        CHECK(h_fs_MountSave("save", NULL) == RES_OK && !g_mnt[0].ro, "with cloning back, the save mounts writable");
+        char victim[1100], vf[1200], lnk[1200];
+        snprintf(victim, sizeof victim, "%s/victim", root); mkdir(victim, 0755); snprintf(vf, sizeof vf, "%s/keep", victim); put(vf, "keep");
+        CHECK(h_fs_CreateDirectory("save:/d") == RES_OK, "create save:/d");
+        snprintf(lnk, sizeof lnk, "%s/d/lnk", work); CHECK(symlink(victim, lnk) == 0, "a symlink to a directory outside the save inside save:/d");
+        CHECK(h_fs_DeleteDirRec("save:/d") == RES_OK && access(lnk, F_OK) && same(vf, "keep"), "DeleteDirectoryRecursively removes the symlink, not its target's files");
+        CHECK(h_fs_CreateDirectory("save:/d") == RES_OK && symlink(victim, lnk) == 0, "the same again in a new save:/d");
+        CHECK(h_fs_CleanDirRec("save:/d") == RES_OK && access(lnk, F_OK) && same(vf, "keep"), "CleanDirectoryRecursively removes the symlink, not its target's files");
+        snprintf(lnk, sizeof lnk, "%s/lnk2", root); symlink(victim, lnk); errno = 0;
+        struct stat lst;   // hle_fs.c rm_tree: a path that is itself a link loses only the link (a leftover save.work / save.new link must not block the commit)
+        CHECK(rm_tree(lnk) == 0 && lstat(lnk, &lst) && errno == ENOENT && same(vf, "keep"), "rm_tree of a symlink to a directory removes the link only and leaves the target alone");
+    }
 
     char cmd[1200]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", root); system(cmd);
     printf("== %d checks, %d failed ==\n", checks, fails);

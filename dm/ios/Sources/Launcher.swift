@@ -71,6 +71,14 @@ private struct CloudSavesSection: View {
                 }
                 Button(state.folder.isEmpty ? "Choose a Folder in iCloud Drive…" : "Choose a Different Folder…") { state.picking = true }
                     .focusRing(focused, tint)
+                    // The sheet sits on the button, not on the Section: SwiftUI hands a Section's modifiers to every row, so one tap presented a picker per row and they invalidated each other (LNPANDY/NX2Apple#315).
+                    .sheet(isPresented: $state.picking) {
+                        DocumentPicker(types: [.folder]) { url in
+                            state.picking = false
+                            if dm_store_cloud_saves(url) { state.note = "Saved. The game uses this folder when you press Play."; state.refresh() }
+                            else { state.note = "That folder could not be remembered. Try a different one." }
+                        } onCancel: { state.picking = false }
+                    }
                 if !state.container.isEmpty && !state.usingICloud {
                     Button("Use iCloud Automatically") { state.useICloud() }
                         .focusRing(autoFocused, tint)
@@ -88,13 +96,6 @@ private struct CloudSavesSection: View {
                  : "Choose a folder in iCloud Drive, and the same one in the Mac app's Cloud Saves. The save comes in when the game starts and goes out after each save; a save that is replaced is kept in save-backups.")
         }
         .id("cloud")
-        .sheet(isPresented: $state.picking) {
-            DocumentPicker(types: [.folder]) { url in
-                state.picking = false
-                if dm_store_cloud_saves(url) { state.note = "Saved. The game uses this folder when you press Play."; state.refresh() }
-                else { state.note = "That folder could not be remembered. Try a different one." }
-            } onCancel: { state.picking = false }
-        }
     }
 }
 

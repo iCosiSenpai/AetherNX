@@ -12,6 +12,7 @@ A dot beside a setting means it differs from the game's tested default; touch an
 - [Performance](#performance): [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
 - [The in-game menu](#the-in-game-menu): [Controllers during play](#controllers-during-play), [Touch controls](#touch-controls)
 - [The Mac settings window](#the-mac-settings-window): [Display mode](#display-mode), [The Mac Controllers menu](#the-mac-controllers-menu)
+- [TV](#tv)
 - [Cloud saves](#cloud-saves), [Add-on content bought later](#add-on-content-bought-later), [Support the project](#support-the-project)
 - [Settings in a file](#settings-in-a-file)
 
@@ -293,6 +294,10 @@ On the Mac, put the files in `~/Library/Application Support/HorizonNative/<title
 ## Support the project
 
 HorizonNative is free and made by [iCosiSenpai](https://github.com/iCosiSenpai). At the bottom of every game's settings screen (on the iPhone and in the Mac window), **Support HorizonNative** opens the project on [GitHub](https://github.com/iCosiSenpai/HorizonNative) and the donation pages on [PayPal](https://paypal.me/AlessioCosi) and [Buy Me a Coffee](https://buymeacoffee.com/icosisenpai).
+
+## TV
+
+Connect a TV or monitor by cable, or start Screen Mirroring to an Apple TV or AirPlay TV. The game fills it in 16:9 at up to 1080p and switches to **Docked**; the iPhone or iPad keeps the controls. Disconnect to bring the game back to the device in its earlier mode. AirPlay adds some delay; a cable has almost none.
 
 ## Settings in a file
 

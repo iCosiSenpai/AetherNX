@@ -42,7 +42,7 @@ int main(void) { @autoreleasepool {
     c = bind_stages(&other, 0x3);   // crashed in keys_hash before: the new combination re-read the freed program's stages
     CHECK(c == &other, "the stages left on the freed program are unbound: the new program alone is effective");
     CHECK(!S.bst[2] && !S.bst[3] && !S.bst[4], "geometry and tessellation are unbound");
-    CHECK(g_red_once[134] == 3, "reported (once in the log; counted per stage)");
+    CHECK(g_red_once[143] == 3, "reported (once in the log; counted per stage)");
     NvProg *eff = c ? prog_get(c) : nil;
     CHECK(eff == pother, "the effective program's shaders are its own");
 

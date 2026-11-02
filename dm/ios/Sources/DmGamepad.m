@@ -28,6 +28,7 @@
 #include "haptics_apple.h"
 #include "motion_apple.h"
 #include "motion_fusion.h"
+#include "pad_apple.h"
 #include "pad_slots.h"
 #include "pad_map.h"
 #include "ingame.h"
