@@ -36,6 +36,7 @@ static void decode(int type, int format, const uint8_t *packet, int size) {
 static uint64_t test_now = 1000000000ull;
 uint64_t now_ns(void) { return test_now; }
 __thread _Atomic int dm_host_work;   // hle_thread.c
+__thread int dm_kill_hold;          // hle_thread.c
 static void playing(void) {
     static mdec_t video = { .type = MD_TYPE_VP9, .nout = MD_NOUT_VIDEO, .started = 1 }, audio = { .type = MD_TYPE_VORBIS, .nout = MD_NOUT, .started = 1 };
     pthread_mutex_init(&video.mu, NULL); pthread_mutex_init(&audio.mu, NULL);

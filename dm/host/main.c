@@ -8,6 +8,7 @@
 #include <sys/sysctl.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <setjmp.h>
 void probe_install(void); void hid_keys_init(void); void stubs_report(void); void crash_install(void); void guest_thread_init(void); void guest_gate_stack(int own_stack); uint32_t svc_thread_main_init(void);
 typedef void (*fn0)(void); typedef void (*fn2)(uint64_t, uint64_t); typedef void (*fnp)(void *);
 static void *req(const char *n){ void *p=guest_sym(n); if(!p) die("missing symbol %s", n); return p; }
@@ -38,6 +39,15 @@ static void guest_main(void) {
     { void dm_oodle_job_maybe(void); dm_oodle_job_maybe(); }   // DM_OODLE_JOB: decode a job file with the game's own Oodle and exit (hle_oodle.c, for the offline shader tools)
     LOG(">>> nnMain"); ((fn0)req("nnMain"))();
     LOG("nnMain returned");
+}
+// The program restart (hle_restart.c, nn::oe::ExecuteProgram): every guest thread ends, and the main guest thread comes back here from wherever it was (an SVC, a kernel wait, guest
+// code through the pause signal, or the ExecuteProgram call itself), always on a stack it does not need any more: its gate stack, above which this frame lives. It resets the program
+// and enters it again from its start, on the same thread (on iOS main.m's big-stack thread, in a headless Mac run the process's main thread)
+static jmp_buf g_restart_jb;
+void dm_main_restart_jump(void) { longjmp(g_restart_jb, 1); }
+static void guest_loop(void) {
+    if (setjmp(g_restart_jb)) { void dm_program_restart_run(void); dm_program_restart_run(); }
+    guest_main();
 }
 
 struct dm_flags g_flag;
@@ -140,6 +150,6 @@ int main(int argc, char **argv) {
         LOG("host loading already finished early in the background (dm_host_preload_start)");
     } else host_preload(argc, argv);
     { void dm_fps_state_apply(void); dm_fps_state_apply(); }   // frame rate and render scale into the frame step state page (loader.c): the iOS launcher sets them after the loading began
-    front_run(guest_main);
+    front_run(guest_loop);
     return 0;
 }

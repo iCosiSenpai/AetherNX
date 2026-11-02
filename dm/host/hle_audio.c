@@ -30,6 +30,8 @@ typedef struct {
     dispatch_semaphore_t notify_sem;
     pthread_t notify_th; _Atomic int notify_run, notify_pending, notify_armed;
     dispatch_semaphore_t rel_sem;      // Host outputs only (dm_pcmout_open): signaled for each release, so the in-process audio renderer blocks instead of polling (dm_pcmout_wait)
+    void *key;                         // what it is keyed by: the guest AudioOut, or dm_pcmout_open's host key (a program restart closes what is still open: audio_restart_release)
+    int host_key;
     int id;                            // open sequence number (#N in the log; tells simultaneous outputs apart, e.g. Engage's Wwise and Unity's built-in FMOD)
     int nlog;                          // Start / Stop / Close lines logged so far (at most 32 per output)
     _Atomic uint64_t under_n, under_b; // underruns: times the pending queue was empty when the callback needed data / zero-filled bytes
@@ -322,7 +324,7 @@ static Result au_open_at(void *g, void *ev, const char *name, const uint8_t *par
     // The count comes from the game's parameter: one past what the host's buffers hold (the silent sink's 5 ms block on its stack) would overrun them
     if (ch > AOUT_MAX_CH) die("AudioOut channel count %d not supported (at most %d)", ch, AOUT_MAX_CH);
     aout *a = calloc(1, sizeof *a);
-    pthread_mutex_init(&a->m, NULL); a->event = ev; a->ch = ch;
+    pthread_mutex_init(&a->m, NULL); a->event = ev; a->ch = ch; a->key = g;
     atomic_init(&a->state, STATE_STOPPED); atomic_init(&a->vol, 0x3f800000u);
     atomic_init(&a->q_head, 0); atomic_init(&a->q_tail, 0);
     atomic_init(&a->rel_head, 0); atomic_init(&a->rel_tail, 0);
@@ -490,7 +492,7 @@ HLE_FORCE("_ZN2nn5audio22GetAudioInSampleFormatEPKNS0_7AudioInE", "recording sam
 void *dm_pcmout_open(int ch) {
     void *key = calloc(1, 64); uint8_t param[8] = {0}; *(uint16_t *)(param + 4) = (uint16_t)ch;
     if (au_open_at(key, NULL, "AudioRenderer", param, NULL)) die("host PCM output cannot be opened");
-    ao(key)->rel_sem = dispatch_semaphore_create(0);
+    ao(key)->rel_sem = dispatch_semaphore_create(0); ao(key)->host_key = 1;
     return key;
 }
 // Wait until the output releases a block, at most ms milliseconds (spurious returns are fine: the caller checks dm_pcmout_released again)
@@ -534,3 +536,18 @@ void dm_audio_reset(void) {
     LOG("audio outputs set up again after the media services reset");
     pthread_mutex_unlock(&g_aos_lock);
 }
+
+// Program restart (hle_restart.c), RELEASE: the outputs the old program left open are closed as CloseAudioOut would (stopped, out of the registry, their helper threads joined); the
+// in-process renderer's own output too when its render thread ended inside the renderer (hle_audren.c stops it first). Guest memory still holds the AudioOut objects here
+static void audio_restart_release(void) {
+    for (;;) {
+        void *key = NULL; int host = 0;
+        pthread_mutex_lock(&g_aos_lock);
+        for (int i = 0; i < AOMAX && !key; i++) if (g_aos[i]) { key = g_aos[i]->key; host = g_aos[i]->host_key; }
+        pthread_mutex_unlock(&g_aos_lock);
+        if (!key) return;
+        LOG("restart: closing an audio output the program left open (%s)", host ? "the audio renderer's" : "the game's AudioOut");
+        if (host) dm_pcmout_close(key); else au_close(key, NULL);
+    }
+}
+DM_RESTART_HOOK(DM_RESTART_RELEASE, 30, audio_restart_release);

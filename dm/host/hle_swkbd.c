@@ -213,3 +213,7 @@ HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard12SetCursorPosEi", "inline keyboard: set 
 HLE_FORCE("_ZN2nn5swkbd14InlineKeyboard8GetImageEPvm", "inline keyboard image: none (returns false)", unsigned, h_ikb_GetImage, void *kb, void *buf, size_t n) { (void)kb; (void)buf; (void)n; return 0; }
 // The keyboard draws into a 1280 × 720 picture on hardware; Monster Hunter Rise makes three textures of this size for it (a 0 × 0 answer made its texture creation return null, then a null read at main+0x7713044)
 HLE_FORCE("_ZNK2nn5swkbd14InlineKeyboard13GetWindowSizeEPiS2_", "inline keyboard window size: 1280 × 720 as on hardware (no picture is ever delivered)", void, h_ikb_WinSize, const void *kb, int *w, int *h) { (void)kb; if (w) *w = 1280; if (h) *h = 720; }
+
+// Program restart (hle_restart.c), RESET: the inline keyboards were the old program's objects (and their callbacks its code)
+static void swkbd_restart_reset(void) { pthread_mutex_lock(&g_ikb_mu); memset(g_ikb, 0, sizeof g_ikb); pthread_mutex_unlock(&g_ikb_mu); }
+DM_RESTART_HOOK(DM_RESTART_RESET, 60, swkbd_restart_reset);

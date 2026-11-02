@@ -955,7 +955,17 @@ HLE_FORCE("_ZN2nn2fs12GetEntryTypeEPNS0_18DirectoryEntryTypeEPKc", "fsp-srv → 
 }
 
 // ---------- Directories ----------
-typedef struct { DIR *d; char path[1024]; DIR *od; char opath[1024]; DirectoryEntry *snap; int64_t nsnap, psnap; int mode; } dirh_t;
+typedef struct dirh { DIR *d; char path[1024]; DIR *od; char opath[1024]; DirectoryEntry *snap; int64_t nsnap, psnap; int mode; struct dirh *next, *prev; } dirh_t;
+// The open directory handles (a program restart closes those the old program left open: fs_restart_release)
+static dirh_t *g_dirs; static pthread_mutex_t g_dirs_mu = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t dir_open(dirh_t *h) { pthread_mutex_lock(&g_dirs_mu); h->next = g_dirs; h->prev = NULL; if (g_dirs) g_dirs->prev = h; g_dirs = h; pthread_mutex_unlock(&g_dirs_mu); return (uint64_t)h; }
+static void dir_free(dirh_t *h) {
+    pthread_mutex_lock(&g_dirs_mu);
+    if (h->prev) h->prev->next = h->next; else if (g_dirs == h) g_dirs = h->next;
+    if (h->next) h->next->prev = h->prev;
+    pthread_mutex_unlock(&g_dirs_mu);
+    if (h->d) closedir(h->d); if (h->od) closedir(h->od); free(h->snap); free(h);
+}
 static void dir_snapshot(dirh_t *h, const mount_t *m, const char *rest) {
     char fwd[1024]; rest = fwd_slashes(rest, fwd, sizeof fwd);
     char *roots = strdup(m->overlay);
@@ -1015,7 +1025,7 @@ HLE_FORCE("_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci", "fsp-srv → o
             memcpy(o->name, m->names + c->name, c->nlen < sizeof o->name ? c->nlen : sizeof o->name - 1);
             o->type = c->type ? ENT_FILE : ENT_DIR; o->size = c->type ? (int64_t)c->b : 0;
         }
-        *out = (uint64_t)h; return RES_OK;
+        *out = dir_open(h); return RES_OK;
     }
     HP(path); DIR *d = opendir(hp);
     if (!d) return err_res("opendir", hp);
@@ -1024,7 +1034,7 @@ HLE_FORCE("_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci", "fsp-srv → o
     if (c) for (int i = 0; i < g_nmnt; i++) if (g_mnt[i].overlay[0] && strlen(g_mnt[i].name) == (size_t)(c - path) && !strncmp(g_mnt[i].name, path, (size_t)(c - path))) {
         dir_snapshot(h, &g_mnt[i], c + 1); break;
     }
-    *out = (uint64_t)h; return RES_OK;
+    *out = dir_open(h); return RES_OK;
 }
 HLE_FORCE("_ZN2nn2fs13ReadDirectoryEPlPNS0_14DirectoryEntryENS0_15DirectoryHandleEl", "fsp-srv → readdir(3)", Result, h_fs_ReadDirectory, int64_t *count, DirectoryEntry *ents, uint64_t hh, int64_t max) {
     if (!hh) { *count = 0; return RES_FAIL; }
@@ -1046,7 +1056,7 @@ HLE_FORCE("_ZN2nn2fs13ReadDirectoryEPlPNS0_14DirectoryEntryENS0_15DirectoryHandl
 }
 HLE_FORCE("_ZN2nn2fs14CloseDirectoryENS0_15DirectoryHandleE", "fsp-srv → closedir(3)", void, h_fs_CloseDirectory, uint64_t hh) {
     if (!hh) return;   // the game also closes after a failed open (handle 0): nothing to do in the original either
-    dirh_t *h = (dirh_t *)hh; if (h->d) closedir(h->d); if (h->od) closedir(h->od); free(h->snap); free(h);
+    dir_free((dirh_t *)hh);
 }
 
 // ---------- Overloads from newer SDKs (SDK 16: MountRom without a cache, ReadFile without the bytes-read output / with read options, directory entry count) ----------
@@ -1079,3 +1089,20 @@ HLE_FORCE("_ZN2nn2fs18IsSaveDataExistingERKNS_7account3UidE", "fsp-srv; save dat
 HLE_FORCE("_ZN2nn2fs26SetPriorityOnCurrentThreadENS0_8PriorityE", "fsp-srv; file read priority, ignored by the host", void, h_fs_SetPrio, int prio) { (void)prio; }
 HLE_FORCE("_ZN2nn2fs6detail18IsEnabledAccessLogEj", "fsp-srv; access log always off (returns bool)", unsigned, h_fs_AccessLogMask, unsigned mask) { (void)mask; return 0; }
 HLE_FORCE("_ZN2nn2fs6detail18IsEnabledAccessLogEv", "fsp-srv; access log always off (returns bool)", unsigned, h_fs_AccessLog, void) { return 0; }
+
+// Program restart (hle_restart.c), RELEASE: the files and directories the old program left open are closed, as its process's end would. The mounts stay: the RomFS image, the saves
+// and the add-on content are the same for the next program, and a mount of a name already mounted is a no-op (mount_ex). A save's work directory keeps what the old program wrote and
+// did not commit (on Horizon the end of the process drops it)
+static void fs_restart_release(void) {
+    int nf = 0, nd = 0;
+    for (int fd = 0; fd < 65536; fd++) if (g_fmode[fd]) {
+        g_fmode[fd] = 0; atomic_store(&g_ftxn[fd], 0); atomic_store(&g_fstale[fd], 0); close(fd); nf++;
+    }
+    for (;;) {
+        pthread_mutex_lock(&g_dirs_mu); dirh_t *h = g_dirs; pthread_mutex_unlock(&g_dirs_mu);
+        if (!h) break;
+        dir_free(h); nd++;
+    }
+    if (nf || nd) LOG("restart: closed %d file(s) and %d directory handle(s) the program left open", nf, nd);
+}
+DM_RESTART_HOOK(DM_RESTART_RELEASE, 50, fs_restart_release);

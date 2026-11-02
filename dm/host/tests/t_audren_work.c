@@ -22,6 +22,7 @@ static void work_free(void *p) {
 #include "../hle_audren.c"
 #undef posix_memalign
 #undef free
+__thread int dm_kill_hold;   // hle_thread.c
 
 enum { SDK_WORK = 0x760000, SERVICE_WORK = 0x61d000 };
 static int opens, starts, joins, closes, fail_open, nested;

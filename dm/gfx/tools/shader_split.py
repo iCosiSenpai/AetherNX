@@ -42,6 +42,8 @@
 #   · Frostbite (EA SPORTS FC 27): the CompiledBytecode resources of the bundles its superbundle tables (.toc) list, in its cas files (Oodle Leviathan, decoded by the game's own decoder in the
 #       Mac host), each a VNVN record with one code area and control section (frostbite.py), see frostbite_jobs and frostbite_shaders
 #   · Unreal Engine 3 (Batman: Arkham Knight): shader records in its global shader cache (BMSG) and in the packages (the combined shader cache), whose compressed chunks are Oodle blocks decoded by the game's own decoder in the Mac host, see ue3_body and ue3_shaders
+#   · forge (Ubisoft's Scimitar engine, Assassin's Creed The Ezio Collection): NVN shader records (a control section, then its code area) in the material templates of the archives' datafiles,
+#       whose chunks are Oodle Leviathan / Mermaid decoded by the game's own decoder in the Mac host (forge.py), see forge_jobs and forge_shaders
 # Code area: 0x30 header + (graphics) 0x50 SPH + instructions; header magic 0x12345678 for graphics, 0x12345679 for compute. The control section starts with 0x98761234, +0x704 = code area length,
 #   +0x700 = start of the c1 constant segment within the code area; for compute +0x748 thread group xyz (u32 ×3), +0x754 shared memory bytes (checked one by one against PC reflection on D2R's 22 compute shaders).
 # Stage: BNSH uses the stage slot; BAHS uses bits 10..13 of SPH word 0 (1 vertex 2 hull 3 domain 4 geometry 5 pixel), and a compute header means compute.
@@ -1626,6 +1628,64 @@ def frostbite_shaders(path, rel, ents, out):
             if why: print(f'[RED] {label}: {why}; left out', flush=True); continue
             out.append((label, st, ctl, code))
 
+FORGE = 'Scimitar forge'
+def forge_jobs(files, parts=128):
+    """Ubisoft's .forge archives (Assassin's Creed The Ezio Collection: AC2's 27 in the RomFS, 5.5 GB, Brotherhood's and Revelations' 29 in add-on content 1, 6.8 GB; forge.py): their
+    datafiles, in ranges of about equal size over all archives. → ([(path, rel, (FORGE, ((name, file ID, offset, size), …) or None)), …], the paths taken). Every datafile is decoded: the
+    shaders are in the material templates, which the index does not tell from the rest (13 GB of AC2's datafiles decode in 12 s with 8 workers). An archive forge.py cannot list is one
+    job with no datafiles, which scan_file reports as unreadable: its datafiles are Oodle chunks, which a loose scan would read nothing from"""
+    import forge
+    lists, taken = [], set()
+    for p, r in files:
+        if not p.endswith('.forge'): continue
+        with open(p, 'rb') as f:
+            if f.read(9) != forge.MAGIC: continue
+        taken.add(p)
+        try: lists.append((p, r, forge.entries(p)))
+        except forge.Error as e: print(f'[RED] {e}', flush=True); lists.append((p, r, None))
+    step, jobs = sum(e[3] for _, _, es in lists if es for e in es) / parts, []
+    for p, r, es in lists:
+        if es is None: jobs.append((p, r, (FORGE, None))); continue
+        cur, size = [], 0
+        for e in es:
+            cur.append(e); size += e[3]
+            if size >= step: jobs.append((p, r, (FORGE, tuple(cur)))); cur, size = [], 0
+        if cur: jobs.append((p, r, (FORGE, tuple(cur))))
+    return jobs, taken
+
+def forge_shaders(path, rel, ents, out):
+    """A range of one forge archive's datafiles (forge_jobs), each decoded with the game's Oodle (forge.datafile) and its objects scanned for NVN shader records (forge.nvn_shaders):
+    a vertex or pixel shader each, which the engine combines per draw, so they are paired as single-stage programs (separable_pairs). A datafile forge.py cannot read is reported and
+    left out, and the range goes on. Labels: /<archive>/<datafile name, or its file ID when it has none>#FORGE@<object ID>+<control offset in the object>"""
+    import forge
+    if ents is None: red(f'{rel}: a forge archive forge.py cannot list'); return   # red() exits; the return tells the type checker
+    with open(path, 'rb') as f:
+        for e in ents:
+            where = f'/{rel}/{e[0] or f"{e[1]:#010x}"}'
+            try:
+                deps, d = forge.read(f, e)
+                r = forge.datafile(deps, d, oodle, where)
+                obs = forge.objects(*r, where) if r else []
+            except forge.Error as x: print(f'[RED] {x}; its shaders are left out', flush=True); continue
+            for oid, _, _, b in obs:
+                for o, ctl, code in forge.nvn_shaders(b):
+                    label = f'{where}#FORGE@{oid:08x}+{o:#x}'; st = glslc_stage(ctl, code)
+                    why = check(label, st, ctl, code) if st else 'no stage in the code area header'
+                    if why: print(f'[RED] {label}: {why}; left out', flush=True); continue
+                    out.append((label, st, ctl, code))
+
+def forge_main(img, label):
+    """The engine's built-in shaders in main, kept as forge shader records (forge.nvn_shaders): 232 in Assassin's Creed The Ezio Collection 1.3 (66 vertex, 158 pixel, 8 compute), which
+    raw_shaders cannot pair (no data record or code address leads to their code areas, and most are not 4-byte aligned). Read only when the game has forge archives"""
+    import forge
+    out = []
+    for o, ctl, code in forge.nvn_shaders(img):
+        where = f'{label}#FORGE@{o:#x}'; st = glslc_stage(ctl, code)
+        why = check(where, st, ctl, code) if st else 'no stage in the code area header'
+        if why: print(f'[RED] {where}: {why}; left out', flush=True); continue
+        out.append((where, st, ctl, code))
+    return out
+
 def smash_arc_jobs(files, parts=128):
     """Super Smash Bros. Ultimate's data.arc (17.6 GB, smash_arc.py): the game's current files, in ranges of about equal stored size. → ([(path, rel, entries), …], the paths taken)"""
     import smash_arc
@@ -2267,11 +2327,11 @@ def pixel_input_cover(shaders):
         k = min(ins, key=lambda k: (-len(ins[k] & left), k)); cover.append(k); left -= ins[k]
     return cover
 
-SINGLE_STAGE = ('#GLSLC@', '#UE', '#MTSPK@', '#MGFX@', '#NLG', '#PGSO', '#RAW@', '#TFXO@', '#NEEDLE@', '#SNOWDROP@', '#PHYRE@', '#SUMO@', '#NVNSH@')   # sources whose every shader is a program of one stage: GLSLC outputs, Unreal's shader records, MT Framework's shader package (BNSH variations, Unity programs, MSHD and SDF pair theirs);
+SINGLE_STAGE = ('#GLSLC@', '#UE', '#MTSPK@', '#MGFX@', '#NLG', '#PGSO', '#RAW@', '#TFXO@', '#NEEDLE@', '#SNOWDROP@', '#PHYRE@', '#SUMO@', '#NVNSH@', '#FORGE@')   # sources whose every shader is a program of one stage: GLSLC outputs, Unreal's shader records, MT Framework's shader package (BNSH variations, Unity programs, MSHD and SDF pair theirs);
 # Unreal Engine 3's shader caches (ue3_shaders, '#UE3@'); MonoGame's effects, whose passes may name no vertex shader and keep the one bound (Celeste: 10 of its 13 effects draw through SpriteBatch's vertex shader, which is in main); Next Level Games'
 # archives (Luigi's Mansion 3 makes 5,317 programs of one stage each at boot); PlatinumGames' shader objects (Bayonetta 3: one stage each, pg_shader); control sections loose in main
 # (Advance Wars 1+2: Re-Boot Camp's Bink shaders, raw_shaders), which no file pairs; YEBIS's effect file (tfxo_shaders); and Sumo's Ninty_NX descriptors and NVNsh records, one stage
-# each (Team Sonic Racing: 2,116 vertex and 2,399 pixel programs, sumo_shaders)
+# each (Team Sonic Racing: 2,116 vertex and 2,399 pixel programs, sumo_shaders); and the shader records of Ubisoft's forge archives, one stage each (forge_shaders)
 def separable_pairs(keys):
     """Single-stage programs (13 Sentinels: each GLSLC output becomes a program with one stage, and BindProgram's stage bits combine vertex and pixel programs per draw; Unreal combines its shaders per draw
     from the pipeline state) have their real pairs only at draw time. vs_pad uses only the union of the locations the paired pixel shaders read, so every single-stage vertex shader is paired with
@@ -2387,6 +2447,9 @@ def scan_file_in(args):
         return rel, uniq_keys(found), var_pairs(found), trees
     if len(args) > 2 and args[2][0] == FB_CAS:   # CompiledBytecode resources of a Frostbite cas file (frostbite_jobs)
         frostbite_shaders(path, rel, args[2][1], found)
+        return rel, uniq_keys(found), var_pairs(found), trees
+    if len(args) > 2 and args[2][0] == FORGE:   # datafiles of a Ubisoft forge archive (forge_jobs)
+        forge_shaders(path, rel, args[2][1], found)
         return rel, uniq_keys(found), var_pairs(found), trees
     if len(args) > 2 and head[:4] == PKZL:   # entries of a PlatinumGames PKZ (pkz_jobs)
         pkz_shaders(path, rel, args[2], found)
@@ -2524,6 +2587,7 @@ def main():
         found += glslc_shaders(img, 'main' + ('@' + tag if tag else ''), need=False)
         found += tfxo_streams(img, 'main' + ('@' + tag if tag else ''))   # YEBIS's effect file, a zlib stream in main (Pokémon Sword)
         found += retro_main_forms(img, 'main' + ('@' + tag if tag else ''))   # Retro's startup material archive, LZSS in main (Donkey Kong Country: Tropical Freeze)
+        if any(p.endswith('.forge') for p, _ in files): found += forge_main(img, 'main' + ('@' + tag if tag else ''))   # the Scimitar engine's built-in shader records (forge_main)
         found += raw_shaders(img, 'main' + ('@' + tag if tag else ''), {c for _, _, c, _ in found})
         # GLSLC outputs the game compiles at run time, captured on the Mac (hle_glslc.c): <version dir>/glslc_capture, or DM_GLSLC_CAPTURE. A game needs them when main holds GLSL sources and
         # calls glslcCompile in a module it loads (Fire Emblem: Three Houses; profile_guess.py shader_sources). Captain Toad: Treasure Tracker imports it with agl's GLSL sources, but no module defines it
@@ -2557,8 +2621,9 @@ def main():
     zp_jobs, zips = zip_jobs(files)   # Portal's game.zip (Deflate members)
     ah_jobs, arhs = arh_jobs(files)   # Monolith's ARH1/ARD archives and embedded XBC1/HCPS programs
     fb_jobs, fbs = frostbite_jobs(files)   # EA SPORTS FC 27's Frostbite bundles, Oodle Leviathan decoded by the game's own decoder in the Mac host
-    big += pak_jobs + tr_jobs + ue_jobs + bd_jobs + arc_jobs + pz_jobs + ck_jobs + zp_jobs + ah_jobs + fb_jobs
-    files = [(p, r) for p, r in files if not linkdata_jobs(p, r) and p not in paks and p not in trp and p not in uep and p not in bdts and p not in arcs and p not in pkzs and p not in cpks and p not in zips and p not in arhs and p not in fbs]
+    fg_jobs, fgs = forge_jobs(files)   # Assassin's Creed The Ezio Collection's forge archives, Oodle Leviathan / Mermaid decoded by the game's own decoder in the Mac host
+    big += pak_jobs + tr_jobs + ue_jobs + bd_jobs + arc_jobs + pz_jobs + ck_jobs + zp_jobs + ah_jobs + fb_jobs + fg_jobs
+    files = [(p, r) for p, r in files if not linkdata_jobs(p, r) and p not in paks and p not in trp and p not in uep and p not in bdts and p not in arcs and p not in pkzs and p not in cpks and p not in zips and p not in arhs and p not in fbs and p not in fgs]
     with cf.ProcessPoolExecutor(J, initializer=_pool_init, initargs=(common, {}, zdicts)) as ex:
         n = len(big) + len(files)
         results += pooled(ex, big, n) + pooled(ex, files, n, len(big), chunk=16)
@@ -2612,6 +2677,7 @@ def main():
                                             ('MT Framework SPK', any('#MTSPK@' in r[4] for r in rows)), ('MonoGame MGFX', any('#MGFX@' in r[4] for r in rows)),
                                             ('PlatinumGames shader objects', any('#PGSO' in r[4] for r in rows)),
                                             ('Snowdrop shader objects', any('#SNOWDROP@' in r[4] for r in rows)),
+                                            ('Scimitar forge shader records', any('#FORGE@' in r[4] for r in rows)),
                                             ('Unreal Engine shader code archives', any('#UE' in r[4] for r in rows))) if hit)
         f.write(f'# kind: evidence  {NOTE} ({kinds} in RomFS + main) → control section + code area keys (dm/gfx/tools/shader_split.py)\n')
         f.write('# column 5 records where each key first appears; no PC shader pairing supplied\n')

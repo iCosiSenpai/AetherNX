@@ -1,6 +1,6 @@
 # Settings
 
-The screen before the game starts shows the game, **Play**, and what Play starts it with. At the top are the game's icon, name and version, with **Play** beside them. Under them a row states the most used settings (Frame rate, Render scale, Console mode, Game language, Game rumble, when the game has them) and **Cloud saves**; tap one to go to its setting. The memory the system leaves the game is shown under **Reset to tested defaults**. Below, every setting the game supports is on one scrollable screen, under **Game**, **Controls** and **Performance**: tap a menu or move a slider there, no settings page needs opening. When you scroll down, the bar at the top keeps the game's name and a **Play** button. A setting that only matters while another is on appears under it and disappears when that one is turned off. **Upscaling** is in **Game**, beside **Console mode**. The app remembers your choices for the next start. A Mac app shows the same settings in a [window of its own](#the-mac-settings-window).
+The screen before the game starts shows the game, **Play**, and what Play starts it with. At the top are the game's icon, name and version, with **Play** beside them. Under them a row states the most used settings (Frame rate, Render scale, Console mode, Game language, Button layout, Game rumble, when the game has them) and **Cloud saves**; tap one to go to its setting. The memory the system leaves the game is shown under **Reset to tested defaults**. Below, every setting the game supports is on one scrollable screen, under **Game**, **Controls** and **Performance**: tap a menu or move a slider there, no settings page needs opening. When you scroll down, the bar at the top keeps the game's name and a **Play** button. A setting that only matters while another is on appears under it and disappears when that one is turned off. **Upscaling** is in **Game**, beside **Console mode**. The app remembers your choices for the next start. A Mac app shows the same settings in a [window of its own](#the-mac-settings-window).
 
 A dot beside a setting means it differs from the game's tested default; touch and hold it (right-click on the Mac) for **Use tested default**. A lock means a file or the program that started the app sets it ([Settings in a file](#settings-in-a-file)); a value there that the setting does not offer is shown as it is, with a warning, and the game gets it as the file says. The buttons and the summary row take the game icon's colour.
 
@@ -8,10 +8,10 @@ A dot beside a setting means it differs from the game's tested default; touch an
 
 - [Tested defaults](#tested-defaults)
 - [Game](#game): [Frame rate](#frame-rate), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Sharpness](#sharpness), [Pixels](#pixels), [Screen](#screen), [Game language](#game-language), [Frame-rate counter](#frame-rate-counter), [Texture filtering](#texture-filtering)
-- [Controls](#controls): [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff)
+- [Controls](#controls): [Controllers](#controllers), [Button layout](#button-layout), [Stick dead zone](#stick-dead-zone), [All controllers are player 1](#all-controllers-are-player-1), [Motion controls](#motion-controls), [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff)
 - [Performance](#performance): [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
-- [The in-game menu](#the-in-game-menu): [Touch controls](#touch-controls)
-- [The Mac settings window](#the-mac-settings-window): [Display mode](#display-mode)
+- [The in-game menu](#the-in-game-menu): [Controllers during play](#controllers-during-play), [Touch controls](#touch-controls)
+- [The Mac settings window](#the-mac-settings-window): [Display mode](#display-mode), [The Mac Controllers menu](#the-mac-controllers-menu)
 - [Cloud saves](#cloud-saves), [Add-on content bought later](#add-on-content-bought-later), [Support the project](#support-the-project)
 - [Settings in a file](#settings-in-a-file)
 
@@ -85,6 +85,28 @@ Textures seen at a slant (floors, roads, walls along the view) keep their detail
 - **Cost:** a little GPU time; 16× on an iPhone in long sessions may add heat.
 
 ## Controls
+
+### Controllers
+
+Any controller Apple's GameController framework supports can supply input through Bluetooth or a USB cable where the device supports it: Xbox Wireless / Series, DualSense, DualShock 4, Switch Pro Controller, Joy-Con and MFi controllers. Pair one in the system's Bluetooth settings, or plug it in. The app does not report which transport a controller uses.
+
+The Controls section in both launchers and the iPhone's in-game menu lists each connected controller's name, kind, battery level and charging state when available, and player. Each controller with an extended gamepad profile gets its own player, up to eight: player 1 first, then the next unused player. A reconnect matches its previous name; identical models can trade places because GameController supplies no identity across reconnects. Choose another player on a row to move it there, swapping with the controller already there. Launcher assignments apply to that start. A controller's player LEDs and, when available, light colour follow its player; nothing is restored on disconnect. The keyboard on Mac or touch controls on iPhone also play as player 1. Games that accept only player 1 receive the other controllers there too.
+
+### Button layout
+
+**Switch: A on the right**, the default (`DM_PAD_BUTTONS=position`), uses Switch positions on every controller: right A, bottom B, top X, left Y. **Xbox / PlayStation: A at the bottom** (`label`) follows the letters printed on an Xbox controller: bottom A, right B, left X, top Y; on PlayStation, cross is A, circle B, square X and triangle Y. Nintendo controllers keep Switch positions in either mode. Change it before starting or live in the iPhone's in-game menu or the Mac's Controllers menu.
+
+### Stick dead zone
+
+Ignores a circle around the centre of both physical sticks, from **0 to 30 %** (`DM_PAD_DEADZONE=0..0.3`), in 1 % steps; **0 %** is the default. Beyond the circle, travel is rescaled so its edge reads zero and full tilt still reads full. The touch stick is unaffected. Changes apply live in the in-game menus too.
+
+### All controllers are player 1
+
+Off by default (`DM_PAD_MERGE=0`). On (`1`), every controller feeds player 1; the last controller moved supplies the state. Player selection on controller rows is disabled while this is on. Applies when the game starts.
+
+### Motion controls
+
+On by default (`DM_MOTION=1`): controllers with a gyro, and the phone's gyro, supply live motion. Off (`0`) ignores both; the six-axis sensor stays flat, while shaking still works. Applies when the game starts. A build made with **--no-motion** keeps motion off through its bundled environment file; that fixed value is shown in the launcher.
 
 ### Touch feedback
 
@@ -214,6 +236,10 @@ While you play, the **menu button** at the top centre of the touch controls (thr
 
 With a controller: up and down move, left and right change the selected setting, A chooses, B resumes.
 
+### Controllers during play
+
+**Button layout** and **Stick dead zone** apply immediately and are saved with the launcher's choices. The connected-controller rows show name, kind, battery and player, and let you swap players while the game is paused. Values fixed by an environment file or at launch stay locked. Set **All controllers are player 1** and **Motion controls** before starting the game.
+
 ### Touch controls
 
 - **Layout**: **2D**, **3D** (adds the D-pad, a right stick in the right third of the screen and L3 / R3) and, in handheld mode, **Tap** (only the menu button; every touch goes to the game's touch screen).
@@ -226,7 +252,7 @@ Each game keeps its own choices. The touch controls hide while a controller is c
 
 ## The Mac settings window
 
-A Mac app ([A Mac app](development.md#a-mac-app)) shows its settings in a window before the game starts, laid out as the iPhone's screen: the game with **Play** at the top, the summary row, then the settings. They are the same settings as on the iPhone, with the same defaults. The window shows the most used ones first: **Frame rate**, **Render scale**, **Console mode**, **Game language**, **Display mode** and **Game rumble**, when the game has them. **Render scale** shows the picture's size in pixels beside the percentage for the chosen **Console mode**, when the game's profile has it (Breath of the Wild: 1600 × 900 docked, 1280 × 720 handheld at 100 %). Opening **Advanced settings** shows the others in the same sections; **Reset to tested defaults** is always at the bottom of the window. The window remembers whether Advanced settings is open. **Frame-rate counter** and **Touch feedback** are only on the iPhone.
+A Mac app ([A Mac app](development.md#a-mac-app)) shows its settings in a window before the game starts, laid out as the iPhone's screen: the game with **Play** at the top, the summary row, then the settings. They are the same settings as on the iPhone, with the same defaults. The window shows the most used ones first: **Frame rate**, **Render scale**, **Console mode**, **Game language**, **Display mode**, **Button layout** and **Game rumble**, when the game has them. **Render scale** shows the picture's size in pixels beside the percentage for the chosen **Console mode**, when the game's profile has it (Breath of the Wild: 1600 × 900 docked, 1280 × 720 handheld at 100 %). Opening **Advanced settings** shows the others in the same sections; **Reset to tested defaults** is always at the bottom of the window. The window remembers whether Advanced settings is open. **Frame-rate counter** and **Touch feedback** are only on the iPhone.
 
 Click **Play** (or press Return) to start the game. **Quit** (or Escape), ⌘Q or closing the window ends the app without the game. If the app's list of settings cannot be read (a damaged pack), the window says so: **Play** then starts the game with your saved choices and its tested defaults, as without the window; packing the game again brings the list back. The app remembers your choices for that game, and a game started without the window, from a front end or with the window turned off, uses them too ([Saved choices](frontends.md#saved-choices)). A setting fixed by an `env.txt` or by the program that started the app is shown greyed out.
 
@@ -235,6 +261,10 @@ Turn off **Show this window at launch** to start the game at once with your choi
 ### Display mode
 
 **Window** or **Fullscreen**: how the game's window opens. ⌃⌘F or the green button changes it while you play. In an `env.txt`: `DM_FULLSCREEN=1` or `0`.
+
+### The Mac Controllers menu
+
+In the Mac game window's menu bar, **Controllers** offers **Button layout** (Switch or Xbox / PlayStation) and **Stick dead zone** (0, 5, 10, 15 or 20 %). Each change applies immediately and, in a packed Mac app, is kept in the same preferences as its launcher; choosing the tested default removes the saved choice. Values fixed by an environment file or at launch stay locked, and `DM_SAVED_CHOICES=0` leaves saved choices alone. A bare development host without an app settings list applies changes for that run only. The launcher's slider also offers the other dead-zone values up to 30 %.
 
 ### Cloud saves folder
 

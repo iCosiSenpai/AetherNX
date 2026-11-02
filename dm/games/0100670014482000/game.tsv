@@ -1,0 +1,44 @@
+# Assassin's Creed The Ezio Collection: from the provisional profile scripts/build_ipa_from_nsp.py wrote (dm/games/profile_guess.py), in bring-up; see README.md
+# Not verified for gameplay: the memory keys are still the survey's guesses
+
+# ---- Identity ----
+title_id	0100670014482000
+program_id	0100670014482000
+
+# ---- App ----
+name	Assassin’s Creed® The Ezio Collection
+ipa	AssassinsCreedTheEzioCollection.ipa
+app_category	public.app-category.games
+
+# ---- Versions ----
+build	v196608	1.3	main=824b38a25986b2abf5b3a356430ee6b3	sdk=4fd34bc96c00201c47cd7ba4c71b41e3
+package	v196608
+shader_versions	v196608
+
+# ---- Files ----
+# every module main imports from
+modules	main sdk
+romfs_marker	AC2/DataNX_Firenze.forge
+zip_store	.bk2:.forge:.pck:.metallib
+
+# ---- Memory ----
+# main sets a heap of at most the pool − 64 MB: a 3328 MB heap region (guessed; the host gave 3.13 GB at boot)
+mem_reserve	0x100000000
+mem_alias	0x10000000
+mem_stack	0x10000000
+app_pool	0xCD500000
+# the NPDM declares 0 MB of system resource: IsVirtualAddressMemoryEnabled is false, as on Horizon
+sys_resource	0x0
+
+# ---- Graphics ----
+# the game sets near = 0 (nvnDeviceSetDepthMode at boot: "depth mode: near=0"), for the pipeline bases made before it runs
+depth_mode	zero
+
+# ---- Shader split ----
+# AC2's forge archives in the RomFS, Brotherhood's and Revelations' in add-on content 1 (ACB/)
+shader_groups	/AC2/=ac2 /AC2_PATCH/=ac2patch /ACB/=acb
+shader_note	Assassin's Creed The Ezio Collection shaders
+
+# ---- After the rewrite ----
+# used memory for the current rewritten modules, at least the default 64 MB
+mem_used	0x5000000

@@ -104,14 +104,18 @@ HLE_FORCE("_ZN2nn2oe15EnableRecordingEv", "video recording switch; the host has 
 // Applet resource user ID (ARUID, the number am assigns to this process): the host has no am, and the SDK's own getter returns 0. SDK 20's OpenAudioRenderer (the CPU rendering + manual execution path, sdk+0x221730)
 //   aborts when it gets 0 (The Legend of Zelda: Breath of the Wild 1.9.0); SDK 16 did not check. Report a fixed non-zero ID, used only as an identifier
 HLE_FORCE("_ZN2nn6applet23GetAppletResourceUserIdEv", "applet resource user ID; the host returns a fixed non-zero value", uint64_t, h_applet_Aruid, void) { return 0x80; }
-// Launch parameter (present only when another program launched this one with one; returns bool): the host never passes one
-HLE_FORCE("_ZN2nn2oe21TryPopLaunchParameterEPmPvm", "launch parameter: none", unsigned, h_oe_PopLaunchParam, size_t *out, void *buf, size_t n) { (void)buf; (void)n; if (out) *out = 0; return 0; }
+// Launch parameter (present only when another program launched this one with one; returns bool): what ExecuteProgram passed, once (hle_restart.c)
+int dm_launch_param_pop(size_t *out, void *buf, size_t n); int dm_program_previous_index(void); void dm_program_execute(int index, const void *param, size_t n);
+HLE_FORCE("_ZN2nn2oe21TryPopLaunchParameterEPmPvm", "launch parameter: the one ExecuteProgram passed, once (hle_restart.c)", unsigned, h_oe_PopLaunchParam, size_t *out, void *buf, size_t n) {
+    return (unsigned)dm_launch_param_pop(out, buf, n);
+}
 // Tears of the Kingdom (SDK 20.5.22): the index of the program that launched this one in a multi-program application. The SDK asks the applet proxy, which the host never opens
-// (null read in applet::GetPreviousProgramIndex right after the window setup); -1 = launched from the home menu
-HLE_FORCE("_ZN2nn2oe23GetPreviousProgramIndexEv", "previous program index: launched from HOME, -1", int, h_oe_PrevProgram, void) { return -1; }
-// Launch another program of a multi-program application (Octopath Traveler 0 imports it); on hardware it does not return. The host has only this program: logged, and the game carries on
-HLE_FORCE("_ZN2nn2oe14ExecuteProgramEiPKvm", "launch another program of the application: the host runs only this one (logged)", void, h_oe_ExecProgram, int index, const void *param, size_t n) {
-    (void)param; LOG("[RED] oe::ExecuteProgram(%d, %zu bytes of parameters): the host runs only this program; the game carries on", index, n);
+// (null read in applet::GetPreviousProgramIndex right after the window setup); -1 = launched from the home menu, else the program whose ExecuteProgram restarted this one
+HLE_FORCE("_ZN2nn2oe23GetPreviousProgramIndexEv", "previous program index: -1 (HOME), or the program that restarted this one (hle_restart.c)", int, h_oe_PrevProgram, void) { return dm_program_previous_index(); }
+// Launch a program of a multi-program application; on hardware it does not return. Program 0 is restarted inside this process with the parameter (hle_restart.c: Assassin's Creed
+// The Ezio Collection starts each game from its menu this way); another index is not packed and restarts program 0 without the parameter (Octopath Traveler 0 imports it too)
+HLE_FORCE("_ZN2nn2oe14ExecuteProgramEiPKvm", "launch a program of the application: program 0 restarts in this process with the parameter (hle_restart.c)", void, h_oe_ExecProgram, int index, const void *param, size_t n) {
+    dm_program_execute(index, param, n);
 }
 HLE_FORCE("_ZN2nn2oe16DisableRecordingEv", "video recording switch; the host has no system recording", void, h_oe_DisableRec, void) {}
 // Silence the game's sound in system video captures (through am; FINAL FANTASY RESONANCE imports both): the host records nothing
@@ -223,6 +227,8 @@ HLE_FORCE("_ZN2nn2oe22PopNotificationMessageEv", "system notification queue (blo
     for (;;) {
         pthread_mutex_lock(&g_mq_lock);
         while (!g_mqn) {
+            int dm_thread_killed(void);
+            if (dm_thread_killed()) { pthread_mutex_unlock(&g_mq_lock); dm_thread_terminate_self(); }   // a program restart (oe_restart_wake)
             dm_thread_native_wait(1);
             pthread_cond_wait(&g_mq_cond, &g_mq_lock);
             dm_thread_native_wait(0);
@@ -264,3 +270,16 @@ HLE_FORCE("_ZN2nn2oe17GetPseudoDeviceIdEPNS_4util4UuidE", "pseudo device ID; a f
     static const uint8_t k[16] = {0x78, 0x62, 0x6c, 0x00, 0x53, 0x57, 0x4e, 0x41, 0x54, 0x49, 0x56, 0x45, 0x31, 0x30, 0x30, 0x31};
     memcpy(uuid, k, 16);
 }
+
+// Program restart (hle_restart.c). STOP: the blocking pop above waits on the host queue, outside the kernel's waits: wake it, so a thread there sees it is ending. RESET: what the
+// program set or opened goes (the notification switches, the focus handling mode, the notification event, which lived in the handle table, and the queue); the operation mode and
+// the front end's focus are the device's and stay
+static void oe_restart_wake(void) { pthread_mutex_lock(&g_mq_lock); pthread_cond_broadcast(&g_mq_cond); pthread_mutex_unlock(&g_mq_lock); }
+DM_RESTART_HOOK(DM_RESTART_STOP, 50, oe_restart_wake);
+static void oe_restart_reset(void) {
+    pthread_mutex_lock(&g_mq_lock); g_mqh = g_mqn = 0; pthread_mutex_unlock(&g_mq_lock);
+    atomic_store(&g_mq_ev_on, 0); g_ntf_opmode = g_ntf_perfmode = 0; atomic_store(&g_focus_mode, -1);
+    g_inactivity_mode = 0; g_nosleep = 0; g_cpu_oc = 0;
+    pthread_mutex_lock(&g_seen_lock); g_applets = 0; atomic_store(&g_seen, atomic_load(&g_focus)); pthread_mutex_unlock(&g_seen_lock);
+}
+DM_RESTART_HOOK(DM_RESTART_RESET, 50, oe_restart_reset);

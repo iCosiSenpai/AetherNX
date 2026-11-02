@@ -28,6 +28,14 @@ void dm_pad_set_visible(int on);
 void dm_pad_reset_layout(void);             // positions, size, opacity and visibility back to the defaults
 int dm_pad_controller_in_use(void);         // a physical controller is connected (the touch controls are hidden meanwhile)
 
+// Physical controllers (DmGamepad.m), also the launcher's list; controller is a GCController pointer, player is 0..7.
+int dm_pad_buttons(void);
+void dm_pad_set_buttons(int label);
+float dm_pad_deadzone(void);
+void dm_pad_set_deadzone(float amount);
+int dm_pad_controller_player(const void *controller);
+int dm_pad_controller_move(const void *controller, int player);   // swaps both input / motion / rumble routes, 0 if unavailable or merged
+
 // The front end (front_ios.m)
 int front_fps_counter(void);
 void front_set_fps_counter(int on);

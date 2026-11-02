@@ -112,20 +112,28 @@ HLE_FORCE("nvnBootstrapLoader", "the NVN graphics API is replaced wholesale with
 #define B(x) ((x) & 0xff)
 
 #include "nvn_obj.h"
+#include "nvn_hmap.h"
+// Live NVN objects, for a program restart (hle_restart.c): every object a program initialized and has not finalized, keyed by its address, with its kind and creation order. The
+// restart finalizes what the old program left, newest first and dependents before what they use, as a game tearing down its renderer would; the content-keyed caches (shader
+// libraries, pipelines) stay. Texture and sampler pools have nothing to finalize (their Finalize is empty): their descriptor tables start over (nvn_restart_release)
+enum { LV_CMD = 1, LV_SYNC, LV_EVENT, LV_PROG, LV_SAMP, LV_TEX, LV_BUF, LV_POOL, LV_QUEUE, LV_DEV };   // teardown order
+static nvn_hmap g_lv = {.klen = 8}; static pthread_mutex_t g_lv_mu = PTHREAD_MUTEX_INITIALIZER; static uint64_t g_lv_seq;
+static void lv_add(int kind, const void *o) { pthread_mutex_lock(&g_lv_mu); nvn_hm_put(&g_lv, &o, (void *)(uintptr_t)(++g_lv_seq << 8 | (uint64_t)kind)); pthread_mutex_unlock(&g_lv_mu); }
+static void lv_del(const void *o) { pthread_mutex_lock(&g_lv_mu); nvn_hm_del(&g_lv, &o); pthread_mutex_unlock(&g_lv_mu); }
 #include "nvn_capture.h"   // DM_NVN_CAPTURE hooks
 
 // ---------- Device ----------
 NVN(nvnDeviceBuilderSetDefaults, void, NVNdeviceBuilder *b) { memset(b, 0, sizeof(dev_builder_t)); }
 NVN(nvnDeviceBuilderSetFlags, void, NVNdeviceBuilder *b, int f) { ((dev_builder_t *)b)->flags = f; }
-NVN(nvnDeviceInitialize, NVNboolean, NVNdevice *d, const NVNdeviceBuilder *b) {
+NVN(nvnDeviceInitialize, NVNboolean, NVNdevice *d, const NVNdeviceBuilder *b) { lv_add(LV_DEV, d);
     dev_t_ *o = (dev_t_ *)d; memset(o, 0, sizeof *o);
     o->magic = MAGIC('D', 'E', 'V', 0); o->flags = ((const dev_builder_t *)b)->flags;
     o->origin = NVN_WINDOW_ORIGIN_MODE_LOWER_LEFT; mtl_set_origin_lower_left(1);   // NVN's default; every game so far switched to upper-left right away, Link's Awakening keeps it
-    mtl_set_depth_zero(0);   // NVN's default depth mode: near = -w (GL)
+    mtl_set_depth_default();   // NVN's default depth mode: near = -w (GL)
     OLOG("DeviceInitialize %p flags=%#x", (void *)d, o->flags);
     return 1;
 }
-NVN(nvnDeviceFinalize, void, NVNdevice *d) { ((dev_t_ *)d)->magic = 0; }
+NVN(nvnDeviceFinalize, void, NVNdevice *d) { lv_del(d); ((dev_t_ *)d)->magic = 0; }
 NVN(nvnDeviceGetProcAddress, PFNNVNGENERICFUNCPTRPROC, const NVNdevice *d, const char *name) {
     (void)d; return (PFNNVNGENERICFUNCPTRPROC)nvn_lookup(name);
 }
@@ -199,7 +207,7 @@ NVN(nvnMemoryPoolBuilderSetDevice, void, NVNmemoryPoolBuilder *b, NVNdevice *d) 
 NVN(nvnMemoryPoolBuilderSetStorage, void, NVNmemoryPoolBuilder *b, void *m, size_t n) { ((pool_builder_t *)b)->mem = m; ((pool_builder_t *)b)->size = n; }
 NVN(nvnMemoryPoolBuilderSetFlags, void, NVNmemoryPoolBuilder *b, int f) { ((pool_builder_t *)b)->flags = f; }
 static uint8_t *vpool_reserve(pool_t *o); static void vpool_release(pool_t *o);   // sparse virtual pools, see MapVirtual
-NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBuilder *b) {
+NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBuilder *b) { lv_add(LV_POOL, p);
     const pool_builder_t *s = (const pool_builder_t *)b; pool_t *o = (pool_t *)p;
     o->magic = MAGIC('P', 'O', 'O', 'L'); o->flags = s->flags; o->mem = s->mem; o->size = s->size; o->vp = NULL; o->vmode = 0;
     if (!o->mem && (o->flags & 0x200)) { uint8_t *vr = vpool_reserve(o); if (vr) o->mem = vr; }   // a virtual pool's own address range until its first mapping decides (see MapVirtual)
@@ -210,7 +218,7 @@ NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBu
     return 1;
 }
 static void fl_add(const uint8_t *a, uint64_t n); static void fl_drop(const uint8_t *a, uint64_t n);   // flushed ranges, see nvn_flushed
-NVN(nvnMemoryPoolFinalize, void, NVNmemoryPool *p) { if (((pool_t *)p)->flags & 0x200 && ((pool_t *)p)->vp) vpool_release((pool_t *)p);
+NVN(nvnMemoryPoolFinalize, void, NVNmemoryPool *p) { lv_del(p); if (((pool_t *)p)->flags & 0x200 && ((pool_t *)p)->vp) vpool_release((pool_t *)p);
     if (((pool_t *)p)->mem && !(((pool_t *)p)->flags & 0x200)) {   // A virtual pool's storage is borrowed from a physical pool; do not unregister it
  nvn_dirty_remove_range(((pool_t *)p)->mem); mtl_pool_del(((pool_t *)p)->mem); fl_drop(((pool_t *)p)->mem, ((pool_t *)p)->size); } mtl_alias_drop_pool(p); ((pool_t *)p)->magic = 0; }
 static void ft_flush(const uint8_t *a, uint64_t n);
@@ -456,7 +464,7 @@ int nvn_flushed(const void *p, uint64_t n) {   // whether the CPU flushed any of
     pthread_mutex_unlock(&g_fl_mu);
     return r;
 }
-NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b) {
+NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b) { lv_add(LV_TEX, t);
     const tex_builder_t *s = (const tex_builder_t *)b; tex_t *o = TX(t);
     // Re-initializing a texture object that is still live (without a Finalize first): release the host texture of the old serial first. SMBW re-initializes its transient render targets on the same object every frame and never Finalizes them;
     //   previously every init created a new private MTLTexture and the old one stayed in the serial table forever, so GPU memory grew about 13 MB per frame (killed by the memory watchdog at 24 GB)
@@ -484,7 +492,7 @@ NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b)
     ft_add(o);
     return 1;
 }
-NVN(nvnTextureFinalize, void, NVNtexture *t) { ft_del(TX(t)->serial); mtl_tex_release(TX(t)); TX(t)->magic = 0; }
+NVN(nvnTextureFinalize, void, NVNtexture *t) { lv_del(t); ft_del(TX(t)->serial); mtl_tex_release(TX(t)); TX(t)->magic = 0; }
 NVN(nvnTextureGetFlags, NVNtextureFlags, const NVNtexture *t) { return (NVNtextureFlags)CTX(t)->d.flags; }
 NVN(nvnTextureGetWidth, int, const NVNtexture *t) { return (int)CTX(t)->d.width; }
 NVN(nvnTextureGetHeight, int, const NVNtexture *t) { return (int)CTX(t)->d.height; }
@@ -584,17 +592,17 @@ NVN(nvnSamplerBuilderGetWrapMode, void, const NVNsamplerBuilder *b, NVNwrapMode 
 NVN(nvnSamplerBuilderGetLodClamp, void, const NVNsamplerBuilder *b, float *lo, float *hi) {   // Bayonetta 3 reads it back while building its samplers
     const samp_par *o = &((const samp_builder_t *)b)->p; *lo = o->lod_min; *hi = o->lod_max;
 }
-NVN(nvnSamplerInitialize, NVNboolean, NVNsampler *s, const NVNsamplerBuilder *b) {
+NVN(nvnSamplerInitialize, NVNboolean, NVNsampler *s, const NVNsamplerBuilder *b) { lv_add(LV_SAMP, s);
     samp_t *o = (samp_t *)s; o->magic = MAGIC('S', 'M', 'P', 0); o->p = ((const samp_builder_t *)b)->p; return 1;
 }
-NVN(nvnSamplerFinalize, void, NVNsampler *s) { ((samp_t *)s)->magic = 0; }
+NVN(nvnSamplerFinalize, void, NVNsampler *s) { lv_del(s); ((samp_t *)s)->magic = 0; }
 
 // ---------- Programs ----------
-NVN(nvnProgramInitialize, NVNboolean, NVNprogram *p, NVNdevice *d) {
+NVN(nvnProgramInitialize, NVNboolean, NVNprogram *p, NVNdevice *d) { lv_add(LV_PROG, p);
     (void)d; memset(p, 0, sizeof(prog_t)); ((prog_t *)p)->magic = MAGIC('P', 'R', 'O', 'G'); return 1;
 }
 static void pk_drop(const void *p);
-NVN(nvnProgramFinalize, void, NVNprogram *p) { mtl_prog_release((prog_t *)p); ((prog_t *)p)->magic = 0; pk_drop(p); }
+NVN(nvnProgramFinalize, void, NVNprogram *p) { lv_del(p); mtl_prog_release((prog_t *)p); ((prog_t *)p)->magic = 0; pk_drop(p); }
 // a program's per-stage keys (side table: guest NVNprogram address → host object; bit i of ok = stage i computed)
 typedef struct { uint8_t key[6][8]; uint8_t ok; } prog_keys_t;
 static pthread_mutex_t g_pk_mu = PTHREAD_MUTEX_INITIALIZER; static CFMutableDictionaryRef g_pk;   // a dedicated table (keys not shared with other side tables)
@@ -634,7 +642,7 @@ static int keys_hash(const NVNshaderData *sd, int mapped, uint8_t out[8]) {
     return 1;
 }
 int prog_key(const prog_t *p, unsigned st, uint8_t key[8]) {
-    if (st >= p->nstage) return 0;
+    if (st >= p->nstage || st >= 6) return 0;   // 6: sd[] and prog_keys_t.key[] (a program object overwritten by other data has any nstage)
     prog_keys_t *k = pk_get(p, 1);
     if (!(k->ok >> st & 1)) { keys_hash(&p->sd[st], 0, k->key[st]); k->ok |= (uint8_t)(1u << st); }
     memcpy(key, k->key[st], 8);
@@ -668,8 +676,8 @@ NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData 
 }
 
 // ---------- Sync / events ----------
-NVN(nvnSyncInitialize, NVNboolean, NVNsync *s, NVNdevice *d) { (void)d; *(sync_t *)s = (sync_t){MAGIC('S', 'Y', 'N', 'C'), 0, 0}; return 1; }
-NVN(nvnSyncFinalize, void, NVNsync *s) { ((sync_t *)s)->magic = 0; }
+NVN(nvnSyncInitialize, NVNboolean, NVNsync *s, NVNdevice *d) { lv_add(LV_SYNC, s); (void)d; *(sync_t *)s = (sync_t){MAGIC('S', 'Y', 'N', 'C'), 0, 0}; return 1; }
+NVN(nvnSyncFinalize, void, NVNsync *s) { lv_del(s); ((sync_t *)s)->magic = 0; }
 NVN(nvnSyncSetDebugLabel, void, NVNsync *s, const char *l) { (void)s; (void)l; }
 // Fence = "all commands previously submitted to the queue have completed": record the fence value of the most recent submit
 NVN(nvnQueueFenceSync, void, NVNqueue *q, NVNsync *s, NVNsyncCondition c, int f) { (void)q; (void)c; (void)f; ((sync_t *)s)->fenced = 1; ((sync_t *)s)->fence = mtl_last_fence(); }
@@ -690,12 +698,12 @@ NVN(nvnSyncWait, NVNsyncWaitResult, const NVNsync *s, uint64_t timeout) {
 }
 NVN(nvnEventBuilderSetDefaults, void, NVNeventBuilder *b) { memset(b, 0, sizeof(ev_builder_t)); }
 NVN(nvnEventBuilderSetStorage, void, NVNeventBuilder *b, const NVNmemoryPool *p, int64_t off) { *(ev_builder_t *)b = (ev_builder_t){(const pool_t *)p, off}; }
-NVN(nvnEventInitialize, NVNboolean, NVNevent *e, const NVNeventBuilder *b) {
+NVN(nvnEventInitialize, NVNboolean, NVNevent *e, const NVNeventBuilder *b) { lv_add(LV_EVENT, e);
     const ev_builder_t *s = (const ev_builder_t *)b;
     if (!s->pool || !s->pool->mem) { LOG("[RED] EventInitialize has no storage"); return 0; }
     *(ev_t *)e = (ev_t){MAGIC('E', 'V', 'N', 'T'), (volatile uint32_t *)(s->pool->mem + s->off)}; return 1;
 }
-NVN(nvnEventFinalize, void, NVNevent *e) { ((ev_t *)e)->magic = 0; }
+NVN(nvnEventFinalize, void, NVNevent *e) { lv_del(e); ((ev_t *)e)->magic = 0; }
 NVN(nvnEventGetValue, uint32_t, const NVNevent *e) { return *((const ev_t *)e)->val; }
 static void ev_signal(const ev_t *e, int mode, uint32_t v) { if (mode == NVN_EVENT_SIGNAL_MODE_ADD) *e->val += v; else *e->val = v; }
 NVN(nvnEventSignal, void, NVNevent *e, NVNeventSignalMode m, uint32_t v) { ev_signal((const ev_t *)e, m, v); }
@@ -718,7 +726,7 @@ NVN(nvnQueueBuilderGetQueueMemorySize, size_t, const NVNqueueBuilder *b) {
     return (o->cmd_sz + o->comp_sz + o->ctl_sz + 4095) & ~(size_t)4095;
 }
 NVN(nvnQueueBuilderSetQueueMemory, void, NVNqueueBuilder *b, void *m, size_t n) { QB(b)->mem = m; QB(b)->mem_sz = n; }
-NVN(nvnQueueInitialize, NVNboolean, NVNqueue *q, const NVNqueueBuilder *b) {
+NVN(nvnQueueInitialize, NVNboolean, NVNqueue *q, const NVNqueueBuilder *b) { lv_add(LV_QUEUE, q);
     NVNdevice *d = ((const queue_builder_t *)b)->dev;
     // NVN emits SET_WINDOW_ORIGIN / FLIP_Y into the queue's initial GPU state.
     // Changing the device origin later changes viewport construction, but does
@@ -727,7 +735,7 @@ NVN(nvnQueueInitialize, NVNboolean, NVNqueue *q, const NVNqueueBuilder *b) {
                             !d || ((const dev_t_ *)d)->origin == NVN_WINDOW_ORIGIN_MODE_LOWER_LEFT, nvn_new_serial()};
     OLOG("QueueInitialize %p", (void *)q); return 1;
 }
-NVN(nvnQueueFinalize, void, NVNqueue *q) {
+NVN(nvnQueueFinalize, void, NVNqueue *q) { lv_del(q);
     pthread_mutex_lock(&g_sub_mu); mtl_queue_forget(((queue_t *)q)->serial); ((queue_t *)q)->magic = 0; pthread_mutex_unlock(&g_sub_mu);
 }
 NVN(nvnQueueGetError, NVNqueueGetErrorResult, NVNqueue *q, NVNqueueErrorInfo *info) {
@@ -746,10 +754,10 @@ NVN(nvnQueueFinish, void, NVNqueue *q) { (void)q; mtl_finish(); }
 // replay jumped to 0x1000000003 (that CALL record's header) after 8 to 30 minutes of play
 #define OP_RESERVE 16
 
-NVN(nvnCommandBufferInitialize, NVNboolean, NVNcommandBuffer *c, NVNdevice *d) {
+NVN(nvnCommandBufferInitialize, NVNboolean, NVNcommandBuffer *c, NVNdevice *d) { lv_add(LV_CMD, c);
     memset(c, 0, sizeof(cmd_t)); CB(c)->magic = MAGIC('C', 'M', 'D', 'B'); CB(c)->dev = d; return 1;
 }
-NVN(nvnCommandBufferFinalize, void, NVNcommandBuffer *c) { CB(c)->magic = 0; }
+NVN(nvnCommandBufferFinalize, void, NVNcommandBuffer *c) { lv_del(c); CB(c)->magic = 0; }
 NVN(nvnCommandBufferSetMemoryCallback, void, NVNcommandBuffer *c, PFNNVNCOMMANDBUFFERMEMORYCALLBACKPROC cb) { CB(c)->cb = cb; }
 NVN(nvnCommandBufferSetMemoryCallbackData, void, NVNcommandBuffer *c, void *d) { CB(c)->cb_data = d; }
 static uint8_t *align8(uint8_t *p) { return (uint8_t *)(((uintptr_t)p + 7) & ~(uintptr_t)7); }
@@ -1964,7 +1972,7 @@ typedef struct { uint32_t magic; const pool_t *pool; int64_t off; uint64_t size;
 NVN(nvnBufferBuilderSetDefaults, void, NVNbufferBuilder *b) { NVNdevice *d = BB(b)->dev; memset(b, 0, sizeof(buf_builder_t)); BB(b)->dev = d; }
 NVN(nvnBufferBuilderSetDevice, void, NVNbufferBuilder *b, NVNdevice *d) { BB(b)->dev = d; }
 NVN(nvnBufferBuilderSetStorage, void, NVNbufferBuilder *b, NVNmemoryPool *p, ptrdiff_t off, size_t n) { BB(b)->pool = (const pool_t *)p; BB(b)->off = off; BB(b)->size = n; }
-NVN(nvnBufferInitialize, NVNboolean, NVNbuffer *buf, const NVNbufferBuilder *b) {
+NVN(nvnBufferInitialize, NVNboolean, NVNbuffer *buf, const NVNbufferBuilder *b) { lv_add(LV_BUF, buf);
     const buf_builder_t *bb = (const buf_builder_t *)b;
     if (!bb->pool || !bb->pool->mem) { LOG("[RED] BufferInitialize: pool has no storage (pool %p flags %#x offset %#llx size %#llx)", (const void *)bb->pool, bb->pool ? bb->pool->flags : 0, (unsigned long long)bb->off, (unsigned long long)bb->size); return 0; }
     // The NVN driver does not check a buffer's range against its pool, and the host's own GPU access never goes by the buffer: it takes an address and a length from the command (mtl_addr resolves it
@@ -1975,7 +1983,7 @@ NVN(nvnBufferInitialize, NVNboolean, NVNbuffer *buf, const NVNbufferBuilder *b) 
     OLOG("BufferInitialize %p pool=%p off=%#llx size=%#llx", (void *)buf, (const void *)bb->pool, (unsigned long long)bb->off, (unsigned long long)bb->size);
     return 1;
 }
-NVN(nvnBufferFinalize, void, NVNbuffer *buf) { ((buf_t *)buf)->magic = 0; }
+NVN(nvnBufferFinalize, void, NVNbuffer *buf) { lv_del(buf); ((buf_t *)buf)->magic = 0; }
 NVN(nvnBufferSetDebugLabel, void, NVNbuffer *buf, const char *s) { (void)buf; (void)s; }
 NVN(nvnBufferGetAddress, NVNbufferAddress, const NVNbuffer *buf) { return (NVNbufferAddress)(BF(buf)->pool->mem + BF(buf)->off); }
 // A buffer or pool the CPU has no access to (NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS) maps to NULL, as in NVN, though the host's storage is CPU memory: EA SPORTS FC 27's Frostbite
@@ -2633,3 +2641,52 @@ int nvn_host_signal_sync(void *nvnsync) {
     o->fence = 0; o->fenced = 1; return 0;
 }
 NVN(nvnTextureFlushTexels, void, const NVNtexture *t, const NVNtextureView *v, const NVNcopyRegion *r) { (void)t; (void)v; (void)r; }   // unified memory + dirty page tracking: nothing to flush
+
+// ---------- Program restart (hle_restart.c) ----------
+// RELEASE: every guest thread has ended, so no NVN call is in flight; the GPU work is drained (the background suspend's way), then the objects the old program left are finalized from
+// the ledger (lv_add), newest first and dependents before what they use. One whose memory no longer holds its kind's magic was freed or reused without a Finalize and is skipped (a
+// texture the game copied by value and finalized through the copy keeps its magic here; the release by serial is idempotent). The memory pools' Metal buffers over guest memory go with
+// them, before guest memory is mapped again. The descriptor pools' numbering and the host command segments start over. RESET, last: graphics resume for the new program
+typedef struct { const void *o; uint64_t v; } lv_ent;
+static int lv_cmp(const void *a, const void *b) {
+    uint64_t x = ((const lv_ent *)a)->v, y = ((const lv_ent *)b)->v; int kx = (int)(x & 0xff), ky = (int)(y & 0xff);
+    if (kx != ky) return kx < ky ? -1 : 1;
+    return x > y ? -1 : x < y;   // within a kind: newest first
+}
+static void nvn_restart_release(void) {
+    dm_gfx_suspend(1);
+    pthread_mutex_lock(&g_lv_mu);
+    lv_ent *e = calloc(g_lv.n ? g_lv.n : 1, sizeof *e); size_t n = 0;
+    if (!e) die("restart: NVN ledger allocation failed");
+    for (uint32_t i = 0; i < g_lv.cap; i++) if (g_lv.vals[i]) { memcpy(&e[n].o, g_lv.keys + (size_t)i * 8, 8); e[n++].v = (uint64_t)(uintptr_t)g_lv.vals[i]; }
+    nvn_hm_clear(&g_lv, NULL);
+    pthread_mutex_unlock(&g_lv_mu);
+    qsort(e, n, sizeof *e, lv_cmp);
+    static const uint32_t magic[] = {[LV_CMD] = MAGIC('C', 'M', 'D', 'B'), [LV_SYNC] = MAGIC('S', 'Y', 'N', 'C'), [LV_EVENT] = MAGIC('E', 'V', 'N', 'T'), [LV_PROG] = MAGIC('P', 'R', 'O', 'G'),
+                                     [LV_SAMP] = MAGIC('S', 'M', 'P', 0), [LV_TEX] = MAGIC('T', 'E', 'X', 0), [LV_BUF] = MAGIC('B', 'U', 'F', 0), [LV_POOL] = MAGIC('P', 'O', 'O', 'L'),
+                                     [LV_QUEUE] = MAGIC('Q', 'U', 'E', 'U'), [LV_DEV] = MAGIC('D', 'E', 'V', 0)};
+    unsigned done[LV_DEV + 1] = {0}, skipped = 0;
+    for (size_t i = 0; i < n; i++) {
+        int k = (int)(e[i].v & 0xff); void *o = (void *)e[i].o;
+        if (k < LV_CMD || k > LV_DEV || *(const uint32_t *)o != magic[k]) { skipped++; continue; }
+        switch (k) {
+        case LV_CMD: h_nvnCommandBufferFinalize(o); break;   case LV_SYNC: h_nvnSyncFinalize(o); break;       case LV_EVENT: h_nvnEventFinalize(o); break;
+        case LV_PROG: h_nvnProgramFinalize(o); break;        case LV_SAMP: h_nvnSamplerFinalize(o); break;     case LV_TEX: h_nvnTextureFinalize(o); break;
+        case LV_BUF: h_nvnBufferFinalize(o); break;          case LV_POOL: h_nvnMemoryPoolFinalize(o); break;  case LV_QUEUE: h_nvnQueueFinalize(o); break;
+        case LV_DEV: h_nvnDeviceFinalize(o); break;
+        }
+        done[k]++;
+    }
+    free(e);
+    pthread_mutex_lock(&g_dpool_mu); g_ntpb = g_nspb = g_tnext = g_snext = 0; pthread_mutex_unlock(&g_dpool_mu);
+    pthread_mutex_lock(&g_hostseg_mu);
+    for (int i = 0; i < g_nhostseg; i++) free(g_hostseg[i].mem);
+    g_nhostseg = 0; g_hostseg_bytes = 0;
+    pthread_mutex_unlock(&g_hostseg_mu);
+    mtl_drain();   // the pools' buffers go through the deferred release: let it run before guest memory is mapped again
+    LOG("restart: finalized the program's NVN objects: %u memory pools, %u textures, %u buffers, %u programs, %u samplers, %u command buffers, %u syncs, %u events, %u queues, %u devices (%u no longer live)",
+        done[LV_POOL], done[LV_TEX], done[LV_BUF], done[LV_PROG], done[LV_SAMP], done[LV_CMD], done[LV_SYNC], done[LV_EVENT], done[LV_QUEUE], done[LV_DEV], skipped);
+}
+DM_RESTART_HOOK(DM_RESTART_RELEASE, 10, nvn_restart_release);
+static void nvn_restart_resume(void) { dm_gfx_suspend(0); }
+DM_RESTART_HOOK(DM_RESTART_RESET, 95, nvn_restart_resume);

@@ -662,3 +662,11 @@ PALMA_FAIL("_ZN2nn3hid37SetPalmaDataBaseIdentificationVersionERKNS0_21PalmaConne
 PALMA_FAIL("_ZN2nn3hid19SuspendPalmaFeatureERKNS0_21PalmaConnectionHandleERKNS_4util10BitFlagSetILi32ENS0_12PalmaFeatureEEE", "feature suspension", h_hid_PalmaSuspend, const void *h, const void *f)
 PALMA_FAIL("_ZN2nn3hid16ReadPalmaPlayLogERKNS0_21PalmaConnectionHandleERKt", "play log read", h_hid_PalmaLogRead, const void *h, const uint16_t *i)
 PALMA_FAIL("_ZN2nn3hid17ResetPalmaPlayLogERKNS0_21PalmaConnectionHandleERKt", "play log reset", h_hid_PalmaLogReset, const void *h, const uint16_t *i)
+
+// Program restart (hle_restart.c), RESET: what the program set goes back to boot values (supported ids and styles, hold type, communication and handheld modes) and its style-change
+// events, which lived in its memory, are forgotten. The controllers connected (dm_pad_players) and their state are the device's and stay
+static void hid_restart_reset(void) {
+    atomic_store(&g_ids_supported, 0x3ff); g_styles_supported = 0xffffffffu; g_hold_type = 0; g_comm_mode = g_hh_mode = 0;
+    for (int i = 0; i < DM_PLAYERS; i++) atomic_store(&g_style_ev[i], NULL);
+}
+DM_RESTART_HOOK(DM_RESTART_RESET, 60, hid_restart_reset);

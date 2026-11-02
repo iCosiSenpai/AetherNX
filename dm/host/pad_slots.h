@@ -31,6 +31,15 @@ static int pad_slot_free(pad_slots *s, const void *owner) {
     int p = pad_slot_of(s, owner); if (p >= 0) s->owner[p] = NULL;
     return p;
 }
+static int pad_slot_move(pad_slots *s, const void *owner, int to) {
+    int from = pad_slot_of(s, owner); if (from < 0 || to < 0 || to >= DM_PLAYERS) return -1;
+    if (from == to) return to;
+    const void *other = s->owner[to]; char name[sizeof s->last[0]];
+    memcpy(name, s->last[to], sizeof name);
+    s->owner[to] = owner; memcpy(s->last[to], s->last[from], sizeof name);
+    s->owner[from] = other; memcpy(s->last[from], name, sizeof name);   // names follow the swap, so reconnects keep the chosen players
+    return to;
+}
 static uint32_t pad_slot_mask(const pad_slots *s) {   // bit p: slot p is held
     uint32_t m = 0; for (int i = 0; i < DM_PLAYERS; i++) if (s->owner[i]) m |= 1u << i;
     return m;

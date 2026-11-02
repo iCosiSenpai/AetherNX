@@ -20,6 +20,7 @@ struct LauncherView: View {
     @AppStorage("window.advanced") private var advanced = false
     @AppStorage("cloudSaves.folder") private var cloudFolder = ""
     @StateObject private var nav = LauncherNav()
+    @StateObject private var controllers = ControllerListModel()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openURL) private var openURL
 
@@ -36,7 +37,10 @@ struct LauncherView: View {
     private var focusOrder: [LauncherFocus] {
         var o: [LauncherFocus] = [.play]
         o += items.map(\.focus)
-        for section in drawnSections { o += drawnRows(section).map { .row($0.env) } }
+        for section in drawnSections {
+            o += drawnRows(section).map { .row($0.env) }
+            if section == "Controls" { o += controllers.rows.map { .controller($0.id) } }
+        }
         if hasAdvanced { o.append(.advanced) }
         if CloudSavesSection.fixed == nil { o.append(.cloud); if !cloudFolder.isEmpty { o.append(.cloudOff) } }
         if m.changed { o.append(.reset) }
@@ -45,10 +49,12 @@ struct LauncherView: View {
         return o
     }
 
+    private func start() { controllers.merge = m.values["DM_PAD_MERGE"] == "1"; controllers.apply(); done(true) }
+
     var body: some View {
         VStack(spacing: 0) {
             GameHeader(icon: Image(nsImage: NSApp.applicationIconImage), name: info("CFBundleName") ?? "Game", version: info("CFBundleShortVersionString") ?? "", iconSize: 64, stackBelow: 400) {
-                Button { done(true) } label: { Label("Play", systemImage: "play.fill").padding(.horizontal, 10).frame(minHeight: 24) }
+                Button(action: start) { Label("Play", systemImage: "play.fill").padding(.horizontal, 10).frame(minHeight: 24) }
                     .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).controlSize(.large)
                     .tint(tint.fill)
                     .keyboardShortcut(.defaultAction)
@@ -80,6 +86,7 @@ struct LauncherView: View {
                         if !rows.isEmpty {
                             Section(section) {
                                 ForEach(rows) { SettingRow(s: $0, m: m, tint: tint, focused: nav.isFocused(.row($0.env))) }
+                                if section == "Controls" { ConnectedControllers(controllers: controllers, tint: tint) { nav.isFocused(.controller($0)) } }
                             }
                         }
                     }
@@ -133,10 +140,14 @@ struct LauncherView: View {
         .background(Color(nsColor: .textBackgroundColor))   // the grouped Form's own ground, behind the header and the bottom bar too
         .onAppear {
             nav.order = { focusOrder }
-            nav.play = { done(true) }
-            nav.adjust = { f, d in if case .row(let e) = f, let s = m.settings.first(where: { $0.env == e }) { m.step(s, by: d) } }
+            nav.play = start
+            nav.adjust = { f, d in
+                if case .controller(let id) = f { controllers.step(id, d) }
+                if case .row(let e) = f, let s = m.settings.first(where: { $0.env == e }) { m.step(s, by: d) }
+            }
             nav.activate = { f in
                 switch f {
+                case .controller(let id): controllers.step(id, 1)
                 case .summary(let e): nav.focus = e == "cloud" ? .cloud : .row(e)
                 case .row(let e):
                     guard let s = m.settings.first(where: { $0.env == e }), s.kind != "range" else { return }
@@ -153,6 +164,11 @@ struct LauncherView: View {
             }
         }
         .task { await nav.run() }
+        .onChange(of: m.values["DM_PAD_MERGE"]) { _, v in controllers.merge = v == "1"; controllers.refresh() }
+        .task {
+            controllers.merge = m.values["DM_PAD_MERGE"] == "1"
+            while !Task.isCancelled { controllers.refresh(); try? await Task.sleep(for: .seconds(1)) }
+        }
     }
 
     @State private var choosing = false

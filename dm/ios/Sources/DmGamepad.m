@@ -29,6 +29,7 @@
 #include "motion_apple.h"
 #include "motion_fusion.h"
 #include "pad_slots.h"
+#include "pad_map.h"
 #include "ingame.h"
 #include <stdatomic.h>
 
@@ -626,6 +627,34 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
 static pad_slots g_slots;
 static GCController *g_held[DM_PLAYERS];   // the controller of each slot, kept alive while it holds it (the slot table keys on its pointer)
 static int g_merge;
+static int g_pad_label; static float g_pad_deadzone;
+int dm_pad_buttons(void) { return g_pad_label; }
+float dm_pad_deadzone(void) { return g_pad_deadzone; }
+static void pad_lights(GCController *c, int p) {
+    c.playerIndex = p < 4 ? (GCControllerPlayerIndex)p : GCControllerPlayerIndexUnset;   // GameController's player LEDs stop at player 4
+    float rgb[3]; pad_player_color(p, rgb);
+    c.light.color = [[GCColor alloc] initWithRed:rgb[0] green:rgb[1] blue:rgb[2]];
+}
+static NSArray<GCController *> *g_launch_order;
+static void pad_launch_players(void) {
+    const char *e = getenv("DM_PAD_PLAYERS"); if (!e) return;   // names plus connection order keep identical models distinct for this launch
+    NSData *data = [@(e) dataUsingEncoding:NSUTF8StringEncoding];
+    id players = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![players isKindOfClass:NSArray.class]) return;
+    NSArray<GCController *> *now = GCController.controllers; NSMutableArray<GCController *> *order = [NSMutableArray new];
+    for (int p = 0; p < DM_PLAYERS && p < (int)[players count]; p++) {
+        id row = players[p]; if (![row isKindOfClass:NSDictionary.class]) continue;
+        id name = row[@"name"], category = row[@"category"], index = row[@"index"];
+        if (![name isKindOfClass:NSString.class] || ![category isKindOfClass:NSString.class] || ![index isKindOfClass:NSNumber.class]) continue;
+        snprintf(g_slots.last[p], sizeof g_slots.last[p], "%s", [name UTF8String]);
+        NSInteger i = [index integerValue]; GCController *pick = i >= 0 && i < (NSInteger)now.count ? now[i] : nil;
+        BOOL (^matches)(GCController *) = ^BOOL(GCController *c) { return c.extendedGamepad && [(c.vendorName ?: @"Controller") isEqual:name] && [c.productCategory isEqual:category] && ![order containsObject:c]; };
+        if (!matches(pick)) { pick = nil; for (GCController *c in now) if (matches(c)) { pick = c; break; } }
+        if (pick) [order addObject:pick];
+    }
+    for (GCController *c in now) if (![order containsObject:c]) [order addObject:c];
+    g_launch_order = order;
+}
 static int32_t axis(float v) { return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * 32767); }
 // The in-game menu from a controller: its Home button (iOS's Games overlay is turned off for it, pad_keep_system_buttons), or − and + held together for half a second, for a
 // controller without Home. While the menu is up the game gets nothing from any controller: the menu reads them itself (InGameMenu.swift polls them)
@@ -651,31 +680,44 @@ static void read_pad(GCExtendedGamepad *g) {
     dm_haptics_apple_controller(p, g.controller);
     pad_menu_keys(g);
     if (atomic_load(&g_menu_open)) { dm_pad_set_player(p, 0, 0, 0, 0, 0); return; }
-    uint64_t m = 0;
+    uint64_t m = pad_map_buttons(g.buttonA.isPressed, g.buttonB.isPressed, g.buttonX.isPressed, g.buttonY.isPressed, g_pad_label, pad_is_nintendo(g.controller.productCategory.UTF8String, g.controller.vendorName.UTF8String));
     #define K(btn, bit) if (btn.isPressed) m |= 1ull << bit
-    K(g.buttonB, B_A); K(g.buttonA, B_B); K(g.buttonY, B_X); K(g.buttonX, B_Y);   // by position: right A, bottom B, top X, left Y
     K(g.leftShoulder, B_L); K(g.rightShoulder, B_R); K(g.leftTrigger, B_ZL); K(g.rightTrigger, B_ZR);
     K(g.buttonMenu, B_PLUS); if (g.buttonOptions) K(g.buttonOptions, B_MINUS);
     if (g.leftThumbstickButton) K(g.leftThumbstickButton, B_LS); if (g.rightThumbstickButton) K(g.rightThumbstickButton, B_RS);
     K(g.dpad.left, B_LEFT); K(g.dpad.up, B_UP); K(g.dpad.right, B_RIGHT); K(g.dpad.down, B_DOWN);
     #undef K
-    dm_pad_set_player(p, m, axis(g.leftThumbstick.xAxis.value), axis(g.leftThumbstick.yAxis.value), axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
+    float lx = g.leftThumbstick.xAxis.value, ly = g.leftThumbstick.yAxis.value, rx = g.rightThumbstick.xAxis.value, ry = g.rightThumbstick.yAxis.value;
+    pad_map_stick(&lx, &ly, g_pad_deadzone); pad_map_stick(&rx, &ry, g_pad_deadzone);
+    dm_pad_set_player(p, m, axis(lx), axis(ly), axis(rx), axis(ry));
+}
+void dm_pad_set_buttons(int label) {
+    g_pad_label = label != 0;
+    for (GCController *c in GCController.controllers) if (c.extendedGamepad) read_pad(c.extendedGamepad);
+}
+void dm_pad_set_deadzone(float amount) {
+    g_pad_deadzone = pad_deadzone_value(amount);
+    for (GCController *c in GCController.controllers) if (c.extendedGamepad) read_pad(c.extendedGamepad);
 }
 // Home and Capture: without this iOS takes them as system gestures (Home opens the Games overlay, Capture a screenshot); the app gives them no function
 static void pad_keep_system_buttons(GCController *c) { for (NSString *b in @[GCInputButtonHome, GCInputButtonShare]) c.physicalInputProfile.buttons[b].preferredSystemGestureState = GCSystemGestureStateDisabled; }
-static const char *pad_name(GCController *c) { return c.vendorName.UTF8String ?: "?"; }
+static const char *pad_name(GCController *c) { return c.vendorName.UTF8String ?: "Controller"; }
 static void npad_name(int p, char *out, size_t cap) { uint32_t id = dm_player_npad(p); if (id == 0x20) snprintf(out, cap, "handheld"); else snprintf(out, cap, "%u", id); }
 static void pads_start(void) {
+    const char *layout = getenv("DM_PAD_BUTTONS"), *deadzone = getenv("DM_PAD_DEADZONE");
+    g_pad_label = layout && !strcmp(layout, "label"); g_pad_deadzone = pad_deadzone_value(deadzone ? strtof(deadzone, NULL) : 0);
+    pad_launch_players();
     const char *e = getenv("DM_PAD_MERGE"); g_merge = e && atoi(e);
     LOG("front end: %s", g_merge ? "every controller is player 1 (DM_PAD_MERGE)" : "each controller is a player of its own, the touch gamepad plays with player 1");
 }
 // Called at start and on every connect / disconnect (gone: the controller that was just removed, nil otherwise); returns whether a controller is in use
 static BOOL pads_merged(GCController *gone) {
+    g_launch_order = nil;
     if (gone) { gone.extendedGamepad.valueChangedHandler = nil; dm_motion_detach(gone, 0); }
     BOOL any = NO; int motion = 0;
     for (GCController *c in GCController.controllers) if (c != gone && c.extendedGamepad) {
         if (c.motion.hasRotationRate) motion = 1;
-        any = YES; pad_keep_system_buttons(c); c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read_pad(g); };
+        any = YES; pad_keep_system_buttons(c); pad_lights(c, 0); c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read_pad(g); };
         dm_motion_attach(c, 0);   // every controller is player 1: the last one moved drives its six-axis sensor
         read_pad(c.extendedGamepad);
     }
@@ -693,10 +735,11 @@ static BOOL pads_slotted(GCController *gone) {
         pad_slot_free(&g_slots, (__bridge const void *)g_held[p]); g_held[p] = nil;
         dm_pad_set_player(p, 0, 0, 0, 0, 0);   // nothing stays pressed
     }
-    for (GCController *c in now) if (c.extendedGamepad && c != gone && pad_slot_of(&g_slots, (__bridge const void *)c) < 0) {
+    NSArray<GCController *> *ordered = g_launch_order ?: now; g_launch_order = nil;
+    for (GCController *c in ordered) if (c.extendedGamepad && c != gone && pad_slot_of(&g_slots, (__bridge const void *)c) < 0) {
         int p = pad_slot_take(&g_slots, (__bridge const void *)c, pad_name(c));
         if (p < 0) { LOG("controller '%s' connected: all %d players are taken, not used", pad_name(c), DM_PLAYERS); continue; }
-        g_held[p] = c; pad_keep_system_buttons(c);
+        g_held[p] = c; pad_keep_system_buttons(c); pad_lights(c, p);
         c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read_pad(g); };
         dm_motion_attach(c, p);
         npad_name(p, nb, sizeof nb); LOG("controller '%s' connected: player %d (npad %s)%s", pad_name(c), p + 1, nb, c.motion.hasRotationRate ? ", with motion (gyro)" : "");
@@ -704,6 +747,22 @@ static BOOL pads_slotted(GCController *gone) {
     }
     dm_pad_players(pad_slot_mask(&g_slots));
     return pad_slot_mask(&g_slots) != 0;
+}
+int dm_pad_controller_player(const void *controller) { return g_merge ? 0 : pad_slot_of(&g_slots, controller); }
+int dm_pad_controller_move(const void *controller, int to) {
+    int from = pad_slot_of(&g_slots, controller);
+    if (g_merge || from < 0 || to < 0 || to >= DM_PLAYERS) return 0;
+    if (from == to) return 1;
+    for (int p = 0; p < DM_PLAYERS; p++) if (p == from || p == to) {
+        dm_motion_detach(g_held[p], p); dm_haptics_apple_controller(p, nil); dm_pad_set_player(p, 0, 0, 0, 0, 0);
+    }
+    if (pad_slot_move(&g_slots, controller, to) < 0) return 0;
+    GCController *other = g_held[to]; g_held[to] = g_held[from]; g_held[from] = other;
+    for (int p = 0; p < DM_PLAYERS; p++) if ((p == from || p == to) && g_held[p]) {
+        pad_lights(g_held[p], p); dm_motion_attach(g_held[p], p); read_pad(g_held[p].extendedGamepad);
+    }
+    dm_pad_players(pad_slot_mask(&g_slots));
+    return 1;
 }
 - (void)padsChanged:(NSNotification *)note {
     GCController *c = note.object, *gone = [note.name isEqual:GCControllerDidDisconnectNotification] ? c : nil;
@@ -726,6 +785,7 @@ void dm_gamepad_reset(void) {   // On resign active: release everything (a key h
 void dm_gamepad_menu_open(int on) {   // front_ios.m: while the menu (or the layout editor it opens) is up nothing reaches the game; everything held is released first
     atomic_store(&g_menu_open, on);
     if (on) dm_gamepad_reset();
+    else for (GCController *c in GCController.controllers) if (c.extendedGamepad) read_pad(c.extendedGamepad);   // held sticks use live settings as soon as play resumes
 }
 void dm_pad_edit_begin(void (*done)(void)) { DmGamepad *v = g_view; if (v) [v editBegin:^{ if (done) done(); }]; else if (done) done(); }
 int dm_pad_layout(void) { DmGamepad *v = g_view; return v ? [v layoutIndex] : 0; }

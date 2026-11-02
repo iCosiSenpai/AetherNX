@@ -126,6 +126,14 @@ static void md_syms(void) {
     G.signal = msym("_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
 }
 static mdec_t *md_of(void **self) { return self ? (mdec_t *)self[1] : NULL; }
+// The decoders alive (their guest objects): a program restart destroys what the old program left (movie_restart_release)
+static void **g_live[64]; static int g_nlive; static pthread_mutex_t g_live_mu = PTHREAD_MUTEX_INITIALIZER;
+static void md_live(void **self, int add) {
+    pthread_mutex_lock(&g_live_mu);
+    if (add) { if (g_nlive < 64) g_live[g_nlive++] = self; else LOG("[RED] movie: more than 64 decoders alive, a program restart would leave the others running"); }
+    else for (int i = 0; i < g_nlive; i++) if (g_live[i] == self) { g_live[i] = g_live[--g_nlive]; break; }
+    pthread_mutex_unlock(&g_live_mu);
+}
 // An EventType pointer that can be signalled: 8-byte aligned and readable (vm_read_overwrite fails instead of faulting)
 static int ev_ok(const void *p) {
     uint64_t w; vm_size_t got = 0; uintptr_t a = (uintptr_t)p;
@@ -156,7 +164,7 @@ static struct { void *d; int ev; uint64_t due; } g_dfq[64]; static int g_ndfq, g
 static void md_defer_body(void *arg);
 static void md_defer_at(void *d, int ev, uint64_t due) {
     dm_host_lock(&g_dfmu);
-    if (!g_dfthr) { g_dfthr = 1; dm_guest_thread_spawn(md_defer_body, NULL, 16, 64 << 10); }
+    if (!g_dfthr) { g_dfthr = 1; dm_kill_hold++; dm_guest_thread_spawn(md_defer_body, NULL, 16, 64 << 10); dm_kill_hold--; }   // the SDK's CreateThread under g_dfmu
     for (int i = 0; i < g_ndfq; i++) if (g_dfq[i].d == d && g_dfq[i].ev == ev && g_dfq[i].due <= due) { pthread_mutex_unlock(&g_dfmu); return; }   // already due by then
     if (g_ndfq < 64) g_dfq[g_ndfq++] = (__typeof__(g_dfq[0])){d, ev, due};
     else LOG("[RED] movie: deferred event queue full, dropping one");
@@ -178,9 +186,10 @@ static void md_defer_body(void *arg) {
         if (k >= 0) {
             mdec_t *d = g_dfq[k].d; int e = g_dfq[k].ev;
             memmove(g_dfq + k, g_dfq + k + 1, (size_t)(--g_ndfq - k) * sizeof *g_dfq);
-            if (d->started) md_event(d, e);   // not after Stop: the game takes its events apart right after Stop (a Stop within 2 ms of a Flush let the deferred signal hit events being torn down)
+            if (d->started) { dm_kill_hold++; md_event(d, e); dm_kill_hold--; }   // guest code under g_dfmu (a program restart ends this thread after it, below); not after Stop: the game takes its events apart right after Stop (a Stop within 2 ms of a Flush let the deferred signal hit events being torn down)
             continue;
         }
+        { int dm_thread_killed(void); if (dm_thread_killed()) { g_dfthr = 0; pthread_mutex_unlock(&g_dfmu); dm_thread_terminate_self(); } }   // a program restart (movie_restart_stop)
         if (!next) pthread_cond_wait(&g_dfcv, &g_dfmu);
         else { uint64_t w = next - now; struct timespec ts = { (time_t)(w / 1000000000u), (long)(w % 1000000000u) }; pthread_cond_timedwait_relative_np(&g_dfcv, &g_dfmu, &ts); }
     }
@@ -512,6 +521,7 @@ HLE_FORCE("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11De
     if (pthread_create(&d->wk, &a, md_worker, d)) die("movie: failed to create the decoder thread");
     pthread_attr_destroy(&a);
     self[1] = d;
+    md_live(self, 1);
     LOG("[movie] decoder %p: type %d output %d mode %d priority %d", (void *)self, type, fmt, mode, prio);
 }
 // SDK 4's constructor has no priority argument (Dark Souls Remastered, NintendoSDK_movie 4.5.0). Without this take-over the SDK built its own decoder and the host's Configure read it as a host one (a call through a null pointer)
@@ -519,6 +529,7 @@ HLE_FORCE("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11De
           void **self, int type, int fmt, int mode) { h_movie_Decoder(self, type, fmt, mode, 0); }
 static void md_free(void **self) {
     mdec_t *d = md_of(self); if (!d) return;
+    md_live(self, 0);
     md_defer_drop(d);
     if (!MD_AUDIO(d)) atomic_store_explicit(&g_movie_pic_ns, 0, memory_order_relaxed);
     self[1] = NULL;
@@ -814,3 +825,17 @@ HLE_FORCE("_ZN5movie7Decoder24ReleaseOutputBufferIndexEi", "movie decoder: relea
     return 0;
 }
 HLE_FORCE("_ZN5movie7Decoder12GetLastErrorEv", "movie decoder: last error (none)", int, h_movie_LastErr, void **self) { (void)self; return 0; }
+
+// Program restart (hle_restart.c). STOP: the deferred-event thread waits in host code; woken here, it sees it is ending. RELEASE: the decoders the old program left are destroyed as their
+// destructor would (each joins its decoding thread; guest memory still holds their objects), and nothing deferred is left
+static void movie_restart_stop(void) { pthread_mutex_lock(&g_dfmu); pthread_cond_broadcast(&g_dfcv); pthread_mutex_unlock(&g_dfmu); }
+DM_RESTART_HOOK(DM_RESTART_STOP, 40, movie_restart_stop);
+static void movie_restart_release(void) {
+    for (;;) {
+        pthread_mutex_lock(&g_live_mu); void **self = g_nlive ? g_live[g_nlive - 1] : NULL; pthread_mutex_unlock(&g_live_mu);
+        if (!self) break;
+        md_free(self);
+    }
+    pthread_mutex_lock(&g_dfmu); g_ndfq = 0; g_dfthr = 0; pthread_mutex_unlock(&g_dfmu);
+}
+DM_RESTART_HOOK(DM_RESTART_RELEASE, 40, movie_restart_release);

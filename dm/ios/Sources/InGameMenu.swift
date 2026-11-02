@@ -37,14 +37,13 @@ import GameController
     func save(_ env: String, on: Bool) { save(env, on ? (byEnv[env]?.onValue ?? "1") : (byEnv[env]?.offValue ?? "0")) }
 }
 
-enum MenuItem: Hashable { case resume, upscale, sharpen, pixels, fit, fps, hud, aniso, metal4, layout, opacity, size, edit, haptics, shown, reset }
+enum MenuItem: Hashable { case controller(ObjectIdentifier), buttons, deadzone, resume, upscale, sharpen, pixels, fit, fps, hud, aniso, metal4, layout, opacity, size, edit, haptics, shown, reset }
 
 /// The menu's values. Each change goes to the host or the touch controls at once (ingame.h) and is kept
 @MainActor @Observable final class InGameMenuModel {
     let choices = LauncherChoices()
     let upscaleSupported = dm_present_upscale_supported() != 0
     let tapAllowed = dm_pad_tap_allowed() != 0
-    let controllerInUse = dm_pad_controller_in_use() != 0
 
     var upscale = dm_present_upscale() != 0 { didSet { dm_present_set_upscale(upscale ? 1 : 0); choices.save("DM_PRESENT_UPSCALE", upscale ? "metalfx" : "off") } }
     var sharpen = Double(dm_present_sharpen()) { didSet { dm_present_set_sharpen(Float(sharpen)); choices.save("DM_PRESENT_SHARPEN", String(format: "%.2f", sharpen)) } }
@@ -54,6 +53,9 @@ enum MenuItem: Hashable { case resume, upscale, sharpen, pixels, fit, fps, hud, 
     var metalHUD = front_metal_hud() != 0 { didSet { front_set_metal_hud(metalHUD ? 1 : 0); choices.save("DM_METAL_HUD", on: metalHUD) } }
     var aniso: String { didSet { choices.save("DM_ANISO", aniso) } }   // next start
     var metal4: Bool { didSet { choices.save("DM_PSO_MTL4", on: metal4) } }   // next start
+
+    var buttonsByLabel = dm_pad_buttons() != 0 { didSet { guard !choices.isFixed("DM_PAD_BUTTONS") else { return }; dm_pad_set_buttons(buttonsByLabel ? 1 : 0); choices.save("DM_PAD_BUTTONS", buttonsByLabel ? "label" : "position") } }
+    var deadzone = Double(dm_pad_deadzone()) { didSet { guard !choices.isFixed("DM_PAD_DEADZONE") else { return }; dm_pad_set_deadzone(Float(deadzone)); choices.save("DM_PAD_DEADZONE", String(format: "%.2f", deadzone)) } }
 
     var layout = Int(dm_pad_layout()) { didSet { if layout != oldValue { dm_pad_set_layout(Int32(layout)) } } }
     var opacity = Double(dm_pad_opacity()) { didSet { dm_pad_set_opacity(Float(opacity)) } }
@@ -79,7 +81,7 @@ enum MenuItem: Hashable { case resume, upscale, sharpen, pixels, fit, fps, hud, 
         var o: [MenuItem] = [.resume, .upscale, .sharpen, .pixels, .fit, .fps]
         if choices.offers("DM_METAL_HUD") { o.append(.hud) }
         if !anisoOptions.isEmpty { o.append(.aniso) }
-        o += [.layout, .opacity, .size, .edit, .haptics, .shown, .reset]
+        o += [.buttons, .deadzone, .layout, .opacity, .size, .edit, .haptics, .shown, .reset]
         if choices.offers("DM_PSO_MTL4") { o.append(.metal4) }
         return o
     }
@@ -93,6 +95,9 @@ enum MenuItem: Hashable { case resume, upscale, sharpen, pixels, fit, fps, hud, 
     func step(_ item: MenuItem, _ d: Int) {
         func clamp(_ v: Double, _ lo: Double, _ hi: Double) -> Double { min(hi, max(lo, v)) }
         switch item {
+        case .buttons: if !choices.isFixed("DM_PAD_BUTTONS") { buttonsByLabel = d > 0 }
+        case .deadzone: if !choices.isFixed("DM_PAD_DEADZONE") { deadzone = clamp(((deadzone + Double(d) * 0.01) * 100).rounded() / 100, 0, 0.3) }
+        case .controller: break   // the view routes this to the connected-controller list
         case .upscale: if upscaleSupported && !choices.isFixed("DM_PRESENT_UPSCALE") { upscale = d > 0 }
         case .sharpen: if !choices.isFixed("DM_PRESENT_SHARPEN") { sharpen = clamp(((sharpen + Double(d) * 0.05) * 20).rounded() / 20, 0, 1) }
         case .pixels: if !choices.isFixed("DM_PRESENT_FILTER") { sharpPixels = d > 0 }
@@ -268,6 +273,7 @@ struct InGameMenuView: View {
     let resume: () -> Void
     let edit: () -> Void
     @State private var nav = InGameNav()
+    @StateObject private var controllers = ControllerListModel(live: true)
     @Environment(\.dynamicTypeSize) private var typeSize
 
     private static let nextStart = "Applies at the next start."
@@ -283,10 +289,17 @@ struct InGameMenuView: View {
         }
         .background(Color.black.opacity(0.45).ignoresSafeArea())
         .task {
-            nav.order = { model.order }
-            nav.adjust = { model.step($0, $1) }
+            nav.order = {
+                var order = model.order
+                if let i = order.firstIndex(of: .layout) { order.insert(contentsOf: controllers.rows.map { .controller($0.id) }, at: i) }
+                return order
+            }
+            nav.adjust = { item, d in if case .controller(let id) = item { controllers.step(id, d) } else { model.step(item, d) } }
             nav.activate = { item in
                 switch item {
+                case .controller(let id): controllers.step(id, 1)
+                case .buttons: model.step(.buttons, model.buttonsByLabel ? -1 : 1)
+                case .deadzone: model.step(.deadzone, 1)
                 case .resume: resume()
                 case .edit: edit()
                 case .reset: model.resetControls()
@@ -306,6 +319,10 @@ struct InGameMenuView: View {
             nav.resume = resume
             await nav.run()
         }
+        .task {
+            controllers.merge = getenv("DM_PAD_MERGE").map { String(cString: $0) != "0" } ?? false
+            while !Task.isCancelled { controllers.refresh(); try? await Task.sleep(for: .seconds(1)) }
+        }
     }
 
     private func panelWidth(_ w: CGFloat) -> CGFloat {
@@ -321,7 +338,9 @@ struct InGameMenuView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         sectionTitle("Picture")
                         pictureRows
-                        sectionTitle("Touch controls", note: model.controllerInUse ? "Hidden while a controller is connected." : nil)
+                        sectionTitle("Controllers")
+                        controllerRows
+                        sectionTitle("Touch controls", note: controllers.rows.contains(where: { $0.player >= 0 }) ? "Hidden while a controller is connected." : nil)
                         controlRows
                         if model.choices.offers("DM_PSO_MTL4") {
                             sectionTitle("Performance")
@@ -414,6 +433,25 @@ struct InGameMenuView: View {
                 ChoicePicker(title: "Texture filtering", selection: $model.aniso) { ForEach(model.anisoOptions, id: \.[0]) { o in Text(o[1]).tag(o[0]) } }
                     .disabled(model.choices.isFixed("DM_ANISO"))
             }.id(MenuItem.aniso)
+        }
+    }
+
+    @ViewBuilder private var controllerRows: some View {
+        MenuRow(title: "Button layout", note: fixedNote("DM_PAD_BUTTONS") ?? "Nintendo controllers always use Switch positions.",
+                changed: model.changed("DM_PAD_BUTTONS", model.buttonsByLabel ? "label" : "position"), focused: nav.isFocused(.buttons), tint: tint) {
+            ChoicePicker(title: "Button layout", selection: $model.buttonsByLabel) { Text("Switch: A on the right").tag(false); Text("Xbox / PlayStation: A at the bottom").tag(true) }
+                .disabled(model.choices.isFixed("DM_PAD_BUTTONS"))
+        }.id(MenuItem.buttons)
+        MenuRow(title: "Stick dead zone", value: percent(model.deadzone), note: fixedNote("DM_PAD_DEADZONE"),
+                changed: model.changed("DM_PAD_DEADZONE", String(format: "%.2f", model.deadzone)), focused: nav.isFocused(.deadzone), tint: tint) {
+            Slider(value: $model.deadzone, in: 0...0.3, step: 0.01) { Text("Stick dead zone") }
+                .disabled(model.choices.isFixed("DM_PAD_DEADZONE")).accessibilityValue(percent(model.deadzone))
+        }.id(MenuItem.deadzone)
+        if controllers.rows.isEmpty { Text("Pair a controller in the system's Bluetooth settings, or connect a USB cable where supported.").font(.footnote).foregroundStyle(.secondary) }
+        ForEach(controllers.rows) { row in
+            ControllerSettingRow(row: row, controllers: controllers, tint: tint, focused: nav.isFocused(.controller(row.id)))
+                .padding(12).background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .id(MenuItem.controller(row.id))
         }
     }
 

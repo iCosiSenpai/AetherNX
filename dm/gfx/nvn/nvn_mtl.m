@@ -603,8 +603,10 @@ int mtl_gpu_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off, uint64_
 
 // ---------- Submission ----------
 static void defer_reset(void); static void defer_fallback(void);
-typedef struct { int kind; volatile uint32_t *val; uint32_t mode, v; uint64_t addr; uint32_t type; void *vis; uint32_t seg; } post_op;   // vis: the visibility slot table for kind 3, the readback for kind 4; seg: the segment it was encoded in (sub_cut)
+typedef struct { int kind; volatile uint32_t *val; uint32_t mode, v; uint64_t addr; uint32_t type; void *vis; uint32_t seg; uint64_t frame; } post_op;   // vis: the visibility slot table for kind 3, the readback for kinds 4 / 5; seg / frame: where it was encoded (sub_cut / g_cur_frame)
 static void mirror_rb_land(void *m);   // kind 4: a GPU copy's bytes read back into the destination texture's storage (mirror_readback)
+static void tbuf_write_land(void *m); static void tbuf_write_reset(void);   // kind 5: an aligned image buffer's bytes copied back to guest memory
+static int tbuf_writeback(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_TBUF_WRITEBACK"); v = !(e && !strcmp(e, "0")); } return v; }
 static uint32_t g_seg;   // Index of the segment being encoded in this submission (0 until the first sub_cut)
 typedef struct seg_clk seg_clk; static seg_clk *g_sclk; static void seg_clk_put(seg_clk *c);   // Counter timestamps by segment (see gpu_ticks)
 // ---------- Conditional rendering (profile render_cond) ----------
@@ -650,6 +652,15 @@ static int vis_in_ring(id<MTLBuffer> b) { for (int i = 0; i < g_vis_ring_n; i++)
 static int g_vis_on, g_vis_counting, g_vis_cur = -1; static uint64_t g_vis_cur_pass;
 static vis_slot *g_vs; static int g_nvs, g_vscap;      // Slots since the last reset
 static uint64_t g_cnt_report[32], g_cnt_reset[32];       // Report / reset counts per counter type (diagnostics)
+static int occ_early(void) { static int v; static dispatch_once_t once; dispatch_once(&once, ^{ const char *e = getenv("DM_NVN_OCC_EARLY"); v = e && !strcmp(e, "1"); }); return v; }
+static int occ_trace(void) { static int v; static dispatch_once_t once; dispatch_once(&once, ^{ const char *e = getenv("DM_NVN_OCC_TRACE"); v = e && !strcmp(e, "1"); }); return v; }
+static _Atomic uint64_t g_occ_reports, g_occ_lag_sum, g_occ_lag_max, g_occ_zero;
+static void occ_report(uint64_t frame) {
+    static uint64_t last; if (!occ_trace() || frame < last + 300) return; last = frame;
+    uint64_t n = atomic_load_explicit(&g_occ_reports, memory_order_relaxed), lag = atomic_load_explicit(&g_occ_lag_sum, memory_order_relaxed);
+    MLOG("occlusion queries up to frame %llu: %llu samples-passed reports, written a mean %.2f / max %llu frames after they were encoded, %llu of them 0 samples",
+         (unsigned long long)frame, (unsigned long long)n, n ? (double)lag / n : 0, (unsigned long long)atomic_load_explicit(&g_occ_lag_max, memory_order_relaxed), (unsigned long long)atomic_load_explicit(&g_occ_zero, memory_order_relaxed));
+}
 static void vis_clear(void) { for (int i = 0; i < g_nvs; i++) CFRelease(g_vs[i].buf); g_nvs = 0; g_vis_cur = -1; }
 static vis_list *vis_snapshot(void) {
     vis_list *l = malloc(sizeof *l + g_nvs * sizeof(vis_slot)); l->n = g_nvs;
@@ -784,6 +795,7 @@ void mtl_prepare(void) {
 }
 void mtl_sub_begin(void) {
     mtl_init(); g_sub_serial++; g_seg = 0; seg_clk_put(g_sclk); g_sclk = NULL; g_rc_npend = 0; g_rc_skip = 0;
+    tbuf_write_reset();
     defer_drain();
     defer_reset();
     mtl_prepare();   // done by then in the submit entry; the replay tool (nvn_replay) reaches it here
@@ -1473,8 +1485,16 @@ static void post_run(post_rec *r, uint64_t c0, uint64_t c1) {
             vis_list *l = ops[i].vis; uint64_t sum = 0;
             for (int k = 0; k < l->n; k++) { sum += ((const uint64_t *)((__bridge id<MTLBuffer>)l->s[k].buf).contents)[l->s[k].slot]; CFRelease(l->s[k].buf); }
             free(l); uint64_t rec[2] = {sum, gpu_ticks()}; memcpy((void *)ops[i].addr, rec, sizeof rec);
+            if (occ_trace()) {
+                uint64_t frame = atomic_load_explicit(&g_cur_frame, memory_order_relaxed), lag = frame >= ops[i].frame ? frame - ops[i].frame : 0;
+                atomic_fetch_add_explicit(&g_occ_lag_sum, lag, memory_order_relaxed);
+                if (lag > atomic_load_explicit(&g_occ_lag_max, memory_order_relaxed)) atomic_store_explicit(&g_occ_lag_max, lag, memory_order_relaxed);   // post_run holds g_post_mu: completions cannot race this maximum
+                if (!sum) atomic_fetch_add_explicit(&g_occ_zero, 1, memory_order_relaxed);
+                atomic_fetch_add_explicit(&g_occ_reports, 1, memory_order_relaxed);
+            }
         }
         else if (ops[i].kind == 4) mirror_rb_land(ops[i].vis);
+        else if (ops[i].kind == 5) tbuf_write_land(ops[i].vis);
         else { uint64_t t = rep_ticks(&ops[i], sc, seg_last, c0, c1), rec[2] = {(ops[i].type == 0 || ops[i].type == 0x10) && !DM_GAME_RENDER_COND ? t : 0, t}; memcpy((void *)ops[i].addr, rec, sizeof rec); }   // render_cond: a timestamp report's counter field is 0, as on the GPU (see rc_value)
     }
     free(ops); seg_clk_put(sc); r->ops = NULL; r->sc = NULL;
@@ -1602,7 +1622,7 @@ void mtl_drain(void) { present_drop_for_suspend(); mtl_present_flush(); snap_dra
 
 // ================= Render replay =================
 #include "../../host/front.h"
-static int g_red_once[133];
+static int g_red_once[135];
 #define RED_ONCE(k, ...) do { if (!g_red_once[k]++) MLOG("[RED] " __VA_ARGS__); } while (0)
 // NVN vertex streams 0–15 → Metal vertex buffer slots: 0–13 go to 16–29 (30 is the constant fallback buffer), 14 and 15 to 14 and 15. Metal has only the 31 slots 0–30; translated shaders use only buffer(0) (the argument buffer),
 // and the host's own vertex functions read no vertex buffers. 13 Sentinels uses stream 15, and the old 16 + stream went out of range (Metal assertion: buffer index (31) must be < 31)
@@ -2692,10 +2712,11 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
         // Metal requires 16-byte alignment for texture buffer views (minimumTextureBufferAlignmentForPixelFormat), and an Apple GPU addresses such a view from the 16-byte boundary below its
         // offset (measured on an M4 Pro: R32Float views at offsets 4, 8 and 12 read elements 0, 0 and 0 instead of 1, 2 and 3, shared and private buffers, bound directly or in an argument
         // buffer). Unreal puts buffer textures at 4-, 8- and 12-byte offsets in its pools (Octopath Traveler 0: offset 0x168; FINAL FANTASY RESONANCE's particle data), so the view is created
-        // there and shaders read it through an aligned copy (tbuf_shadow). Writes through such a view cannot be redirected. Below the element size the view stays a dummy
+        // there and shaders read it through an aligned copy (tbuf_shadow). Image writes use a shared aligned copy too, copied back at completion (tbuf_write_shadow): Assassin's Creed II
+        // (The Ezio Collection) rotates three visibility-flag images, two 8 bytes past the boundary; writes 8 bytes early made world objects appear one frame in three. Below the element size the view stays a dummy
         if (mo % al) {
             if (mo % (uint64_t)bpb) { RED_ONCE(38, "buffer texture offset %#llx not aligned to its %d-byte elements", (unsigned long long)mo, bpb); return nil; }
-            if (t->d.flags & NVN_TEXTURE_FLAGS_IMAGE) RED_ONCE(119, "image buffer texture at pool offset %#llx, below Metal's %lu-byte alignment: shader writes to it land at the 16-byte boundary below", (unsigned long long)mo, (unsigned long)al);
+            if ((t->d.flags & NVN_TEXTURE_FLAGS_IMAGE) && !tbuf_writeback()) RED_ONCE(119, "image buffer texture at pool offset %#llx, below Metal's %lu-byte alignment: shader writes to it land at the 16-byte boundary below (DM_NVN_TBUF_WRITEBACK=0)", (unsigned long long)mo, (unsigned long)al);
             static int once; if (!once++) MLOG("buffer texture at pool offset %#llx, below Metal's %lu-byte alignment: created there, read through an aligned copy (tbuf_shadow)", (unsigned long long)mo, (unsigned long)al);
         }
         MTLTextureDescriptor *d = [MTLTextureDescriptor textureBufferDescriptorWithPixelFormat:(MTLPixelFormat)pf width:t->d.width resourceOptions:b.resourceOptions
@@ -3807,12 +3828,19 @@ static id<MTLLibrary> lib_from_file(NSString *path, NSError **err) {
 }
 // NVN depth mode (nvnDeviceSetDepthMode): every vertex library has two entry points (dmsh_build.py vs_depth): main0 rewrites z for the GL convention (near = -w, NVN's default),
 // main0_z leaves z as is (near = 0, which Link's Awakening, 13 Sentinels and Engage set). Loading picks by the mode the game set, so no game needs a setting for it
-static _Atomic int g_depth_zero, g_vs_loaded;
+// g_vs_zero: the convention the loaded vertex shaders use (-1 before the first); a mode the game sets that differs from it is reported, one that returns to it is not. NVN's default at
+// nvnDeviceInitialize is applied without a report (mtl_set_depth_default): after a program restart (dm/host/hle_restart.c) the loaded shaders keep the old program's convention and the
+// device's default differs from it until the game sets its mode, as Assassin's Creed The Ezio Collection does right after; a vertex shader loaded in the other convention is reported then
+static _Atomic int g_depth_zero, g_vs_loaded, g_vs_zero = -1;
 void mtl_set_depth_zero(int on) {
     if (atomic_exchange(&g_depth_zero, on) == on) return;
     MLOG("depth mode: %s", on ? "near=0, vertex shaders use the main0_z entry" : "near=-w (GL), vertex shaders use the main0 entry");
-    int n = atomic_load(&g_vs_loaded);
-    if (n) MLOG("[RED] depth mode changed after %d vertex shaders were loaded: they keep the old convention", n);
+    int n = atomic_load(&g_vs_loaded), vz = atomic_load(&g_vs_zero);
+    if (n && vz >= 0 && vz != on) MLOG("[RED] depth mode changed after %d vertex shaders were loaded in the other convention: they keep it", n);
+}
+void mtl_set_depth_default(void) {
+    if (atomic_exchange(&g_depth_zero, 0) == 0) return;
+    MLOG("depth mode: near=-w (GL), NVN's default at device initialization");
 }
 // The Metal 4 function descriptor of each function pipelines are built from (pso_build): MTL4Compiler takes a library, an entry name and the constant values a function was
 // specialized with, not an MTLFunction, so every function made from a library is noted here as it is made. A function with no note (the diagnostic fragment overrides
@@ -3862,6 +3890,7 @@ static NvShader *shader_load(NSString *pc, int stage, int layer) {
     NSString *entry = j[@"entry"];
     if (stage == 0) {
         atomic_fetch_add(&g_vs_loaded, 1);
+        { int z = atomic_load(&g_depth_zero), vz = -1; if (!atomic_compare_exchange_strong(&g_vs_zero, &vz, z) && vz != z) RED_ONCE(133, "vertex shader %s loaded in the %s depth convention, earlier ones in the other (a program restart, or a mode change mid-game)", pc.UTF8String, z ? "near=0" : "GL"); }
         if (atomic_load(&g_depth_zero)) { if (j[@"entry_z"]) entry = j[@"entry_z"]; else RED_ONCE(85, "vertex shader %s has no near=0 entry (entry_z): depth stays in the GL convention", pc.UTF8String); }
         if (layer) entry = atomic_load(&g_depth_zero) ? j[@"entry_layer_z"] : j[@"entry_layer"];
     }
@@ -4061,6 +4090,8 @@ typedef struct { tex_t t; int ok; view_t v; int has_v; void *view; uint64_t view
                  int prev, next, retired, gone; uint64_t transient_sub; } treg_t;   // prev / next: descriptor index + 1, by texture serial; gone: its memory pool was finalized (treg_drop_pool_views)
 static treg_t *g_treg; static int g_ntreg;
 static nvn_hmap g_treg_serial = {.klen = 8};   // serial → first registered descriptor index + 1, under g_rmu
+static nvn_hmap g_tbw = {.klen = 8}, g_tbwv = {.klen = 16};   // this submission's aligned image buffers: serial → copy; (serial, original view) → view of that copy
+static id<MTLTexture> tbuf_write_shadow(int tid, id<MTLTexture> t, uint64_t *rid, int write);
 static int *g_treg_transient; static size_t g_ntreg_transient, g_treg_transient_cap;
 // Lock-free copy of texture ID → serial (the replay hot path only needs the serial: store lookahead index, binding set of the clear-only hoist): texture IDs are 20 bits, fixed 1M entries (BSS, only touched pages are used),
 // release write at registration, relaxed atomic read on the reader side, without entering g_rmu (the former h_ser locked and unlocked on every lookup, thousands of times per frame in the camp)
@@ -4497,8 +4528,11 @@ static id<MTLTexture> img_fit(int tid, id<MTLTexture> t, int dpf, uint64_t *rid)
     *rid = r->im_rid; return v;
 }
 static inline __attribute__((always_inline)) uint64_t tex_fast_rid(int tid, void **out) {
-    if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].view && g_treg[tid].view_ser == g_ser_gen && (!g_treg[tid].view_pkg || g_treg[tid].view_dirty == nvn_dirty_now())) { if (out) *out = g_treg[tid].view; return g_treg[tid].view_rid; }
-    id<MTLTexture> t = tex_by_id(tid); if (out) *out = (__bridge void *)t; return t ? t.gpuResourceID._impl : 0;
+    __unsafe_unretained id<MTLTexture> t; uint64_t rid;
+    if (tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].view && g_treg[tid].view_ser == g_ser_gen && (!g_treg[tid].view_pkg || g_treg[tid].view_dirty == nvn_dirty_now())) { t = (__bridge id<MTLTexture>)g_treg[tid].view; rid = g_treg[tid].view_rid; }
+    else { t = tex_by_id(tid); rid = t ? t.gpuResourceID._impl : 0; }
+    if (g_tbw.n) t = tbuf_write_shadow(tid, t, &rid, 0);   // every later binding, including a sampled descriptor of the same serial, sees the image writes
+    if (out) *out = (__bridge void *)t; return rid;
 }
 static MTLSamplerAddressMode wrapm(int w) {
     switch (w) { case 0: case 7: return MTLSamplerAddressModeClampToEdge; case 1: return MTLSamplerAddressModeRepeat;
@@ -4799,8 +4833,18 @@ static void udc_note_draw(NvProg *pr) {
 // Metroid Dread's depth prepass calls BindProgram(program, vertex | fragment), then BindProgram(null, fragment): only the vertex shader remains and depth is drawn.
 // Every bind used to replace S.prog as a whole, a null program meant "no program bound", and the prepass's ~140 draws per frame were all dropped: depth stayed empty, the G-buffer's depth EQUAL test passed no pixel, and scenes and characters were black.
 // When every stage comes from the same program, that program is the effective one (all of Mario's and Engage's binds are like this, so nothing changes for them); otherwise a composite is made: a host-made prog_t carrying only a serial, whose NvProg in the serial table takes each stage from its source program (a null fragment = a vertex-only pipeline)
+// A stage keeps the program it was bound to until another bind names that stage, and the game may finalize or free that program in between: Assassin's Creed II (The Ezio
+// Collection) binds a program to every graphics stage, then others to vertex and fragment only, and frees the first one; the next combined program read the freed object's
+// memory, by then other data, and crashed hashing its "control section" (keys_hash). The GPU keeps nothing of a freed program for those stages, so they count as unbound.
+// A stage is dropped when its object is plainly no longer a program: a magic that is neither a program's nor 0, or more than six stages. A magic of 0 still counts (Finalize clears
+// it and the stages' code stays readable guest memory, as before; tests and the capture replay build programs without one). A program given new shaders keeps its stages, as before.
+static int stage_live(const prog_t *q) { return (q->magic == MAGIC('P', 'R', 'O', 'G') || !q->magic) && q->nstage <= 6; }
 static const prog_t *bind_stages(const prog_t *p, int stages) {
     for (int st = 0; st < 5; st++) if (stages >> st & 1) S.bst[st] = p;
+    for (int st = 0; st < 5; st++) if (S.bst[st] && !stage_live(S.bst[st])) {
+        RED_ONCE(134, "stage %d was still bound to an object that is no longer a program (freed by the game since): unbound (bind_stages)", st);
+        S.bst[st] = NULL;
+    }
     const prog_t *v = S.bst[0];
     if (!v) return NULL;
     int same = 1; for (int st = 1; st < 5; st++) if (S.bst[st] && S.bst[st] != v) same = 0;
@@ -6615,6 +6659,15 @@ enum { TBS_BLOCK = 4u << 20, TBS_CACHE = 512 };
 static id<MTLBuffer> g_tbs_blk; static size_t g_tbs_off; static NSMutableArray *g_tbs_views;
 static struct { __unsafe_unretained id<MTLTexture> src, copy; uint64_t epoch, rid; } g_tbs_cache[TBS_CACHE];
 static uint64_t g_tbs_copies;
+static int tbuf_stage(size_t need) {
+    if (!g_tbs_blk || g_tbs_off + need > g_tbs_blk.length) {   // append only: neither a later binding nor a later submission reuses bytes awaiting GPU reads or CPU writeback
+        if (g_tbs_blk) { defer_obj_release(g_tbs_blk); defer_obj_release(g_tbs_views); }
+        g_tbs_blk = [g_dev newBufferWithLength:need > TBS_BLOCK ? need : TBS_BLOCK options:MTLResourceStorageModeShared | MTLResourceCPUCacheModeWriteCombined];
+        if (!g_tbs_blk) { RED_ONCE(118, "no staging block for buffer textures below the 16-byte alignment"); return 0; }
+        res_add(g_tbs_blk); g_tbs_views = [NSMutableArray array]; g_tbs_off = 0;
+    }
+    return 1;
+}
 static id<MTLTexture> tbuf_shadow(id<MTLTexture> t, uint64_t *rid) {
     if (!t || t.textureType != MTLTextureTypeTextureBuffer) return t;
     id<MTLTexture> root = t; while (root.parentTexture) root = root.parentTexture;   // a swizzled view keeps its parent's buffer
@@ -6624,12 +6677,7 @@ static id<MTLTexture> tbuf_shadow(id<MTLTexture> t, uint64_t *rid) {
     unsigned k = (unsigned)(((uintptr_t)(__bridge void *)t >> 4) % TBS_CACHE);
     if (g_tbs_cache[k].src == t && g_tbs_cache[k].epoch == g_fence + 1) { *rid = g_tbs_cache[k].rid; return g_tbs_cache[k].copy; }
     size_t n = row < src.length - off ? row : src.length - off, need = (n + 255u) & ~(size_t)255u;
-    if (!g_tbs_blk || g_tbs_off + need > g_tbs_blk.length) {   // a full block and its views are released once the submissions that read them are done
-        if (g_tbs_blk) { defer_obj_release(g_tbs_blk); defer_obj_release(g_tbs_views); }
-        g_tbs_blk = [g_dev newBufferWithLength:need > TBS_BLOCK ? need : TBS_BLOCK options:MTLResourceStorageModeShared | MTLResourceCPUCacheModeWriteCombined];
-        if (!g_tbs_blk) { RED_ONCE(118, "no staging block for buffer textures below the 16-byte alignment"); return t; }
-        res_add(g_tbs_blk); g_tbs_views = [NSMutableArray array]; g_tbs_off = 0;
-    }
+    if (!tbuf_stage(need)) return t;
     memcpy((uint8_t *)g_tbs_blk.contents + g_tbs_off, (const uint8_t *)src.contents + off, n);
     MTLTextureDescriptor *d = [MTLTextureDescriptor textureBufferDescriptorWithPixelFormat:t.pixelFormat width:t.width resourceOptions:g_tbs_blk.resourceOptions usage:MTLTextureUsageShaderRead];
     d.swizzle = t.swizzle;
@@ -6639,6 +6687,56 @@ static id<MTLTexture> tbuf_shadow(id<MTLTexture> t, uint64_t *rid) {
     if (!g_tbs_copies++) MLOG("buffer texture at pool offset %#lx (not 16-byte aligned) read through an aligned copy: %lu elements, format %lu, %zu bytes (first case)", (unsigned long)off, (unsigned long)t.width, (unsigned long)t.pixelFormat, n);
     g_tbs_cache[k].src = t; g_tbs_cache[k].copy = c; g_tbs_cache[k].epoch = g_fence + 1; g_tbs_cache[k].rid = *rid = c.gpuResourceID._impl;
     return c;
+}
+// Assassin's Creed II (The Ezio Collection, iPhone) culls world objects by drawing bounding cubes whose fragment image stores set visibility flags the CPU reads a frame later.
+// Two of its three images start 8 bytes past a 16-byte boundary: Metal stores 8 bytes early. Keep one aligned, writable copy per texture serial for the whole submission, including
+// every later sampled binding and other shader stage. Only completion publishes it to guest bytes: a GPU reader through another texture serial or a raw buffer still sees the old data.
+typedef struct { void *buf, *dst; size_t off, n; } tbuf_wb;
+static void tbuf_write_land(void *p) {
+    tbuf_wb *m = p; id<MTLBuffer> b = (__bridge id<MTLBuffer>)m->buf;
+    dm_guest_write_prepare(m->dst, m->n); memcpy(m->dst, (const uint8_t *)b.contents + m->off, m->n);
+    CFRelease(m->buf); free(m);
+}
+static void tbuf_write_reset(void) {
+    os_unfair_lock_lock(&g_rmu);
+    if (g_tbw.n) { g_ser_gen++; args_dirty_all(); }   // sampled argument buffers and handle-pool snapshots must return to guest storage in the next submission
+    nvn_hm_clear(&g_tbwv, hm_rel); nvn_hm_clear(&g_tbw, hm_rel);
+    os_unfair_lock_unlock(&g_rmu);
+}
+static id<MTLTexture> tbuf_write_shadow(int tid, id<MTLTexture> t, uint64_t *rid, int write) {
+    if (!g_cb || !t || t.textureType != MTLTextureTypeTextureBuffer || tid <= 0 || tid >= g_ntreg || !g_treg[tid].ok) return t;
+    const tex_t *tt = &g_treg[tid].t;
+    id<MTLTexture> c = hm_get_id(&g_tbw, &tt->serial);
+    if (!c) {
+        if (!write || !tbuf_writeback()) return t;
+        id<MTLTexture> root = t; while (root.parentTexture) root = root.parentTexture;
+        id<MTLBuffer> src = root.buffer; NSUInteger off = root.bufferOffset;
+        if (!src || !(off & 15)) return t;
+        int bw, bh, bpb = nvn_fmt_bpb(tt->d.format, &bw, &bh); size_t n = (size_t)tt->d.width * bpb;
+        if (!tt->mem || !src.contents || !bpb || off >= src.length || n > src.length - off) { RED_ONCE(117, "image buffer texture at pool offset %#lx (not 16-byte aligned) cannot be copied on the CPU: writes land at the 16-byte boundary below", (unsigned long)off); return t; }
+        NSUInteger al = [g_dev minimumTextureBufferAlignmentForPixelFormat:root.pixelFormat]; size_t row = (n + al - 1) / al * al, need = (row + 255u) & ~(size_t)255u;
+        if (!tbuf_stage(need)) return t;
+        MTLTextureDescriptor *d = [MTLTextureDescriptor textureBufferDescriptorWithPixelFormat:root.pixelFormat width:tt->d.width resourceOptions:g_tbs_blk.resourceOptions
+                                                                                     usage:MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite | MTLTextureUsagePixelFormatView | (pf_r32i(root.pixelFormat) ? MTLTextureUsageShaderAtomic : 0)];
+        c = [g_tbs_blk newTextureWithDescriptor:d offset:g_tbs_off bytesPerRow:row];
+        if (!c) { RED_ONCE(118, "cannot copy an image buffer texture below the 16-byte alignment (%u elements, format %lu)", tt->d.width, (unsigned long)root.pixelFormat); return t; }
+        memcpy((uint8_t *)g_tbs_blk.contents + g_tbs_off, tt->mem, n);   // preserve elements the shader does not write; copy only the view, never its row padding
+        tbuf_wb *m = malloc(sizeof *m); *m = (tbuf_wb){(void *)CFBridgingRetain(g_tbs_blk), tt->mem, g_tbs_off, n};
+        post((post_op){.kind = 5, .vis = m});   // the retained buffer survives block rollover and runs once, before completion is published (post_run)
+        g_tbs_off += need; [g_tbs_views addObject:c]; hm_put_id(&g_tbw, &tt->serial, c);
+        sbw_note((uint64_t)(uintptr_t)tt->mem, n, SBW_REPORT);   // visible to later submissions only when this one's completion copy has run
+        g_ser_gen++; args_dirty_all();   // already encoded sampled bindings must follow this copy on the next draw; handle pools follow the serial-table generation too
+        static int once; if (!once++) MLOG("image buffer texture at pool offset %#lx (not 16-byte aligned): shader writes go through an aligned copy and are copied back at completion (DM_NVN_TBUF_WRITEBACK)", (unsigned long)off);
+    }
+    MTLTextureSwizzleChannels sw = t.swizzle, csw = c.swizzle;
+    if (t.pixelFormat != c.pixelFormat || memcmp(&sw, &csw, sizeof sw)) {
+        uint64_t key[2] = {tt->serial, (uint64_t)(__bridge void *)t}; id<MTLTexture> v = hm_get_id(&g_tbwv, key);
+        if (!v) { v = [c newTextureViewWithPixelFormat:t.pixelFormat textureType:MTLTextureTypeTextureBuffer levels:NSMakeRange(0, 1) slices:NSMakeRange(0, 1) swizzle:sw];
+            if (!v) { RED_ONCE(118, "cannot create a view of an aligned image buffer copy (texture ID %d)", tid); return t; }
+            hm_put_id(&g_tbwv, key, v); [g_tbs_views addObject:v]; }
+        c = v;
+    }
+    *rid = c.gpuResourceID._impl; return c;
 }
 static id<MTLSamplerState> dummy_samp(void) {
     static id<MTLSamplerState> s; if (!s) { MTLSamplerDescriptor *d = [MTLSamplerDescriptor new]; d.supportArgumentBuffers = YES; s = [g_dev newSamplerStateWithDescriptor:d]; }
@@ -6705,6 +6803,7 @@ static uint64_t dummy_buf_gpu(void) { static uint64_t gpu; if (!gpu) gpu = dummy
 static id<MTLTexture> img_binding(int tid, const nvn_rbind *b, uint64_t *rid, int *real) {
     void *tv = NULL; *rid = tid ? tex_fast_rid(tid, &tv) : 0;
     id<MTLTexture> t = (__bridge id<MTLTexture>)tv;
+    t = tbuf_write_shadow(tid, t, rid, b->rw || b->atom);
     int swz_only = t && !(t.usage & MTLTextureUsageShaderWrite) && (t.parentTexture.usage & MTLTextureUsageShaderWrite);
     if (t && (b->rw || b->atom) && !(t.usage & MTLTextureUsageShaderWrite) && !swz_only) {
         const tex_t *tt = tid > 0 && tid < g_ntreg && g_treg[tid].ok ? &g_treg[tid].t : NULL;
@@ -6737,6 +6836,8 @@ static void image_prepare(NvProg *pr, unsigned stages) {
             // The actual image binding is image intent too: some engines write a descriptor with RegisterTexture and use its handle in an image slot.
             tex_t image = g_treg[tid].t; image.d.flags |= NVN_TEXTURE_FLAGS_IMAGE;
             id<MTLTexture> base = tex_mtl(&image); while (base.parentTexture) base = base.parentTexture;
+            uint64_t rid = 0; id<MTLTexture> shadow = tbuf_write_shadow(tid, base, &rid, 1);
+            if (shadow != base) { os_unfair_lock_unlock(&g_rmu); continue; }   // before any stage's arguments: a vertex sample and a fragment image store must name the same copy
             int upgrade = base && !(base.usage & MTLTextureUsageShaderWrite);
             os_unfair_lock_unlock(&g_rmu);
             if (!upgrade) continue;
@@ -10469,7 +10570,12 @@ void mtl_exec(const uint8_t *p) {
             case OP_REPORT_COUNTER: { uint64_t t, ad; memcpy(&t, a, 8); memcpy(&ad, (const uint8_t *)a + 8, 8); g_cnt_report[t & 31]++;
                 PD("Q report type=%llu cmd=%p dst=%#llx", (unsigned long long)t, p, (unsigned long long)ad);
                 if (DM_GAME_RENDER_COND) rc_note(ad, t == 0 || t == 0x10 ? 1 : 2);
-                if (t == NVN_COUNTER_TYPE_SAMPLES_PASSED) { post((post_op){3, NULL, 0, 0, ad, (uint32_t)t, vis_snapshot()}); g_vis_cur = -1; }
+                if (t == NVN_COUNTER_TYPE_SAMPLES_PASSED) {
+                    post((post_op){3, NULL, 0, 0, ad, (uint32_t)t, vis_snapshot(), g_seg, atomic_load_explicit(&g_cur_frame, memory_order_relaxed)}); g_vis_cur = -1;
+                    // For a game that reads a record before the GPU completes it: "visible" draws an occluded object at worst, where 0 hides a visible one; rc_note keeps this address unknown.
+                    // Tried for Assassin's Creed II's blinking objects on the iPhone: no change (its results land about 1 frame after encoding; its culling flags are image-buffer writes, tbuf_write_shadow).
+                    if (occ_early()) { static uint64_t counter; uint64_t rec[2] = {counter += 1ull << 20, gpu_ticks()}; memcpy((void *)ad, rec, sizeof rec); }
+                }
                 else mtl_sub_counter(ad, (uint32_t)t);
                 break; }
             case OP_RENDER_COND: { const p_render_cond *rc = a;   // recorded only with the profile key render_cond (hle_nvn.c)
@@ -11683,6 +11789,7 @@ static uint64_t present_enqueue(const tex_t *t, double period, const int crop[4]
         else if (st == 2 && now - t0 >= at + dur) { st = 3; mtl_link_pause(0); MLOG("DM_TEST_LINK_STALL: resuming the display link (frame %llu)", (unsigned long long)atomic_load(&g_cur_frame)); }
     }
     if (ws_on()) { static uint64_t f0; uint64_t f = atomic_load(&g_cur_frame); if (!f0) f0 = f; else if (f >= f0 + 300) { ws_report(f, f - f0); f0 = f; } }
+    occ_report(atomic_load_explicit(&g_cur_frame, memory_order_relaxed));
     tex_t snap; uint64_t ss = 0; int slot = 0;
     if (t && !ev_val && mtl_snap_on()) {
         slot = (int)(atomic_load(&g_snap_next) % (uint64_t)g_snap_n);

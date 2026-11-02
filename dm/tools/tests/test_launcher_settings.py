@@ -110,9 +110,32 @@ class LauncherSettingsTests(unittest.TestCase):
             listed = settings.build(BOTW, tmp, Path(tmp) / 'control.nacp')
         rows = {s['env']: s for s in listed['settings']}
         self.assertEqual(listed['schema'], 1)
-        self.assertEqual([e for e, s in rows.items() if s.get('level') == 'basic'], ['DM_FPS_TARGET', 'DM_RENDER_SCALE', 'DM_OPMODE', 'DM_LANG', 'DM_RUMBLE'])
+        self.assertEqual([e for e, s in rows.items() if s.get('level') == 'basic'], ['DM_FPS_TARGET', 'DM_RENDER_SCALE', 'DM_OPMODE', 'DM_LANG', 'DM_PAD_BUTTONS', 'DM_RUMBLE'])
         self.assertEqual(rows['DM_RUMBLE_GAIN']['needs'], 'DM_RUMBLE=1')
         self.assertFalse({'level', 'needs'} & set(rows['DM_METAL_HUD']), 'a row without meta has no optional fields')
+
+    def test_controller_settings(self):
+        for platform in ('ios', 'mac'):
+            with self.subTest(platform=platform), patch.dict(os.environ, {}, clear=True):
+                rows = build(BOTW, 'nvn', platform)
+                buttons = rows['DM_PAD_BUTTONS']
+                self.assertEqual((buttons['section'], buttons['default'], buttons['level']), ('Controls', 'position', 'basic'))
+                self.assertEqual(buttons['options'], [['position', 'Switch: A on the right'], ['label', 'Xbox / PlayStation: A at the bottom']])
+                zone = rows['DM_PAD_DEADZONE']
+                self.assertEqual((zone['kind'], zone['default'], zone['min'], zone['max'], zone['step']), ('range', '0', 0, 0.3, 0.01))
+                self.assertEqual((rows['DM_PAD_MERGE']['default'], rows['DM_MOTION']['default']), ('0', '1'))
+
+    def test_motion_build_default(self):
+        for value, expected in [('0', '0'), ('1', '1'), ('NO', '0'), ('YES', '1')]:
+            with self.subTest(value=value), patch.dict(os.environ, {'DM_MOTION': value}, clear=True):
+                self.assertEqual(build(BOTW, 'nvn')['DM_MOTION']['default'], expected)
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=True):
+            path = Path(tmp) / 'build_env.txt'
+            path.write_text('# --no-motion writes this into the app\nDM_MOTION=0\n')
+            os.environ['DM_ENV_FILE'] = str(path)
+            self.assertEqual(build(BOTW, 'nvn')['DM_MOTION']['default'], '0')
+            os.environ['DM_MOTION'] = '1'
+            self.assertEqual(build(BOTW, 'nvn')['DM_MOTION']['default'], '1')
 
     def test_meta_is_strict(self):
         self.assertEqual(settings.meta('level=basic; needs=DM_RUMBLE=1', 1), {'level': 'basic', 'needs': 'DM_RUMBLE=1'})

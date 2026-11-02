@@ -53,13 +53,15 @@ void dm_gate_nested(uint64_t sp) { die("SVC gate entered on its own gate stack (
 __attribute__((noinline)) void guest_gate_stack(int own_stack) {
     pthread_once(&g_gslot_once, gslot_key_init);
     uint8_t *top;
+    uintptr_t prev = (uintptr_t)pthread_getspecific(g_keygslot);
+    static __thread uint8_t *mapped;   // the stack this thread mapped for itself: the main guest thread enters the program again after a restart (main.c) and keeps it
     if (own_stack) top = (uint8_t *)__builtin_frame_address(0);   // this function's frame record: everything above it is the caller's frame, everything below is free once the guest runs elsewhere
+    else if (mapped) top = mapped;
     else {
         uint8_t *m = mmap(NULL, GATE_STACK_SIZE + 16384, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
         if (m == MAP_FAILED || mprotect(m, 16384, PROT_NONE)) die("cannot map a gate stack (errno %d)", errno);   // guard page at the bottom
-        top = m + 16384 + GATE_STACK_SIZE;
+        top = mapped = m + 16384 + GATE_STACK_SIZE;
     }
-    uintptr_t prev = (uintptr_t)pthread_getspecific(g_keygslot);
     int k;
     if (prev) k = (int)prev - 1;   // set again on the same thread: keep its slot
     else {
@@ -72,4 +74,11 @@ __attribute__((noinline)) void guest_gate_stack(int own_stack) {
     }
     dm_gate_top[k] = (uint64_t)(uintptr_t)top & ~15ull;
     pthread_setspecific(g_keygate, (void *)(dm_gate_stubs + 16 * k));
+}
+// The top of the calling thread's gate stack (0 without one): free while the thread runs guest code or host code called from guest code, so a thread a program restart ends
+// runs its exit there (hle_thread.c dm_thread_terminate_on_gate_stack, and the pause signal's redirect)
+uint64_t guest_gate_top_self(void) {
+    pthread_once(&g_gslot_once, gslot_key_init);
+    uintptr_t k = (uintptr_t)pthread_getspecific(g_keygslot);
+    return k ? dm_gate_top[k - 1] : 0;
 }

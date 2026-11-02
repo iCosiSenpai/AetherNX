@@ -51,6 +51,8 @@ void crash_thread_init(void) {}
 void guest_thread_init(void) {}
 void guest_thread_set_id(uint64_t id) { (void)id; }
 void guest_gate_stack(int own_stack) { (void)own_stack; }
+uint64_t guest_gate_top_self(void) { return 0; }   // the program restart's exit stack (thread.c): not used here
+void dm_main_restart_jump(void) { abort(); }
 void dm_thread_enter(uint64_t entry, uint64_t arg, uint64_t sp) { (void)entry; (void)arg; (void)sp; abort(); }
 uint64_t now_ns(void) { return clock_ns; }
 uint64_t guest_ns(void) { return now_ns(); }

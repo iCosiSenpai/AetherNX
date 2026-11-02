@@ -29,3 +29,7 @@ HLE_FORCE("_ZN2nv21GetGraphicsMemoryInfoEPNS_10MemoryInfoE", WHY "; pool figures
 HLE_FORCE("_ZN2nv22DumpGraphicsMemoryInfoEv", WHY "; the dump goes to the host log", void, h_nv_Dump, void) {
     LOG("nv::DumpGraphicsMemoryInfo: pool %.2f MB, 0 used (host graphics layer)", g_nv_pool.size / 1048576.0);
 }
+
+// Program restart (dm/host/hle_restart.c), RESET: the allocators and the pool were the old program's (its callbacks' user data and the pool lived in its memory); it sets them again
+static void nv_restart_reset(void) { g_nv_alloc = g_nv_devtools_alloc = (struct nv_allocator){0}; g_nv_pool = (typeof(g_nv_pool)){0}; }
+DM_RESTART_HOOK(DM_RESTART_RESET, 60, nv_restart_reset);

@@ -397,6 +397,20 @@ static void *regions_thread(void *arg) {
 
 int svc_thread(int num, uint64_t *regs);   // hle_thread.c: thread and synchronization kind
 
+// Program restart (hle_restart.c), RESET, first of all: the guest address block is mapped again, inaccessible and empty, as at boot (its contents go: the heap, the alias region's
+// pages, the thread stacks), and the heap size, the mappings, the alias page bitmaps and the address-region ledger start over. The graphics layer let go of its Metal buffers over
+// guest memory in RELEASE, and no guest thread runs
+static void mem_restart_reset(void) {
+    if (!g_as) return;
+    pthread_mutex_lock(&g_map_lock);
+    if (mmap(g_as, g_reserve, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0) != g_as) die("restart: cannot map the guest address block again (errno %d)", errno);
+    atomic_store(&g_heap_cur, 0); g_nmap = 0; atomic_store(&g_alias_mapped, 0);
+    memset((void *)g_alias_bits, 0, ((g_alias_cap >> 18) + 1) * sizeof *g_alias_bits);
+    memset(g_alias_exposed, 0, (g_alias_cap / (size_t)getpagesize() / 64 + 1) * sizeof *g_alias_exposed);
+    pthread_mutex_unlock(&g_map_lock);
+    pthread_mutex_lock(&g_rgn_lock); g_nrgn = 0; pthread_mutex_unlock(&g_rgn_lock);
+}
+DM_RESTART_HOOK(DM_RESTART_RESET, 0, mem_restart_reset);
 uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
     { void hlecount_svc(int); hlecount_svc(num); }   // DM_HLECOUNT: svc counts by number
     mem_init();

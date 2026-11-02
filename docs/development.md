@@ -14,6 +14,12 @@ The README covers packing and playing. This page is for working on HorizonNative
 | iOS app | One unsigned IPA for iPhone and iPad. The rewritten code is embedded in the executable; the shader libraries, the RomFS and the game icon are inside the app. A settings screen comes before the game (`Launcher.swift`, drawn from `dm/launcher.json`, which `dm/games/settings.py` writes from `dm/games/settings.tsv`); the host's loading starts at app launch meanwhile, and the frame rate and render scale go into the frame step state when the game starts (`loader.c` `dm_fps_state_apply`) |
 | Known gaps | Conditional render is always drawn; `MultiDraw*IndirectCount` waits on the CPU for the GPU-written count; geometry shaders do not translate. TBDR optimizations are off by default (they don't understand bindless textures yet). No amiibo. On the Mac, Mario's menu and dialogue text render blank (fine on the iPhone) |
 
+### The build stays on the Mac
+
+Every build step runs on a Mac with Apple silicon, and moving it onto the iPhone is not planned (decided 2026-11-01). The step that cannot move is the game's code: `dm/ios/tools/gen_embed.py` writes the rewritten modules into `Gen/embed.S`, which Xcode assembles into the executable's signed `__TEXT`, and on iOS `loader.c` maps those signed pages for the guest; only the Mac host reads `.patched.bin` into memory it makes executable. iOS gives an app no way to make bytes it received executable without a JIT entitlement, so an on-device build would need its own linker and per-game library signed by a sideloader, runtime profiles instead of the compiled `gen_build.py` constants, and the shader translators and Metal compiles (`dmsh_build.py`, `xcrun metal`) ported to run on the phone. Extraction, the rewriter and the shader split are portable Python and .NET, but they are not the hard part.
+
+What the phone does take without a new build: game files at `Documents/romfs.img` (`scripts/push_romfs.sh`), DLC at `Documents/aoc` ([Add-on content bought later](settings.md#add-on-content-bought-later)), switches in `Documents/env.txt`, and saves through iCloud. A game update that changes code needs a new build.
+
 ## Guest memory SVCs
 
 `dm/host/hle_svc.c` serializes heap resizing, physical map/unmap, stack

@@ -140,4 +140,21 @@ void dm_gfx_suspend(int on);
 void dm_gfx_enter(void); void dm_gfx_leave(void);   // hle_nvn.c: the gate dm_gfx_suspend closes, for graphics layers other than NVN (dm/gfx/vk)
 void dm_gfx_shot_at(long k, const char *path);
 void dm_shot_written(const char *path, int ok);   // The graphics side finished writing a screenshot to disk (diag.c: DM_TICK_HOLD=E:SHOT unfreezes on this)
+// Program restart inside this process (hle_restart.c): nn::oe::ExecuteProgram ends every guest thread, and the main guest thread, back in main.c's restart loop, resets the
+// per-program state through these hooks and enters the program again. Each subsystem registers what it owns, by stage:
+//   DM_RESTART_STOP     on the requesting guest thread, before the threads are ended: tell host-created guest threads and host helpers that drive guest code to finish
+//   DM_RESTART_RELEASE  every guest thread has ended; guest memory still holds the old program: release host objects tied to its objects (graphics, audio, files)
+//   DM_RESTART_RESET    guest memory and the modules' data are fresh: clear per-program tables, so the program starts as from boot
+// Within a stage the hooks run by their order number (smaller first). Saves, the RomFS image and the add-on content mounts stay open
+typedef struct { const char *name; int stage, order; void (*fn)(void); } dm_restart_hook;
+enum { DM_RESTART_STOP = 1, DM_RESTART_RELEASE = 2, DM_RESTART_RESET = 3 };
+#define DM_RESTART_HOOK(stage_, order_, fn_) \
+    __attribute__((used, section("__DATA,swrestart"))) static const dm_restart_hook dm_restart_hook_##fn_ = {#fn_, stage_, order_, fn_}
+void dm_restart_run_stage(int stage);   // hle_restart.c
+unsigned dm_restart_count(void);        // programs started by a restart so far (0 before the first)
+// Host code that holds a host lock while it runs guest code (the audio renderer's render, the movie player's deferred events) counts it here: a restart does not end the thread
+// inside, where the lock would stay held; it ends at its next SVC once the count is back to 0
+extern __thread int dm_kill_hold;
+__attribute__((noreturn)) void dm_thread_terminate_self(void);   // hle_thread.c: end the calling guest thread for a restart (the main guest thread goes back to the restart loop)
+__attribute__((noreturn)) void dm_main_restart_jump(void);       // main.c: the main guest thread's way back to its restart loop
 void dm_host_shutdown(const char *why);   // Graceful exit (crash.c): stop background threads and audio, drain graphics, then _exit(0); used by SIGTERM and the iOS App termination callback   // graphics side: screenshot of the k-th frame after the current presented frame (nvn_mtl.m)

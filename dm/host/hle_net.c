@@ -135,3 +135,7 @@ SSC("nnsslConnectionSetNextAlpnProto", h_nssl_SetAlpn) SSC("nnsslConnectionSetOp
 SSC("nnsslConnectionSetSessionCacheMode", h_nssl_SetCache) SSC("nnsslConnectionSetSocketDescriptor", h_nssl_SetSock)
 SSC("nnsslConnectionSetVerifyOption", h_nssl_SetVerify) SSC("nnsslConnectionWrite", h_nssl_Write)
 SSC("nnsslContextDestroy", h_nssl_CtxDestroy) SSC("nnsslContextGetContextId", h_nssl_CtxGetId)
+
+// Program restart (hle_restart.c), RESET: no network request is pending in a new program
+static void net_restart_reset(void) { atomic_store(&g_nifm_hold, 0); }
+DM_RESTART_HOOK(DM_RESTART_RESET, 60, net_restart_reset);

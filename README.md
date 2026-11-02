@@ -28,7 +28,7 @@
   <a href="https://buymeacoffee.com/icosisenpai"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Support-yellow?logo=buy-me-a-coffee&logoColor=black"></a>
 </p>
 
-Play your own Nintendo Switch games natively on iPhone, iPad and Mac. Bring your game (its NSP files) and your `prod.keys`; one script turns them into an app of that game.
+Play your own Nintendo Switch games natively on iPhone, iPad and Mac. Bring your game (its NSP files) and your `prod.keys`; on a Mac, one script turns them into an app of that game, which you install on your iPhone or iPad or open on the Mac. The Mac builds, the iPhone plays ([why](#why-it-needs-a-mac)).
 
 It is not an emulator: the game's own code runs directly on the Apple chip, with Switch graphics rebuilt on Metal. Nothing from any game is in this repository, and the project is not affiliated with Nintendo or any game publisher.
 
@@ -83,6 +83,16 @@ Install the IPA on your iPhone or iPad with a sideloading tool such as AltStore,
 Game too big to install? Build again with `--romfs separate`, and run the command the script prints once to copy the game files to your phone ([Quick reinstalls](docs/development.md#quick-reinstalls)).
 
 Controls, saves and settings: [Playing](docs/playing.md).
+
+### Why it needs a Mac
+
+The conversion runs on a Mac and stays there; doing it on the iPhone itself is not planned. iOS runs only code that was signed into an app when it was installed, and HorizonNative rewrites each game's own code and builds it into the game's app, with Xcode's compiler and linker and Apple's Metal shader compiler, which run only on macOS.
+
+Once a game is installed, you play it without the Mac: saves go through iCloud, and the touch controls or any controller work on their own. Back at the Mac you need it for:
+
+- **a new game**, or **an update** of one you have (an update changes the game's code, so the app is built again);
+- **DLC you get later**: the script extracts it on the Mac, then you copy it to the phone with the Files app, with no new build ([Add-on content bought later](docs/settings.md#add-on-content-bought-later));
+- **installing or reinstalling** the app, and, with a free Apple ID, signing it again every 7 days (some tools, such as SideStore, do that on the phone).
 
 ## Games
 

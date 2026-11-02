@@ -572,6 +572,7 @@ void loader_hash_log(void) {
     }
 }
 
+static char g_dir[1024];   // the rewritten modules' folder (load_modules), read again by a program restart (the Mac's pristine_source)
 #if TARGET_OS_IPHONE
 // iOS does not allow code loaded at run time to execute, and Apple allows an executable only one segment with execute permission (ITMS-90999): the image is compiled into this executable by dm/ios/tools/gen_embed.py --
 // the two code blocks (original text, patch area) are sections in __TEXT, and W (the rest of ro + data + bss) is a separate RW segment. The three blocks are not adjacent in the file; here one contiguous address range is reserved,
@@ -632,6 +633,16 @@ static void map_image(module_t *m, const char *dir) {
     if (z2) remap_at(m, base + m->back_off, x2, z2, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
     m->base = (uint8_t *)base; install_key_page(m);
 }
+// The module's bytes as rewritten, for a program restart (modules_restart_reset): *src points so that (*src)[off] is the byte at image offset off for off below *end; past it the
+// image is zero (bss, the key page's page before the host writes it). The embedded W section is never written: the module's own copy was remapped copy-on-write from it
+static void *pristine_source(module_t *m, const uint8_t **src, uint64_t *end) {
+    char sx0[17], dm[17]; snprintf(sx0, sizeof sx0, "__dm%sx0", m->name); snprintf(dm, sizeof dm, "__DM%sW", m->name);
+    unsigned long z0 = 0, zw = 0;
+    const uint8_t *x0 = getsectiondata(IMAGE_MH, "__TEXT", sx0, &z0), *w = getsectiondata(IMAGE_MH, dm, "__img", &zw);
+    if (!x0 || !w) die("restart: embedded sections of %s missing", m->name);
+    *src = w - z0; *end = z0 + zw;
+    return NULL;
+}
 #else
 static uint8_t *slurp(const char *path, size_t *n) {
     int fd = open(path, O_RDONLY);
@@ -675,9 +686,54 @@ static void map_image(module_t *m, const char *dir) {
     uint64_t po = m->patch_off & ~0x3FFFull;
     if (mprotect(m->base + po, m->size - po, PROT_READ | PROT_EXEC)) die("%s mprotect patch", m->name);
 }
+
+static void *pristine_source(module_t *m, const uint8_t **src, uint64_t *end) {
+    char path[1024]; snprintf(path, sizeof path, "%s/%s.patched.bin", g_dir, m->name);
+    size_t sz; uint8_t *raw = slurp(path, &sz);
+    uint64_t fl = m->patch_off < 0 ? m->file_image_len : (uint64_t)m->patch_off;
+    if (sz < fl) die("restart: %s is shorter than its image (%#zx < %#llx)", path, sz, (unsigned long long)fl);
+    *src = raw; *end = fl;
+    return raw;
+}
 #endif
 
+// Program restart (hle_restart.c), RESET, after guest memory: every module of the profile gets its data as rewritten back, then is relocated again in load order, as at boot; no
+// guest code runs. The writable part of an image is everything between the sealed text and the patch area (or the image's end, with the patch area before the base), less the key
+// page (read-only, never changed) and a back patch area (code). DT_RELR adds the base in place, so the bytes must be the rewritten ones first. NROs leave the lookups: the game loads
+// them again, and nro_load restores their data from its copy (after a first load). The frame step page is set again from the settings
+static void restore_data(module_t *m) {
+    const uint8_t *src; uint64_t end; void *owned = pristine_source(m, &src, &end);
+    uint64_t lo = (m->text_end + 0x3FFF) & ~0x3FFFull, hi = m->patch_off >= 0 ? (uint64_t)m->patch_off & ~0x3FFFull : m->size;
+    uint64_t skip[2][2] = {{m->key_page_off, m->key_page_off + m->key_page_size}, {m->back_len ? m->back_off : hi, m->back_len ? m->back_off + m->back_len : hi}};
+    for (uint64_t a = lo; a < hi; ) {
+        int jumped = 0;
+        for (int k = 0; k < 2; k++) if (a >= skip[k][0] && a < skip[k][1]) { a = skip[k][1]; jumped = 1; }
+        if (jumped) continue;
+        uint64_t b = hi;
+        for (int k = 0; k < 2; k++) if (skip[k][0] > a && skip[k][0] < b) b = skip[k][0];
+        uint64_t c = end < a ? a : end < b ? end : b;   // [a, c) from the source, [c, b) zero
+        if (c > a) memcpy(m->base + a, src + a, c - a);
+        if (b > c) memset(m->base + c, 0, b - c);
+        a = b;
+    }
+    free(owned);
+}
+static void modules_restart_reset(void) {
+    pthread_rwlock_wrlock(&g_modules_mu);
+    g_nloaded = 0;
+    for (int i = 0; i < g_nmod; i++) {
+        module_t *m = &g_mod[i];
+        if (m->nro) { m->loaded = 0; continue; }
+        restore_data(m); g_loaded[g_nloaded++] = m;
+    }
+    for (int i = 0; i < g_nmod; i++) if (!g_mod[i].nro) relocate(&g_mod[i]);
+    pthread_rwlock_unlock(&g_modules_mu);
+    dm_fps_state_apply();
+}
+DM_RESTART_HOOK(DM_RESTART_RESET, 10, modules_restart_reset);
+
 void load_modules(const char *dir, const char **names, int n) {
+    strlcpy(g_dir, dir, sizeof g_dir);
     // Map everything and parse the symbol tables first, then relocate all at once (cross-module symbols must all be in place first)
     // DM_BOOTPROF: breakdown of ① host loading (milliseconds), to set the upper bound for ③ pre-relocation / mmap
     uint64_t t0 = now_ns(), tm = 0, tp = 0, tg = 0, tr = 0, t;

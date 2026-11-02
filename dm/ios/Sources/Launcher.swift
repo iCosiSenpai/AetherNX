@@ -136,6 +136,7 @@ private struct LauncherView: View {
     let play: () -> Void
 
     @StateObject private var nav = LauncherNav()
+    @StateObject private var controllers = ControllerListModel()
     @StateObject private var cloud = CloudSavesState()
     @State private var memory = os_proc_available_memory()
     @State private var headerGone = false
@@ -154,7 +155,10 @@ private struct LauncherView: View {
     private var focusOrder: [LauncherFocus] {
         var o: [LauncherFocus] = [.play]
         o += items.map(\.focus)
-        for section in m.sections { o += m.rows(in: section).map { .row($0.env) } }
+        for section in m.sections {
+            o += m.rows(in: section).map { .row($0.env) }
+            if section == "Controls" { o += controllers.rows.map { .controller($0.id) } }
+        }
         if m.changed { o.append(.reset) }
         if cloudOverride == nil {
             o.append(.cloud)
@@ -165,8 +169,10 @@ private struct LauncherView: View {
         return o
     }
 
+    private func start() { controllers.merge = m.values["DM_PAD_MERGE"] == "1"; controllers.apply(); play() }
+
     private var playButton: some View {
-        Button(action: play) {
+        Button(action: start) {
             Label("Play", systemImage: "play.fill").font(.title3.weight(.semibold)).labelStyle(.titleAndIcon)
                 .padding(.horizontal, 18).frame(minHeight: 44)
         }
@@ -213,6 +219,7 @@ private struct LauncherView: View {
                             if !rows.isEmpty {
                                 Section(section) {
                                     ForEach(rows) { SettingRow(s: $0, m: m, tint: tint, focused: nav.isFocused(.row($0.env))) }
+                                    if section == "Controls" { ConnectedControllers(controllers: controllers, tint: tint) { nav.isFocused(.controller($0)) } }
                                 }
                             }
                         }
@@ -257,7 +264,7 @@ private struct LauncherView: View {
                         }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button(action: play) { Text("Play").fontWeight(.semibold) }
+                        Button(action: start) { Text("Play").fontWeight(.semibold) }
                             .buttonStyle(.glassProminent).tint(tint.fill)   // a toolbar draws its own glass: only the prominent glass style takes the tint there
                             .accessibilityHint("Starts the game with these settings")
                     }
@@ -269,10 +276,14 @@ private struct LauncherView: View {
         .onAppear {
             cloud.refresh()
             nav.order = { focusOrder }
-            nav.play = play
-            nav.adjust = { f, d in if case .row(let e) = f, let s = m.settings.first(where: { $0.env == e }) { m.step(s, by: d) } }
+            nav.play = start
+            nav.adjust = { f, d in
+                if case .controller(let id) = f { controllers.step(id, d) }
+                if case .row(let e) = f, let s = m.settings.first(where: { $0.env == e }) { m.step(s, by: d) }
+            }
             nav.activate = { f in
                 switch f {
+                case .controller(let id): controllers.step(id, 1)
                 case .summary(let e): nav.focus = e == "cloud" ? .cloud : .row(e)
                 case .row(let e):
                     guard let s = m.settings.first(where: { $0.env == e }), s.kind != "range" else { return }
@@ -287,6 +298,11 @@ private struct LauncherView: View {
             }
         }
         .task { await nav.run() }
+        .onChange(of: m.values["DM_PAD_MERGE"]) { _, v in controllers.merge = v == "1"; controllers.refresh() }
+        .task {
+            controllers.merge = m.values["DM_PAD_MERGE"] == "1"
+            while !Task.isCancelled { controllers.refresh(); try? await Task.sleep(for: .seconds(1)) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMCloudContainerResolved"))) { _ in cloud.refresh() }   // automatic iCloud became known
         .task {
             while !Task.isCancelled {

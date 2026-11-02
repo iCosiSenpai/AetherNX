@@ -74,3 +74,7 @@ HLE_FORCE("_ZN2nn2vi12ListDisplaysEPNS0_11DisplayInfoEi", "list displays; the ho
 HLE_FORCE("_ZN2nn2vi12DestroyLayerEPNS0_5LayerE", "destroy layer; host static object", void, h_vi_DestroyLayer, void *layer) { (void)layer; }
 HLE_FORCE("_ZN2nn2vi12CloseDisplayEPNS0_7DisplayE", "close display; host static object", void, h_vi_CloseDisp, void *disp) { (void)disp; }
 HLE_FORCE("_ZN2nn2vi8FinalizeEv", "display service shutdown; the host has no vi service", void, h_vi_Fini, void) {}
+
+// Program restart (dm/host/hle_restart.c), RESET: the layer size and crop the old program set; the display and layer objects are static and the new program gets them again
+static void vi_restart_reset(void) { atomic_store(&g_layer_wh, 0); atomic_store(&g_crop, 0); }
+DM_RESTART_HOOK(DM_RESTART_RESET, 60, vi_restart_reset);

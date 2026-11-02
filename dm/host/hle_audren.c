@@ -393,7 +393,7 @@ static Result render_once(uint8_t *sys, int16_t *dst, int *nout) {
     }
     int md = gen20 ? *(int32_t *)(sys + 0x4c) : mode(sys), dv = gen20 ? *(int32_t *)(sys + 0x48) : device(sys);
     if (md != 1 || dv != 1) return 0x40299;   // same as the original: manual rendering needs CPU + manual mode
-    pthread_mutex_lock(&g_render_mu);
+    pthread_mutex_lock(&g_render_mu); dm_kill_hold++;   // the SDK's renderer runs under it (a program restart ends this thread after it)
     uint64_t t0 = now_ns();
     // Command generation must exclude the game thread's RequestUpdate (AudioRenderSystem::Update, which holds the mutex at mu_off): the original system thread (SendCommandToDsp) generates under the same lock. Processing (the CPU DSP) stays outside the lock, as in the original.
     uint8_t *cl; size_t n;
@@ -408,7 +408,7 @@ static Result render_once(uint8_t *sys, int16_t *dst, int *nout) {
     // render time per frame (budget: 5 ms per frame): mean / max every 2000 frames
     static uint64_t sum, mx, cnt; uint64_t d = now_ns() - t0; sum += d; if (d > mx) mx = d;
     if (++cnt == 2000) { LOG("audren: render time mean %.2f ms / max %.2f ms (5 ms budget per frame, last 2000 frames); catch-up renders so far %llu", sum / 2000 / 1e6, mx / 1e6, (unsigned long long)atomic_load(&g_catchups)); sum = mx = cnt = 0; }
-    pthread_mutex_unlock(&g_render_mu);
+    dm_kill_hold--; pthread_mutex_unlock(&g_render_mu);
     return RES_OK;
 }
 // Where the AudioRenderSystem sits inside AudioRendererImpl, read off the SDK's own ExecuteAudioRendererRendering: its prologue adds the offset to `this` (x0) before the first branch.
@@ -493,3 +493,14 @@ HLE_FORCE("_ZN2nn5audio39AcquireAudioDeviceNotificationForOutputEPNS_2os11System
 // SDK 7 names of the two above (Super Mario Odyssey): the device-switch event and the active channel count
 HLE_FORCE("_ZN2nn5audio36AcquireAudioDeviceSwitchNotificationEPNS_2os11SystemEventE", "output device switch notification (SDK 7 name): bound, never signaled", void, h_ad_Notify7, void *ev) { hle_bind_system_event(ev, 0); }
 HLE_FORCE("_ZN2nn5audio21GetActiveChannelCountEv", "output channel count (SDK 7 name): 2", int, h_ad_Channels7, void) { return 2; }
+
+// Program restart (hle_restart.c). STOP: the render thread runs the renderer on the game's behalf and waits for the output in host code: told to stop here, it closes its output and
+// ends at its next round. RELEASE: the renderer's host-backed work buffer goes (CloseAudioRenderer would free it), and the catch-up queue starts empty
+static void audren_restart_stop(void) { atomic_store(&g_open, 0); cq_popped(); }
+DM_RESTART_HOOK(DM_RESTART_STOP, 30, audren_restart_stop);
+static void audren_restart_release(void) {
+    if (g_handle[0]) free(objmap_del(g_handle[0]));
+    g_handle[0] = g_handle[1] = NULL; g_render_tt = NULL;
+    atomic_store(&g_cq_head, 0); atomic_store(&g_cq_tail, 0);
+}
+DM_RESTART_HOOK(DM_RESTART_RELEASE, 20, audren_restart_release);

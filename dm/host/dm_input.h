@@ -21,6 +21,13 @@ uint64_t dm_input_samples(void);   // Cumulative number of times the game has sa
 void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
 void dm_pad_set_player(int player, uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);   // player 0..DM_PLAYERS-1 (player 1..8)
 void dm_pad_players(uint32_t mask);   // bit p: player p + 1 has a controller; player 1 always counts as connected (the keyboard, the touch gamepad, DM_KEYS)
+// Front-end controller settings, main thread only; changes republish held input immediately (keyboard / touch are unaffected).
+int dm_pad_buttons(void);                    // 0: Switch positions, 1: printed labels (Nintendo always uses positions)
+void dm_pad_set_buttons(int label);
+float dm_pad_deadzone(void);
+void dm_pad_set_deadzone(float amount);      // radial, 0..0.3 on both physical sticks
+int dm_pad_controller_player(const void *controller);   // GCController pointer -> 0..7, -1 when not assigned
+int dm_pad_controller_move(const void *controller, int player);   // swap two players, including their motion and rumble; 0 if unavailable
 // Live controller motion (hle_hid.c, motion_fusion.h): player 0..DM_PLAYERS-1's gyro and accelerometer as GameController reports them, acceleration in G (gravity direction,
 // (0, 0, -1) face up) and rotation rate in rad/s, in Apple's controller frame. While samples keep coming the player's six-axis sensor follows the controller; dm_motion_clear stops it
 void dm_motion_set(int player, const float acc[3], const float rot[3]);

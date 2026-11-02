@@ -161,3 +161,7 @@ HLE_FORCE("_ZN2nn3mem17StandardAllocator8AllocateEm", "passed straight to the SD
     pthread_once(&g_sa_once, sa_init);
     return g_sa_big_align && size >= 0x10000 ? g_sa_alloc_al(self, size, 0x10000) : g_sa_alloc(self, size);
 }
+
+// Program restart (hle_restart.c), RESET: the side table's keys are the old program's objects; their owners released the host objects in RELEASE (audio, the renderer)
+static void objmap_restart_reset(void) { pthread_mutex_lock(&g_om_lock); memset(g_om, 0, sizeof g_om); pthread_mutex_unlock(&g_om_lock); }
+DM_RESTART_HOOK(DM_RESTART_RESET, 90, objmap_restart_reset);

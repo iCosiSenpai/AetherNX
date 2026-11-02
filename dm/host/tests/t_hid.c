@@ -11,6 +11,7 @@ static int hid_usleep(useconds_t usec);
 #undef clock_gettime
 #undef usleep
 #include "../pad_slots.h"
+#include "../pad_map.h"
 
 static int checks, fails, g_mode = 1, g_signals;
 static void *g_signalled;
@@ -66,8 +67,38 @@ static void t_slots(void) {
     CHECK(pad_slot_mask(&s) == (1u << DM_PLAYERS) - 1, "every slot held");
     CHECK(pad_slot_take(&s, &many[DM_PLAYERS - 3], "Pro Controller") == -1, "a ninth controller gets no player");
     CHECK(pad_slot_take(&s, NULL, "x") == -1 && pad_slot_free(&s, NULL) == -1, "no owner, no slot");
+    CHECK(pad_slot_move(&s, &a, 1) == 1 && pad_slot_of(&s, &b2) == 0, "moving to an occupied player swaps its controller");
+    CHECK(!strcmp(s.last[1], "Xbox Wireless Controller") && !strcmp(s.last[0], "DualSense Wireless Controller"), "the reconnect names follow both controllers");
+    CHECK(pad_slot_move(&s, &a, 1) == 1 && pad_slot_mask(&s) == 255, "moving to the same player keeps all slots");
+    CHECK(pad_slot_move(&s, NULL, 0) == -1 && pad_slot_move(&s, &a, -1) == -1 && pad_slot_move(&s, &a, DM_PLAYERS) == -1, "invalid moves leave slots alone");
+    pad_slot_free(&s, &b2);
+    CHECK(pad_slot_move(&s, &a, 0) == 0 && !s.owner[1], "moving to a free player releases the old player");
+    CHECK(pad_slot_free(&s, &a) == 0 && pad_slot_take(&s, &a, "Xbox Wireless Controller") == 0, "reconnecting keeps the selected player");
     memset(&s, 0, sizeof s);   // DM_KBD_PLAYER=own: the keyboard holds player 1 for good
     CHECK(pad_slot_take(&s, &kbd, "keyboard") == 0 && pad_slot_take(&s, &a, "Xbox Wireless Controller") == 1, "with the keyboard on its own the first controller is player 2");
+}
+
+static void t_pad_map(void) {
+    CHECK(pad_is_nintendo("Switch Pro Controller", "") && pad_is_nintendo("Nintendo Switch Joy-Con (L/R)", ""), "Nintendo categories keep positions");
+    CHECK(pad_is_nintendo("HID", "Pro Controller") && pad_is_nintendo("HID", "Joy-Con (L)"), "Nintendo vendor fallback works without a category constant");
+    CHECK(!pad_is_nintendo("Xbox One", "Xbox Wireless Controller") && !pad_is_nintendo(NULL, NULL), "other controllers and missing names do not force Nintendo mapping");
+    static const uint64_t position[] = {DM_BTN_B, DM_BTN_A, DM_BTN_Y, DM_BTN_X}, label[] = {DM_BTN_A, DM_BTN_B, DM_BTN_X, DM_BTN_Y};
+    for (int i = 0; i < 4; i++) {
+        CHECK(pad_map_buttons(i == 0, i == 1, i == 2, i == 3, 0, 0) == position[i], "each face button maps by position");
+        CHECK(pad_map_buttons(i == 0, i == 1, i == 2, i == 3, 1, 0) == label[i], "Xbox / PlayStation labels map directly");
+        CHECK(pad_map_buttons(i == 0, i == 1, i == 2, i == 3, 1, 1) == position[i], "Nintendo keeps positions in label mode");
+    }
+    CHECK(pad_map_buttons(1, 1, 1, 1, 1, 0) == 15 && pad_map_buttons(0, 0, 0, 0, 0, 0) == 0, "simultaneous and released buttons");
+    float x = 0.1f, y = 0.1f; pad_map_stick(&x, &y, 0.2f);
+    CHECK(x == 0 && y == 0, "inside the radial dead zone is silent");
+    x = 0.2f; y = 0; pad_map_stick(&x, &y, 0.2f); CHECK(x == 0 && y == 0, "the dead zone edge is zero");
+    x = 0.6f; pad_map_stick(&x, &y, 0.2f); CHECK(fabsf(x - 0.5f) < 1e-6f, "the remaining travel is rescaled");
+    x = -0.6f; y = 0.8f; pad_map_stick(&x, &y, 0.3f);
+    CHECK(fabsf(x + 0.6f) < 1e-6f && fabsf(y - 0.8f) < 1e-6f, "full tilt keeps magnitude and direction");
+    x = 0.18f; y = -0.24f; pad_map_stick(&x, &y, 0.2f);
+    CHECK(fabsf(x - 0.075f) < 1e-6f && fabsf(y + 0.1f) < 1e-6f, "diagonal dead zone uses radius, preserving direction");
+    x = 0.1f; y = -1; pad_map_stick(&x, &y, 0); CHECK(x == 0.1f && y == -1, "zero dead zone preserves the original axes");
+    CHECK(pad_deadzone_value(NAN) == 0 && pad_deadzone_value(-1) == 0 && pad_deadzone_value(1) == 0.3f, "invalid setting values stay in range");
 }
 
 static void t_npads(void) {
@@ -369,6 +400,7 @@ static void t_motion_hid(void) {
 int main(void) {
     CHECK(setenv("DM_RUMBLE_LOG", "1", 1) == 0, "enable rumble diagnostics");
     t_slots();
+    t_pad_map();
     t_npads();
     t_script();
     t_vibration();

@@ -14,6 +14,7 @@
 #include "front.h"
 #include "hle.h"
 #include "pad_slots.h"
+#include "pad_map.h"
 #include "haptics_apple.h"
 #include "motion_apple.h"
 #include "motion_pro_mac.h"
@@ -118,23 +119,60 @@ static void on_key(NSEvent *e, int down) {
 static pad_slots g_slots;
 static GCController *g_held[DM_PLAYERS];   // the controller of each slot, kept alive while it holds it (the slot table keys on its pointer)
 static int g_merge, g_kbd_own;
+static int g_pad_label; static float g_pad_deadzone;
+int dm_pad_buttons(void) { return g_pad_label; }
+float dm_pad_deadzone(void) { return g_pad_deadzone; }
+static void pad_lights(GCController *c, int p) {
+    c.playerIndex = p < 4 ? (GCControllerPlayerIndex)p : GCControllerPlayerIndexUnset;   // GameController's player LEDs stop at player 4
+    float rgb[3]; pad_player_color(p, rgb);
+    c.light.color = [[GCColor alloc] initWithRed:rgb[0] green:rgb[1] blue:rgb[2]];
+}
+static NSArray<GCController *> *g_launch_order;
+static void pad_launch_players(void) {
+    const char *e = getenv("DM_PAD_PLAYERS"); if (!e) return;   // names plus connection order keep identical models distinct for this launch
+    NSData *data = [@(e) dataUsingEncoding:NSUTF8StringEncoding];
+    id players = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![players isKindOfClass:NSArray.class]) return;
+    NSArray<GCController *> *now = GCController.controllers; NSMutableArray<GCController *> *order = [NSMutableArray new];
+    for (int p = 0; p < DM_PLAYERS && p < (int)[players count]; p++) {
+        id row = players[p]; if (![row isKindOfClass:NSDictionary.class]) continue;
+        id name = row[@"name"], category = row[@"category"], index = row[@"index"];
+        if (![name isKindOfClass:NSString.class] || ![category isKindOfClass:NSString.class] || ![index isKindOfClass:NSNumber.class]) continue;
+        snprintf(g_slots.last[p], sizeof g_slots.last[p], "%s", [name UTF8String]);
+        NSInteger i = [index integerValue]; GCController *pick = i >= 0 && i < (NSInteger)now.count ? now[i] : nil;
+        BOOL (^matches)(GCController *) = ^BOOL(GCController *c) { return c.extendedGamepad && [(c.vendorName ?: @"Controller") isEqual:name] && [c.productCategory isEqual:category] && ![order containsObject:c]; };
+        if (!matches(pick)) { pick = nil; for (GCController *c in now) if (matches(c)) { pick = c; break; } }
+        if (pick) [order addObject:pick];
+    }
+    for (GCController *c in now) if (![order containsObject:c]) [order addObject:c];
+    g_launch_order = order;
+}
 static int32_t pad_axis(float v) { return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * DM_STICK_MAX); }
 static void pad_read(GCExtendedGamepad *g) {
     if (!g_input_on) return;
     int p = g_merge ? 0 : pad_slot_of(&g_slots, (__bridge const void *)g.controller); if (p < 0) return;
     dm_haptics_apple_controller(p, g.controller);
-    uint64_t m = 0;
+    uint64_t m = pad_map_buttons(g.buttonA.isPressed, g.buttonB.isPressed, g.buttonX.isPressed, g.buttonY.isPressed, g_pad_label, pad_is_nintendo(g.controller.productCategory.UTF8String, g.controller.vendorName.UTF8String));
     #define K(btn, bit) if (btn.isPressed) m |= bit
-    K(g.buttonB, DM_BTN_A); K(g.buttonA, DM_BTN_B); K(g.buttonY, DM_BTN_X); K(g.buttonX, DM_BTN_Y);   // by position: right A, bottom B, top X, left Y
     K(g.leftShoulder, DM_BTN_L); K(g.rightShoulder, DM_BTN_R); K(g.leftTrigger, DM_BTN_ZL); K(g.rightTrigger, DM_BTN_ZR);
     K(g.buttonMenu, DM_BTN_PLUS); K(g.buttonOptions, DM_BTN_MINUS); K(g.leftThumbstickButton, DM_BTN_LS); K(g.rightThumbstickButton, DM_BTN_RS);   // nil on pads without them: not pressed
     K(g.dpad.left, DM_BTN_LEFT); K(g.dpad.up, DM_BTN_UP); K(g.dpad.right, DM_BTN_RIGHT); K(g.dpad.down, DM_BTN_DOWN);
     #undef K
-    dm_pad_set_player(p, m, pad_axis(g.leftThumbstick.xAxis.value), pad_axis(g.leftThumbstick.yAxis.value), pad_axis(g.rightThumbstick.xAxis.value), pad_axis(g.rightThumbstick.yAxis.value));
+    float lx = g.leftThumbstick.xAxis.value, ly = g.leftThumbstick.yAxis.value, rx = g.rightThumbstick.xAxis.value, ry = g.rightThumbstick.yAxis.value;
+    pad_map_stick(&lx, &ly, g_pad_deadzone); pad_map_stick(&rx, &ry, g_pad_deadzone);
+    dm_pad_set_player(p, m, pad_axis(lx), pad_axis(ly), pad_axis(rx), pad_axis(ry));
+}
+void dm_pad_set_buttons(int label) {
+    g_pad_label = label != 0;
+    for (GCController *c in GCController.controllers) if (c.extendedGamepad) pad_read(c.extendedGamepad);
+}
+void dm_pad_set_deadzone(float amount) {
+    g_pad_deadzone = pad_deadzone_value(amount);
+    for (GCController *c in GCController.controllers) if (c.extendedGamepad) pad_read(c.extendedGamepad);
 }
 // Home and Capture: without this macOS takes them as system gestures (Home opens the Games app); the host gives them no function
 static void pad_keep_system_buttons(GCController *c) { for (NSString *b in @[GCInputButtonHome, GCInputButtonShare]) c.physicalInputProfile.buttons[b].preferredSystemGestureState = GCSystemGestureStateDisabled; }
-static const char *pad_name(GCController *c) { return c.vendorName.UTF8String ?: "?"; }
+static const char *pad_name(GCController *c) { return c.vendorName.UTF8String ?: "Controller"; }
 static void npad_name(int p, char *out, size_t cap) { uint32_t id = dm_player_npad(p); if (id == 0x20) snprintf(out, cap, "handheld"); else snprintf(out, cap, "%u", id); }
 static void pro_players_changed(GCController *gone) {
     int count = 0, player = -1;
@@ -147,9 +185,10 @@ static void pro_devices_changed(void) { pro_players_changed(nil); }
 // Called at start and on every connect / disconnect (gone: the controller that was just removed, nil on a connect)
 static void pads_changed(GCController *gone) {
     if (g_merge) {
+        g_launch_order = nil;
         int any = 0;
         for (GCController *c in GCController.controllers) if (c.extendedGamepad && c != gone) {
-            any = 1; pad_keep_system_buttons(c); c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; pad_read(g); };
+            any = 1; pad_keep_system_buttons(c); pad_lights(c, 0); c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; pad_read(g); };
             dm_motion_attach(c, 0);   // every controller is player 1: the last one moved drives its six-axis sensor
             pad_read(c.extendedGamepad);
         }
@@ -167,10 +206,11 @@ static void pads_changed(GCController *gone) {
         pad_slot_free(&g_slots, (__bridge const void *)g_held[p]); g_held[p] = nil;
         dm_pad_set_player(p, 0, 0, 0, 0, 0);   // nothing stays pressed
     }
-    for (GCController *c in now) if (c.extendedGamepad && c != gone && pad_slot_of(&g_slots, (__bridge const void *)c) < 0) {
+    NSArray<GCController *> *ordered = g_launch_order ?: now; g_launch_order = nil;
+    for (GCController *c in ordered) if (c.extendedGamepad && c != gone && pad_slot_of(&g_slots, (__bridge const void *)c) < 0) {
         int p = pad_slot_take(&g_slots, (__bridge const void *)c, pad_name(c));
         if (p < 0) { LOG("controller '%s' connected: all %d players are taken, not used", pad_name(c), DM_PLAYERS); continue; }
-        g_held[p] = c; pad_keep_system_buttons(c);
+        g_held[p] = c; pad_keep_system_buttons(c); pad_lights(c, p);
         c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; pad_read(g); };
         dm_motion_attach(c, p);
         npad_name(p, nb, sizeof nb); LOG("controller '%s' connected: player %d (npad %s)%s", pad_name(c), p + 1, nb, c.motion.hasRotationRate ? ", with motion (gyro)" : "");
@@ -178,6 +218,24 @@ static void pads_changed(GCController *gone) {
     }
     dm_pad_players(pad_slot_mask(&g_slots));
     pro_players_changed(gone);
+}
+int dm_pad_controller_player(const void *controller) { return g_merge ? 0 : pad_slot_of(&g_slots, controller); }
+int dm_pad_controller_move(const void *controller, int to) {
+    int from = pad_slot_of(&g_slots, controller);
+    if (g_merge || from < 0 || to < 0 || to >= DM_PLAYERS) return 0;
+    if (g_kbd_own && to == 0) return 0;   // player 1 belongs to the keyboard for this launch
+    if (from == to) return 1;
+    for (int p = 0; p < DM_PLAYERS; p++) if (p == from || p == to) {
+        dm_motion_detach(g_held[p], p); dm_haptics_apple_controller(p, nil); dm_pad_set_player(p, 0, 0, 0, 0, 0);
+    }
+    if (pad_slot_move(&g_slots, controller, to) < 0) return 0;
+    GCController *other = g_held[to]; g_held[to] = g_held[from]; g_held[from] = other;
+    for (int p = 0; p < DM_PLAYERS; p++) if ((p == from || p == to) && g_held[p]) {
+        pad_lights(g_held[p], p); dm_motion_attach(g_held[p], p); pad_read(g_held[p].extendedGamepad);
+    }
+    dm_pad_players(pad_slot_mask(&g_slots));
+    pro_players_changed(nil);
+    return 1;
 }
 // Focus: a window that is no longer key sees no key-up, mouse-up or controller release, so whatever is held when it loses focus (another app, the text box, minimized) would
 // stay pressed in the game. The front end releases only what it pressed itself: scripted buttons and sticks have their own path, and the touch is also DM_KEYS / DM_CTL's (hle_hid.c).
@@ -198,6 +256,9 @@ static void input_resume(void) {
     else for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p].extendedGamepad) pad_read(g_held[p].extendedGamepad);
 }
 static void pads_start(void) {
+    const char *layout = getenv("DM_PAD_BUTTONS"), *deadzone = getenv("DM_PAD_DEADZONE");
+    g_pad_label = layout && !strcmp(layout, "label"); g_pad_deadzone = pad_deadzone_value(deadzone ? strtof(deadzone, NULL) : 0);
+    pad_launch_players();
     const char *e = getenv("DM_PAD_MERGE"); g_merge = e && atoi(e);
     e = getenv("DM_KBD_PLAYER"); g_kbd_own = !g_merge && e && !strcmp(e, "own");
     static const char kbd = 0;
@@ -206,6 +267,73 @@ static void pads_start(void) {
                                                                            : "each controller is a player of its own, the keyboard plays with player 1");
     pads_changed(nil);
     dm_motion_pro_start(pro_devices_changed);
+}
+
+// The game window shares the app's launcher choices; a bare dmhost has no settings list / preferences domain and applies these changes only for this run.
+static NSDictionary *pad_menu_setting(NSString *env) {
+    static NSArray *settings; static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSURL *url = [NSBundle.mainBundle.resourceURL URLByAppendingPathComponent:@"dm/launcher.json"];
+        NSData *data = [NSData dataWithContentsOfURL:url];
+        id file = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        id rows = [file isKindOfClass:NSDictionary.class] ? file[@"settings"] : nil;
+        settings = [rows isKindOfClass:NSArray.class] ? rows : @[];
+    });
+    for (id row in settings) if ([row isKindOfClass:NSDictionary.class] && [row[@"env"] isEqual:env]) return row;
+    return nil;
+}
+static BOOL pad_menu_fixed(NSString *env) {
+    NSString *keys = [NSString stringWithFormat:@"%s %s", getenv("DM_ENV_LAUNCH_KEYS") ?: "", getenv("DM_ENV_FILE_KEYS") ?: ""];
+    return [[keys componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceCharacterSet] containsObject:env];
+}
+static void pad_menu_save(NSString *env, NSString *value) {
+    if (pad_menu_fixed(env)) return;
+    setenv(env.UTF8String, value.UTF8String, 1);
+    NSDictionary *setting = pad_menu_setting(env); NSString *domain = NSBundle.mainBundle.bundleIdentifier;
+    const char *saved = getenv("DM_SAVED_CHOICES");
+    if (!setting || !domain || (saved && !strcmp(saved, "0"))) return;
+    NSString *def = setting[@"default"]; if (![def isKindOfClass:NSString.class]) return;
+    BOOL same = [setting[@"kind"] isEqual:@"range"] ? fabs(value.doubleValue - def.doubleValue) < 1e-6 : [value isEqual:def];
+    NSString *key = [@"launcher." stringByAppendingString:env];
+    CFPreferencesSetAppValue((__bridge CFStringRef)key, same ? NULL : (__bridge CFStringRef)value, (__bridge CFStringRef)domain);
+    CFPreferencesAppSynchronize((__bridge CFStringRef)domain);
+}
+@interface DmControllersMenu : NSObject <NSMenuDelegate>
+- (void)choose:(NSMenuItem *)item;
+@end
+@implementation DmControllersMenu
+- (void)choose:(NSMenuItem *)item {
+    NSString *env = item.representedObject[@"env"], *value = item.representedObject[@"value"];
+    if (pad_menu_fixed(env)) return;
+    if ([env isEqual:@"DM_PAD_BUTTONS"]) dm_pad_set_buttons([value isEqual:@"label"]);
+    else dm_pad_set_deadzone(value.floatValue);
+    pad_menu_save(env, value);
+}
+- (void)menuNeedsUpdate:(NSMenu *)menu {
+    for (NSMenuItem *item in menu.itemArray) {
+        if (!item.representedObject) continue;
+        NSString *env = item.representedObject[@"env"], *value = item.representedObject[@"value"];
+        BOOL on = [env isEqual:@"DM_PAD_BUTTONS"] ? dm_pad_buttons() == [value isEqual:@"label"] : fabsf(dm_pad_deadzone() - value.floatValue) < 1e-6f;
+        item.state = on ? NSControlStateValueOn : NSControlStateValueOff; item.enabled = !pad_menu_fixed(env);
+    }
+}
+@end
+static NSMenu *pad_menu(void) {
+    static DmControllersMenu *target; target = [DmControllersMenu new];
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Controllers"];
+    for (NSString *env in @[@"DM_PAD_BUTTONS", @"DM_PAD_DEADZONE"]) {
+        NSMenu *sub = [[NSMenu alloc] initWithTitle:[env isEqual:@"DM_PAD_BUTTONS"] ? @"Button layout" : @"Stick dead zone"];
+        sub.delegate = target; sub.autoenablesItems = NO;
+        [[menu addItemWithTitle:sub.title action:nil keyEquivalent:@""] setSubmenu:sub];
+        NSArray *values = [env isEqual:@"DM_PAD_BUTTONS"] ? @[@"position", @"label"] : @[@"0", @"0.05", @"0.10", @"0.15", @"0.20"];
+        for (NSString *value in values) {
+            NSString *title = [env isEqual:@"DM_PAD_BUTTONS"] ? ([value isEqual:@"position"] ? @"Switch: A on the right" : @"Xbox / PlayStation: A at the bottom") : [NSString stringWithFormat:@"%.0f %%", value.doubleValue * 100];
+            NSMenuItem *item = [sub addItemWithTitle:title action:@selector(choose:) keyEquivalent:@""];
+            item.target = target; item.representedObject = @{@"env": env, @"value": value};
+            item.onStateImage = [NSImage imageWithSystemSymbolName:@"smallcircle.filled.circle" accessibilityDescription:nil];
+        }
+    }
+    return menu;
 }
 
 // Mouse as a single-point touchscreen (front.h dm_touch_set): left button down / drag = finger 0, release = lifted. The content view takes the clicks,
@@ -279,6 +407,7 @@ void front_run(void (*guest)(void)) {
         [app addItemWithTitle:@"Quit " DM_GAME_NAME action:@selector(terminate:) keyEquivalent:@"q"];
         [[bar addItemWithTitle:@"Window" action:nil keyEquivalent:@""] setSubmenu:wm];
         [wm addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"].keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagCommand;
+        [[bar addItemWithTitle:@"Controllers" action:nil keyEquivalent:@""] setSubmenu:pad_menu()];
         NSApp.mainMenu = bar;
         const char *fs = getenv("DM_FULLSCREEN");   // 1 (or any value but 0): start in fullscreen; 0, the settings window's Window, or unset: a window
         if (fs && strcmp(fs, "0")) dispatch_async(dispatch_get_main_queue(), ^{ [win toggleFullScreen:nil]; });

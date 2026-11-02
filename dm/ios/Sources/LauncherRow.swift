@@ -9,6 +9,142 @@ import AppKit
 import UIKit
 #endif
 
+// MARK: - Connected controllers
+
+struct ControllerInfo: Identifiable, Equatable {
+    let id: ObjectIdentifier
+    let name, kind, battery: String
+    let player: Int   // zero based; -1 means the extended gamepad profile is unavailable or all players are taken
+    let supported: Bool
+    var detail: String { [kind, battery].filter { !$0.isEmpty }.joined(separator: " · ") }
+}
+
+/// A launcher owns session assignments until Play; the iOS in-game list reads the input view's actual slots instead.
+/// GameController has no stable device identity or transport field: reconnects match names, and rows never guess Bluetooth versus USB.
+@MainActor final class ControllerListModel: ObservableObject {
+    @Published private(set) var rows: [ControllerInfo] = []
+    let live: Bool
+    @Published var merge = false
+    private var slots = [GCController?](repeating: nil, count: 8)
+    private var last = [String](repeating: "", count: 8)
+    private var lit: [ObjectIdentifier: Int] = [:]
+    init(live: Bool = false) { self.live = live }
+    var firstPlayer: Int {
+        #if os(macOS)
+        return !merge && ProcessInfo.processInfo.environment["DM_KBD_PLAYER"] == "own" ? 1 : 0
+        #else
+        return 0
+        #endif
+    }
+    private func player(_ c: GCController) -> Int {
+        guard c.extendedGamepad != nil else { return -1 }
+        if merge { return 0 }
+        #if os(iOS)
+        if live { return Int(dm_pad_controller_player(Unmanaged.passUnretained(c).toOpaque())) }
+        #endif
+        return slots.firstIndex { $0 === c } ?? -1
+    }
+    func refresh() {
+        let now = GCController.controllers()
+        if !live {
+            if firstPlayer == 1 { slots[0] = nil; last[0] = "" }   // switching out of merge restores the keyboard's own player
+            for p in slots.indices where slots[p].map({ c in !now.contains { $0 === c } }) ?? false { slots[p] = nil }
+            for c in now where c.extendedGamepad != nil && !slots.contains(where: { $0 === c }) {
+                let name = c.vendorName ?? "Controller", free = (firstPlayer..<8).filter { slots[$0] == nil }
+                if let p = free.first(where: { last[$0] == name }) ?? free.first(where: { $0 == firstPlayer }) ?? free.first(where: { last[$0].isEmpty }) ?? free.first {
+                    slots[p] = c; last[p] = name
+                }
+            }
+            lit = lit.filter { id, _ in now.contains { ObjectIdentifier($0) == id } }
+            for c in now where c.extendedGamepad != nil {
+                let p = player(c), id = ObjectIdentifier(c)
+                if p >= 0 && lit[id] != p { Self.lights(c, p); lit[id] = p }
+            }
+        }
+        let updated = now.map { c in ControllerInfo(id: ObjectIdentifier(c), name: c.vendorName ?? "Controller", kind: Self.kind(c), battery: Self.battery(c), player: player(c), supported: c.extendedGamepad != nil) }
+        if updated != rows { rows = updated }
+    }
+    func move(_ id: ObjectIdentifier, to p: Int) {
+        guard !merge, (firstPlayer..<8).contains(p), let c = GCController.controllers().first(where: { ObjectIdentifier($0) == id }), c.extendedGamepad != nil else { return }
+        #if os(iOS)
+        if live { _ = dm_pad_controller_move(Unmanaged.passUnretained(c).toOpaque(), Int32(p)); refresh(); return }
+        #endif
+        guard let from = slots.firstIndex(where: { $0 === c }) else { return }
+        slots.swapAt(from, p); last.swapAt(from, p)
+        refresh()
+    }
+    func step(_ id: ObjectIdentifier, _ d: Int) {
+        guard let row = rows.first(where: { $0.id == id }), row.player >= 0 else { return }
+        let count = 8 - firstPlayer
+        move(id, to: firstPlayer + (row.player - firstPlayer + d % count + count) % count)
+    }
+    func apply() {
+        refresh()
+        let now = GCController.controllers()
+        let players: [[String: Any]] = slots.map { c in
+            guard let c, let i = now.firstIndex(where: { $0 === c }) else { return [:] }
+            return ["name": c.vendorName ?? "Controller", "category": c.productCategory, "index": i]
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: players), let text = String(data: data, encoding: .utf8) { setenv("DM_PAD_PLAYERS", text, 1) }
+    }
+    private static func lights(_ c: GCController, _ p: Int) {
+        c.playerIndex = GCControllerPlayerIndex(rawValue: p) ?? .indexUnset
+        let rgb: [(Float, Float, Float)] = [(0,0.3,1), (1,0.1,0.1), (0.1,1,0.2), (1,0.4,0), (0.7,0.1,1), (0,1,1), (1,0.2,0.6), (1,1,1)]
+        let v = rgb[p]; c.light?.color = GCColor(red: v.0, green: v.1, blue: v.2)
+    }
+    private static func kind(_ c: GCController) -> String {
+        let k = c.productCategory, name = c.vendorName ?? ""
+        if k == GCProductCategoryXboxOne { return "Xbox" }
+        if k == GCProductCategoryDualSense { return "DualSense" }
+        if k == GCProductCategoryDualShock4 { return "DualShock 4" }
+        if k.contains("Joy-Con") || k.contains("JoyCon") { return "Joy-Con" }
+        if k.contains("Switch Pro Controller") { return "Switch Pro Controller" }
+        // Apple's category constants have no Nintendo entries; older drivers can expose only a vendor name.
+        if name.contains("Joy-Con") || name.contains("JoyCon") { return "Joy-Con" }
+        if (name.contains("Nintendo") && name.contains("Pro Controller")) || name == "Pro Controller" { return "Switch Pro Controller" }
+        return "Other"
+    }
+    private static func battery(_ c: GCController) -> String {
+        guard let b = c.battery else { return "" }
+        var parts: [String] = []
+        if b.batteryLevel.isFinite && (0...1).contains(b.batteryLevel) { parts.append("\(Int((b.batteryLevel * 100).rounded())) %") }
+        if b.batteryState == .charging { parts.append("Charging") }
+        if b.batteryState == .full { parts.append("Full") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+struct ControllerSettingRow: View {
+    let row: ControllerInfo
+    @ObservedObject var controllers: ControllerListModel
+    let tint: GameTint
+    var focused = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(row.name)
+            Text(row.detail).font(.footnote).foregroundStyle(.secondary)
+            if row.player >= 0 {
+                Picker("Player", selection: Binding(get: { row.player }, set: { controllers.move(row.id, to: $0) })) {
+                    ForEach(controllers.firstPlayer..<8, id: \.self) { Text("Player \($0 + 1)").tag($0) }
+                }
+                .disabled(controllers.merge)
+            } else { Text(row.supported ? "All players are taken." : "No extended gamepad profile: not used.").font(.footnote).foregroundStyle(.secondary) }
+        }
+        .focusRing(focused, tint)
+        .id("controller." + String(describing: row.id))
+    }
+}
+
+struct ConnectedControllers: View {
+    @ObservedObject var controllers: ControllerListModel
+    let tint: GameTint
+    let focused: (ObjectIdentifier) -> Bool
+    var body: some View {
+        if controllers.rows.isEmpty { Text("Pair a controller in the system's Bluetooth settings, or connect a USB cable where supported.").font(.footnote).foregroundStyle(.secondary) }
+        ForEach(controllers.rows) { row in ControllerSettingRow(row: row, controllers: controllers, tint: tint, focused: focused(row.id)) }
+    }
+}
+
 // MARK: - Tint
 
 /// The one colour the launcher uses for what the player acts on: the game icon's dominant hue. `fill` sits behind white text (Play) with at least 4.5:1;
@@ -92,12 +228,14 @@ struct GameTint {
 
 /// What a game controller can focus, in screen order: Play, the summary strip's cells (one stop going up or down), the rows, then the screen's own controls.
 enum LauncherFocus: Hashable {
+    case controller(ObjectIdentifier)
     case play, summary(String), row(String), advanced, cloud, cloudOff, cloudAuto, reset, showAtLaunch, quit, support(String)
     var isSummary: Bool { if case .summary = self { return true } else { return false } }
     /// The id the screen's vertical scroll brings into view
     var scrollID: String {
         switch self {
         case .row(let e): return "row." + e
+        case .controller(let id): return "controller." + String(describing: id)
         case .summary: return "summary"
         case .play: return "header"
         case .cloud, .cloudOff, .cloudAuto: return "cloud"

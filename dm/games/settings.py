@@ -85,7 +85,15 @@ def build(gid, patched, control):
             d = parts[0] if platform == 'ios' else parts[1]
         if d.startswith('DM_GAME_'): return macro(d, n)
         if d.startswith('build:'):
-            v = os.environ.get(d[6:], '')
+            name, fallback, default = d[6:].partition('=')
+            v = os.environ.get(name)
+            if fallback and v is None:
+                env_file = os.environ.get('DM_ENV_FILE')
+                if env_file:
+                    for line in Path(env_file).expanduser().read_text(encoding='utf-8').splitlines():
+                        key, eq, val = line.strip().partition('=')
+                        if eq and key.strip() == name: v = val.strip(); break   # the first line wins, as env_file.h applies it
+            if v is None: v = default if fallback else ''
             return {'YES': '1', 'NO': '0', '': '0'}.get(v, v)   # build_ipa.sh's yes / no switches
         return d
 
