@@ -1,15 +1,35 @@
-HorizonNative
+AetherNX (switch-comp) — Universal Switch Decomp, Static Recomp & Native Apple Silicon Suite
 Copyright (c) 2026 Alessio Cosi (iCosiSenpai)
-https://github.com/iCosiSenpai/HorizonNative
+https://github.com/iCosiSenpai
 
-HorizonNative is created and maintained by Alessio Cosi (iCosiSenpai). It is free software under
-the MIT License (see LICENSE): you may use, copy, fork, modify and share it.
+AetherNX is created and maintained by Alessio Cosi (iCosiSenpai). Its core engine, CLI,
+Studio app (AetherNX.app), and HorizonNative runtime are free software under the MIT
+License (see LICENSE): you may use, copy, fork, modify, and share them.
 
-Forks, copies and redistributions, whole or in substantial part, must keep the LICENSE file with
-its copyright notices, including the name above: that is the condition of the MIT License. Please
-also keep this NOTICE, call your fork a fork of HorizonNative and link to the repository above in
-its README or about screen.
+Forks, copies, and redistributions, whole or in substantial part, must keep the LICENSE
+file with its copyright notices, including the names above: that is the condition of the
+MIT License. Please also keep this NOTICE, COPYRIGHT.md, and PROVENANCE.md.
 
-HorizonNative began from an imported base under the MIT License, whose copyright notice LICENSE
-keeps, and includes third-party code under its own licenses, which stay with that code: see
-dm/third_party/README.md and the Acknowledgements in README.md.
+AetherNX incorporates and unifies code and tools from 31 open-source projects, each under
+its own original license:
+- HorizonNative / nxnative (seedds, UnknownSoldier1945, iCosiSenpai — MIT License)
+- dm/third_party components: NVIDIA FLIP (BSD-3-Clause), libvpx v1.17.0 (BSD-3-Clause),
+  stb_vorbis 1.22 (MIT / Public Domain), Ryujinx 1.3.2 shader translator (MIT),
+  Vulkan-Headers 1.4.363 (Apache-2.0 / MIT), deko3d texture layout (zlib),
+  MacNativeGames (ly05010419 — MIT)
+- Static Recompilers: nxrt (fedebuonco — Unlicense), SwitchRecomp (bgyss — MIT),
+  mush8 (Catchingalls — MIT / Apache-2.0), LASRecomp (peiikai — MIT),
+  EoWRecomp (Nycolazs — MIT), AC-Recomp (swaymun — MIT), smo-recomp (Coz-0 — MIT),
+  SwitchStaticRecompiler (kahoot-ut)
+- Clean-Room Decomp & SDK Headers: nnheaders (open-ead — MIT), sead (open-ead — MIT),
+  dread-decomp (var-flotsam — MIT), OdysseyDecomp (MonsterDruide1 — MIT),
+  botw (zeldaret — Unlicense)
+- AI Decomp & Porting Skills: Game-Decompilation-Skill-For-Claude (lemiur — MIT),
+  decomp-skills (Ketbome — MIT), ns-game-apple-arm-port (realskyrin — MIT),
+  switch-port-to-apple (yokeyhh — MIT), decompile-skill (coyang — MIT),
+  re-skill (vgrichina — MIT), gba-matching-decomp-skill (FacundoMainere — MIT)
+- Optional Standalone Frontends in frontends/: LumaNX (Xc1Ym — MIT),
+  NxLibrary (Bium23 — MIT), nx-os (tripathishubham1 — MIT),
+  NX2Apple / NX Play (LNPANDY — GPL-3.0)
+
+See COPYRIGHT.md and PROVENANCE.md for the full repository-by-repository attribution table.

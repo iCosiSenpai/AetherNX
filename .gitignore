@@ -11,3 +11,14 @@ dm/games/*/cb_extent.tsv
 .coverage
 .coverage.*
 /coverage.json
+
+# Never track game dumps, keys, firmware, or per-title build workspaces
+*.nsp
+*.xci
+*.nsz
+*.xcz
+*.keys
+*.ipa
+*_build/
+dm/build/
+
