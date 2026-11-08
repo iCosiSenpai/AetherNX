@@ -56,6 +56,9 @@ struct DiscoveredGame: Identifiable, Codable, Hashable, Sendable {
     let title_id: String
     let name: String
     let has_base: Bool
+    let is_archived_only: Bool?
+    let archive_files: [String]?
+    let compressed_packages: [String]?
     let update_versions: [Int]
     let dlc_ids: [String]
     let build_exists: Bool
@@ -143,6 +146,7 @@ final class AetherNXViewModel: ObservableObject {
     // Advanced Build & Runtime Options
     @Published var gpuBackend: String = "none"
     @Published var packageOverride: String = "latest" // "latest" or "v0" or specific "vXXXXX"
+    @Published var iosRomfsMode: String = "bundle"    // "bundle" (All-in-One IPA) or "separate" (Slim <250MB IPA for Free Apple ID / SideStore)
     @Published var gameLanguage: String = "en-US"
     @Published var enableMetalHUD: Bool = false
     @Published var keepExtracted: Bool = true
@@ -362,13 +366,45 @@ final class AetherNXViewModel: ObservableObject {
     }
 
     func addGameFolder() {
-        if let url = pickFile(title: "Aggiungi una cartella gioco Switch (.nsp / .xci / .nsz)", canChooseDirectories: true, canChooseFiles: false) {
+        if let url = pickFile(title: "Aggiungi una cartella gioco Switch (.nsp / .xci / .nsz / .zip / .rar / .7z)", canChooseDirectories: true, canChooseFiles: false) {
             if !extraGamePaths.contains(url.path) {
                 extraGamePaths.append(url.path)
             }
             appendLog("[Library] Aggiunta cartella gioco: \(url.path)")
             scanGames()
         }
+    }
+
+    func unpackArchivePrompt() {
+        let panel = NSOpenPanel()
+        panel.title = "Seleziona un archivio (.zip, .rar, .7z, .tar.*, .nsz, .xcz) o una cartella da scompattare nella Libreria"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            var args = ["unpack", url.path, "--decompress-nsz"]
+            if FileManager.default.isReadableFile(atPath: prodKeysPath) {
+                args += ["-k", prodKeysPath]
+            }
+            runPipelineCommand(
+                title: "Unpack & Decompress (\(url.lastPathComponent))",
+                args: args
+            )
+        }
+    }
+
+    func unpackGameArchives(for game: DiscoveredGame, decompressNSZ: Bool = true) {
+        var args = ["unpack", game.directory]
+        if decompressNSZ {
+            args.append("--decompress-nsz")
+        }
+        if FileManager.default.isReadableFile(atPath: prodKeysPath) {
+            args += ["-k", prodKeysPath]
+        }
+        runPipelineCommand(
+            title: "Scompatta Archivi & NSZ (\(game.name))",
+            args: args
+        )
     }
 
     func importPackageIntoSelectedGame() {
@@ -563,9 +599,20 @@ final class AetherNXViewModel: ObservableObject {
     }
 
     func buildIOSIPA(for game: DiscoveredGame) {
+        if iosRomfsMode == "separate" {
+            buildIOSSlimIPA(for: game)
+        } else {
+            runPipelineCommand(
+                title: "Build Native iOS/iPadOS All-in-One IPA (\(game.name))",
+                args: ["build-ios", game.directory] + buildCommonFlags()
+            )
+        }
+    }
+
+    func buildIOSSlimIPA(for game: DiscoveredGame) {
         runPipelineCommand(
-            title: "Build Native iOS/iPadOS IPA (\(game.name))",
-            args: ["build-ios", game.directory] + buildCommonFlags()
+            title: "Build Slim Zero-JIT iOS/iPadOS IPA for Free Apple ID / SideStore (\(game.name))",
+            args: ["build-ios-slim", game.directory] + buildCommonFlags()
         )
     }
 
@@ -786,6 +833,16 @@ struct SidebarView: View {
                                 .foregroundStyle(.secondary)
                             Spacer()
                             Button {
+                                vm.unpackArchivePrompt()
+                            } label: {
+                                Label("Scompatta", systemImage: "archivebox.fill")
+                                    .font(.caption2)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Color.orange)
+                            .help("Scompatta archivi .zip / .rar / .7z / .nsz nella libreria")
+
+                            Button {
                                 vm.addGameFolder()
                             } label: {
                                 Label("Aggiungi", systemImage: "plus.circle.fill")
@@ -793,7 +850,7 @@ struct SidebarView: View {
                             }
                             .buttonStyle(.plain)
                             .foregroundStyle(Color.accentColor)
-                            .help("Aggiungi una cartella gioco Switch (.nsp / .xci)")
+                            .help("Aggiungi una cartella gioco Switch (.nsp / .xci / .nsz)")
                         }
                         .padding(.horizontal, 8)
 
@@ -839,6 +896,12 @@ struct SidebarView: View {
                                             if (game.lifted_chunks ?? 0) > 0 {
                                                 BadgePill(text: "RECOMP", color: .pink)
                                             }
+                                            if let cpkgs = game.compressed_packages, !cpkgs.isEmpty {
+                                                BadgePill(text: "\(cpkgs.count) NSZ", color: .indigo)
+                                            }
+                                            if let arcs = game.archive_files, !arcs.isEmpty {
+                                                BadgePill(text: "\(arcs.count) ZIP/RAR", color: .yellow)
+                                            }
                                         }
                                     }
                                 }
@@ -863,6 +926,9 @@ struct SidebarView: View {
                                 Button("Importa File NSP/Update/DLC...") {
                                     vm.selectedGameID = game.id
                                     vm.importPackageIntoSelectedGame()
+                                }
+                                Button("Scompatta Archivi (.zip/.rar/.7z) & Decomprimi .NSZ") {
+                                    vm.unpackGameArchives(for: game, decompressNSZ: true)
                                 }
                                 Button("Apri Cartella Gioco nel Finder") { vm.revealInFinder(game.directory) }
                                 if let work = game.work_dir {
@@ -1031,6 +1097,12 @@ struct StudioMainView: View {
                                 if let chunks = game.lifted_chunks, chunks > 0 {
                                     BadgePill(text: "\(chunks) C11 Chunks", color: .pink)
                                 }
+                                if let cpkgs = game.compressed_packages, !cpkgs.isEmpty {
+                                    BadgePill(text: "\(cpkgs.count) .NSZ/.XCZ Compressi", color: .indigo)
+                                }
+                                if let arcs = game.archive_files, !arcs.isEmpty {
+                                    BadgePill(text: "\(arcs.count) Archivi (.zip/.rar/.7z)", color: .yellow)
+                                }
                             }
                         }
                         Spacer()
@@ -1047,6 +1119,16 @@ struct StudioMainView: View {
                                 .controlSize(.large)
                             }
                             HStack(spacing: 8) {
+                                if !(game.archive_files ?? []).isEmpty || !(game.compressed_packages ?? []).isEmpty {
+                                    Button {
+                                        vm.unpackGameArchives(for: game, decompressNSZ: true)
+                                    } label: {
+                                        Label("Scompatta Archivi / .NSZ", systemImage: "archivebox.fill")
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(.orange)
+                                    .disabled(vm.isRunningJob)
+                                }
                                 Button {
                                     vm.importPackageIntoSelectedGame()
                                 } label: {
@@ -1067,7 +1149,7 @@ struct StudioMainView: View {
                     HStack(alignment: .top, spacing: 14) {
                         PipelineActionCard(
                             title: "1. Porting Nativo Apple Silicon (COMP)",
-                            subtitle: "HorizonNative AArch64 NSO->Mach-O rewriter + compilatore Metal + kernel HOS",
+                            subtitle: "HorizonNative AArch64 NSO->Mach-O + Metal + Zero-JIT su iOS/iPadOS",
                             icon: "apple.logo",
                             accent: .blue
                         ) {
@@ -1088,12 +1170,22 @@ struct StudioMainView: View {
                                     }
                                     .disabled(vm.isRunningJob)
                                 }
-                                Button {
-                                    vm.prepareXcode(for: game)
-                                } label: {
-                                    Label("Genera Progetto Xcode (per firma/debug)", systemImage: "hammer.fill")
+                                HStack(spacing: 8) {
+                                    Button {
+                                        vm.buildIOSSlimIPA(for: game)
+                                    } label: {
+                                        Label("Slim IPA (<250MB • Free Apple ID)", systemImage: "iphone.and.arrow.forward")
+                                    }
+                                    .help("Genera un'IPA leggera Zero-JIT (<250 MB) per AltStore / SideStore / Sideloadly su account Apple gratuito; RomFS.img si copia via Finder/File")
+                                    .disabled(vm.isRunningJob)
+
+                                    Button {
+                                        vm.prepareXcode(for: game)
+                                    } label: {
+                                        Label("Progetto Xcode", systemImage: "hammer.fill")
+                                    }
+                                    .disabled(vm.isRunningJob)
                                 }
-                                .disabled(vm.isRunningJob)
                             }
                         }
 
@@ -1199,6 +1291,15 @@ struct StudioMainView: View {
                                         ForEach(vm.availableLanguages, id: \.code) { item in
                                             Text(item.label).tag(item.code)
                                         }
+                                    }
+                                    .labelsHidden()
+                                    .frame(maxWidth: 260)
+                                }
+                                GridRow {
+                                    Text("Modalità IPA iOS:").font(.caption.bold()).foregroundStyle(.secondary)
+                                    Picker("", selection: $vm.iosRomfsMode) {
+                                        Text("All-in-One IPA (Developer / Sideloadly)").tag("bundle")
+                                        Text("Slim IPA <250MB (Free ID / SideStore / AltStore)").tag("separate")
                                     }
                                     .labelsHidden()
                                     .frame(maxWidth: 260)

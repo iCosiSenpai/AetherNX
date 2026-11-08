@@ -1133,7 +1133,7 @@ def extraction_identity(path):   # the extraction a RomFS belongs to (its key be
     return ('files', [p.parent.with_name(p.parent.name + '.key')])
 
 
-def extract(nx, keys, ex, name, base, upd, cmp_dir, logs, g, app):   # the build IDs are checked by the caller (build_mismatch); app: the application read from the packages (--app)
+def extract(nx, keys, ex, name, base, upd, cmp_dir, logs, g, app=0):   # the build IDs are checked by the caller (build_mismatch); app: the application read from the packages (--app)
     dst, marker, log, kf = ex / name, g.get('romfs_marker'), logs / f'extract_{name}.log', ex / f'{name}.key'
     key = extract_key(base, upd)
     try: reusable = (dst / 'ExeFS' / 'main').exists() and (dst / 'RomFS.img').is_file() and not (dst / 'RomFS').exists() and (rfs.source(dst) / marker).exists()

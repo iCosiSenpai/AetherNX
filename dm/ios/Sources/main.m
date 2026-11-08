@@ -80,6 +80,22 @@ static NSString *romfs_locate(void) {
     return nil;
 }
 
+// Add-on content (DLC): build_ipa.sh puts the DLC extracted from the player's NSPs at <App>/aoc (<index>.img or <index>/); Documents/aoc comes first, for DLC added after the app was
+// built (copied there with the Files app or scripts/push_aoc.sh): no rebuild for a new DLC. A game update changes the game's code, which is built into the app, so it needs a new build
+static void aoc_locate(void) {
+    if (getenv("DM_AOC_DIR")) return;
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
+    for (NSString *d in @[[doc stringByAppendingPathComponent:@"aoc"], [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"aoc"]]) {
+        BOOL dir = NO;
+        if ([fm fileExistsAtPath:d isDirectory:&dir] && dir) {
+            setenv("DM_AOC_DIR", d.fileSystemRepresentation, 1);
+            fprintf(stderr, "boot: DLC from %s\n", d.fileSystemRepresentation);
+            return;
+        }
+    }
+}
+
 // Boot prerequisites (done before UIApplicationMain): directories / environment variables / log -- the host's early load reads these
 // Why a slim build found no usable game files: the verdict on Documents/romfs.img (the first of romfs_document_images), in the log and for the screen (front_ios_boot_message). NULL when the build has no romfs.id
 static char g_boot_message[640];
@@ -169,15 +185,7 @@ static int boot_env(void) {
     setenv("DM_NVN_SHMAP", [dm stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation, 0);
     setenv("DM_MSL_DIR", [res stringByAppendingPathComponent:@"msl"].fileSystemRepresentation, 0);
     setenv("DM_FONT_DIR", [dm stringByAppendingPathComponent:@"font"].fileSystemRepresentation, 0);   // Shared-font stand-ins (standard.ttf / nintendo_ext.ttf): iOS lacks the macOS font path
-    // Add-on content: build_ipa.sh puts the DLC extracted from the player's NSPs at <App>/aoc (<index>.img or <index>/); Documents/aoc comes first, for DLC added after the app was
-    // built (copied there with the Files app or scripts/push_aoc.sh): no rebuild for a new DLC. A game update changes the game's code, which is built into the app, so it needs a new build
-    NSString *aoc = [res stringByAppendingPathComponent:@"aoc"], *docAoc = [doc stringByAppendingPathComponent:@"aoc"]; NSMutableArray<NSString *> *aocs = [NSMutableArray array];
-    if ([fm fileExistsAtPath:docAoc]) {
-        [aocs addObject:docAoc];
-        NSURL *u = [NSURL fileURLWithPath:docAoc]; [u setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:nil];   // game data, not a save
-    }
-    if ([fm fileExistsAtPath:aoc]) [aocs addObject:aoc];
-    if (aocs.count) { setenv("DM_AOC_DIR", [aocs componentsJoinedByString:@":"].fileSystemRepresentation, 0); fprintf(stderr, "boot: add-on content from %s\n", getenv("DM_AOC_DIR")); }
+    aoc_locate();
     NSString *pso = [res stringByAppendingPathComponent:@"pso"];   // the pipeline archive made offline (build_ipa.sh, dm/gfx/tools/pso_offline.py): the shader pairs' bases, which the device then does not build
     if ([fm fileExistsAtPath:pso]) setenv("DM_PSO_BUNDLE", pso.fileSystemRepresentation, 0);
     chdir(doc.fileSystemRepresentation);

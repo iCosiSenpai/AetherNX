@@ -28,7 +28,6 @@ sys.path.insert(0, str(REPO_ROOT / "dm/games"))
 
 import build_ipa_from_nsp as builder
 import game as gamemod
-import nacp
 import nso
 import nso_syms
 
@@ -95,15 +94,259 @@ def demangle_batch(symbols: list[str]) -> dict[str, str]:
     return {s: mapping.get(s, s) for s in symbols}
 
 
+ARCHIVE_EXTS = (
+    ".zip",
+    ".rar",
+    ".7z",
+    ".tar",
+    ".tar.gz",
+    ".tgz",
+    ".tar.xz",
+    ".txz",
+    ".tar.zst",
+    ".001",
+)
+
+
+def _is_secondary_multipart(name: str) -> bool:
+    low = name.lower()
+    m_part = re.search(r"\.part(\d+)\.rar$", low)
+    if m_part and int(m_part.group(1)) > 1:
+        return True
+    if re.search(r"\.r\d{2}$", low):
+        return True
+    m_split = re.search(r"\.(\d{3})$", low)
+    if m_split and int(m_split.group(1)) > 1:
+        return True
+    return False
+
+
+def _iter_archive_files(folder: Path) -> list[Path]:
+    """Find archive files (.zip, .rar, .7z, .tar.*) inside a game folder, skipping build dirs and secondary split parts."""
+    out: list[Path] = []
+
+    def walk(d: Path, depth: int = 0) -> None:
+        try:
+            entries = sorted(d.iterdir(), key=lambda p: p.name)
+        except OSError:
+            return
+        for p in entries:
+            if p.name.startswith("."):
+                continue
+            if p.is_dir() and not p.is_symlink():
+                if (
+                    depth < 3
+                    and p.name not in builder._SKIP_SCAN_DIRS
+                    and not p.name.endswith(
+                        ("_build", "_survey", ".app", ".xcworkspace", ".xcodeproj", ".partial")
+                    )
+                ):
+                    walk(p, depth + 1)
+            elif p.is_file():
+                low = p.name.lower()
+                if any(low.endswith(ext) for ext in ARCHIVE_EXTS) and not _is_secondary_multipart(low):
+                    out.append(p)
+
+    walk(folder)
+    return out
+
+
+def extract_single_archive(arc: Path, dest_dir: Path) -> None:
+    """Extract a .zip, .rar, .7z, or .tar.* archive into dest_dir using unar, 7zz, ditto, unzip, or tar."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    low = arc.name.lower()
+    unar_bin = shutil.which("unar")
+    sevenz_bin = shutil.which("7zz") or shutil.which("7z")
+
+    if low.endswith((".rar", ".7z", ".001")):
+        if unar_bin:
+            subprocess.run([unar_bin, "-o", str(dest_dir), "-f", str(arc)], check=True)
+            return
+        if sevenz_bin:
+            subprocess.run([sevenz_bin, "x", "-y", f"-o{dest_dir}", str(arc)], check=True)
+            return
+        raise RuntimeError(f"Cannot extract {arc.name}: install 'unar' or 'sevenzip' (brew install unar sevenzip)")
+
+    if low.endswith(".zip"):
+        if sevenz_bin:
+            subprocess.run([sevenz_bin, "x", "-y", f"-o{dest_dir}", str(arc)], check=True)
+            return
+        if shutil.which("ditto"):
+            subprocess.run(["ditto", "-x", "-k", str(arc), str(dest_dir)], check=True)
+            return
+        subprocess.run(["unzip", "-o", str(arc), "-d", str(dest_dir)], check=True)
+        return
+
+    if any(low.endswith(ext) for ext in (".tar", ".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.zst")):
+        subprocess.run(["tar", "-xf", str(arc), "-C", str(dest_dir)], check=True)
+        return
+
+    if unar_bin:
+        subprocess.run([unar_bin, "-o", str(dest_dir), "-f", str(arc)], check=True)
+    elif sevenz_bin:
+        subprocess.run([sevenz_bin, "x", "-y", f"-o{dest_dir}", str(arc)], check=True)
+    else:
+        raise RuntimeError(f"Unsupported archive format: {arc.name}")
+
+
+def unpack_target(
+    target: Path,
+    out_dir: Path | None = None,
+    decompress_nsz: bool = False,
+    delete_archives: bool = False,
+    keys_override: str | None = None,
+) -> dict:
+    """Unpack archives (.zip, .rar, .7z, .tar.*) and optionally decompress .nsz/.xcz packages."""
+    if not target.exists():
+        raise RuntimeError(f"Target path does not exist: {target}")
+
+    extracted_archives: list[str] = []
+    decompressed_nsz: list[str] = []
+
+    if target.is_file():
+        low = target.name.lower()
+        clean_stem = re.sub(r"\.(tar\.(gz|xz|zst)|zip|rar|7z|tgz|txz|001|nsz|xcz|nsp|xci)$", "", target.name, flags=re.I)
+        clean_stem = re.sub(r"\s*\[.*$", "", clean_stem).strip() or target.stem
+        dest = out_dir or (DEFAULT_LIBRARY_ROOTS[0] / clean_stem if target.parent == Path.home() / "Downloads" else target.parent / clean_stem)
+        dest.mkdir(parents=True, exist_ok=True)
+
+        if any(low.endswith(ext) for ext in ARCHIVE_EXTS):
+            extract_single_archive(target, dest)
+            extracted_archives.append(str(target))
+            if delete_archives:
+                target.unlink(missing_ok=True)
+        elif low.endswith((".nsz", ".xcz")):
+            decompress_nsz = True
+            dst_pkg = dest / target.name
+            if dst_pkg.resolve() != target.resolve() and not dst_pkg.exists():
+                shutil.copy2(target, dst_pkg)
+        elif low.endswith((".nsp", ".xci")):
+            dst_pkg = dest / target.name
+            if dst_pkg.resolve() != target.resolve() and not dst_pkg.exists():
+                shutil.copy2(target, dst_pkg)
+    else:
+        dest = out_dir or target
+        dest.mkdir(parents=True, exist_ok=True)
+        for arc in _iter_archive_files(target):
+            extract_single_archive(arc, dest)
+            extracted_archives.append(str(arc))
+            if delete_archives:
+                arc.unlink(missing_ok=True)
+
+    if decompress_nsz:
+        keys_file = Path(keys_override or builder.PROD_KEYS or "").expanduser().resolve()
+        if not keys_file.is_file():
+            raise RuntimeError(f"Cannot decompress .nsz/.xcz without a valid prod.keys file (checked: {keys_file})")
+        pkgs = builder._iter_package_files(dest)
+        nsz_files = [p for p in pkgs if p.suffix.lower() in (".nsz", ".xcz")]
+        for nsz_path in nsz_files:
+            out_ext = ".nsp" if nsz_path.suffix.lower() == ".nsz" else ".xci"
+            expected_out = nsz_path.with_suffix(out_ext)
+            if expected_out.is_file():
+                continue
+            with subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.argv[0] = 'nsz'; from nsz import main; main()",
+                    "-D",
+                    "-o",
+                    str(nsz_path.parent),
+                    str(nsz_path),
+                ],
+                cwd=str(keys_file.parent),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            ) as proc:
+                keys_txt = keys_file.parent / "keys.txt"
+                created_link = False
+                if not keys_txt.exists():
+                    try:
+                        keys_txt.symlink_to(keys_file)
+                        created_link = True
+                    except OSError:
+                        pass
+                try:
+                    out_text, _ = proc.communicate()
+                finally:
+                    if created_link:
+                        keys_txt.unlink(missing_ok=True)
+                if proc.returncode != 0:
+                    raise RuntimeError(f"nsz decompression failed for {nsz_path.name}:\n{out_text}")
+            if expected_out.is_file():
+                decompressed_nsz.append(str(expected_out))
+                if delete_archives:
+                    nsz_path.unlink(missing_ok=True)
+
+    final_pkgs = [str(p) for p in builder._iter_package_files(dest)]
+    return {
+        "target": str(target),
+        "output_dir": str(dest),
+        "extracted_archives": extracted_archives,
+        "decompressed_nsz": decompressed_nsz,
+        "packages_found": final_pkgs,
+    }
+
+
 def scan_game_folder(folder: Path) -> dict | None:
-    """Inspect a single game directory and return full metadata about Base, Updates, DLCs, and build artifacts."""
+    """Inspect a single game directory and return full metadata about Base, Updates, DLCs, archives, and build artifacts."""
+    archive_files = _iter_archive_files(folder)
+    pkgs = builder._iter_package_files(folder)
+    compressed_files = [p for p in pkgs if p.suffix.lower() in (".nsz", ".xcz")]
     try:
         if builder.dump_folder(folder):
             app, fam = builder.scan_dump(folder)
         else:
-            pkgs = builder._iter_package_files(folder)
             if not pkgs:
-                return None
+                if not archive_files:
+                    return None
+                # Folder contains only unextracted archives (.zip / .rar / .7z)
+                m_tid = re.search(r"([0-9A-Fa-f]{16})", " ".join(p.name for p in archive_files) + " " + folder.name)
+                tid_hex = m_tid.group(1).upper() if m_tid else f"ARCHIVE_{abs(hash(folder.name)) & 0xFFFFFFFF:08X}"
+                prof = gamemod.by_title(int(tid_hex, 16)) if len(tid_hex) == 16 and all(c in "0123456789ABCDEF" for c in tid_hex) else None
+                return {
+                    "title_id": tid_hex,
+                    "name": (prof.get("name") if prof else None) or folder.name,
+                    "directory": str(folder),
+                    "folder": str(folder),
+                    "work_dir": str(folder / f"{tid_hex}_build"),
+                    "save_dir": str(Path.home() / "Library" / "Application Support" / "HorizonNative" / tid_hex),
+                    "log_file": str(Path.home() / "Library" / "Logs" / "HorizonNative" / f"{tid_hex}.log"),
+                    "has_base": False,
+                    "is_archived_only": True,
+                    "archive_files": [str(p) for p in archive_files],
+                    "compressed_packages": [],
+                    "has_verified_profile": prof is not None,
+                    "profile_dir": str(prof.dir) if prof else None,
+                    "fps_target": prof.get("fps_target", "30") if prof else "30",
+                    "modules": prof.words("modules") if prof else ["main", "sdk"],
+                    "shader_count": 0,
+                    "build_exists": False,
+                    "decomp_ready": False,
+                    "recomp_ready": False,
+                    "lifted_chunks": 0,
+                    "mac_app": None,
+                    "ipa_file": None,
+                    "update_versions": [],
+                    "dlc_ids": [],
+                    "decomp_manifest": None,
+                    "base": {"name": archive_files[0].name, "path": str(archive_files[0]), "size_bytes": archive_files[0].stat().st_size},
+                    "updates": [],
+                    "dlcs": [],
+                    "build_status": {
+                        "work_dir": str(folder / f"{tid_hex}_build"),
+                        "extracted_versions": [],
+                        "patched_versions": [],
+                        "extracted_dlc_images": [],
+                        "mac_apps": [],
+                        "ios_ipas": [],
+                        "decomp_ready": False,
+                        "decomp_dir": None,
+                        "recomp_ready": False,
+                        "lifted_chunks": 0,
+                    },
+                }
             app, fam = builder.scan_nsps(folder)
     except Exception:
         return None
@@ -201,6 +444,9 @@ def scan_game_folder(folder: Path) -> dict | None:
         "save_dir": str(save_dir),
         "log_file": str(log_file),
         "has_base": base_path is not None and base_path.exists(),
+        "is_archived_only": False,
+        "archive_files": [str(p) for p in archive_files],
+        "compressed_packages": [str(p) for p in compressed_files],
         "has_verified_profile": prof is not None,
         "profile_dir": str(prof.dir) if prof else None,
         "fps_target": prof.get("fps_target", "30") if prof else "30",
@@ -410,8 +656,8 @@ def init_decomp_workspace(game_dir: Path) -> dict:
                     f"// Address: 0x{addr:08x} | Size: 0x{sz:x} bytes | Symbol: {sym_name}",
                     f"// Demangled: {dem_name}",
                     f"void sub_{addr:08x}() {{",
-                    f"    // TODO(aethernx-matcher): Reconstruct byte-matching AArch64 implementation",
-                    f"}}",
+                    "    // TODO(aethernx-matcher): Reconstruct byte-matching AArch64 implementation",
+                    "}",
                     "",
                 ]
             cpp_lines.append("} // namespace aethernx::decomp\n")
@@ -603,7 +849,7 @@ def run_doctor() -> dict:
         checks.append({"name": name, "ok": ok, "detail": detail})
 
     # 1. Python modules
-    for mod_name in ("capstone", "lz4", "zstandard"):
+    for mod_name in ("capstone", "lz4", "zstandard", "nsz"):
         try:
             __import__(mod_name)
             add_check(f"Python package: {mod_name}", True, "Installed")
@@ -611,7 +857,7 @@ def run_doctor() -> dict:
             add_check(f"Python package: {mod_name}", False, str(e))
 
     # 2. External CLI tools
-    for tool in ("clang", "clang++", "xcrun", "xcodebuild", "glslangValidator", "dotnet"):
+    for tool in ("clang", "clang++", "xcrun", "xcodebuild", "glslangValidator", "dotnet", "7zz", "unar"):
         path = shutil.which(tool)
         add_check(f"System tool: {tool}", path is not None, path or "Missing")
 
@@ -704,6 +950,14 @@ def main():
     p_lift.add_argument("--limit", type=int, default=0, help="Limit number of lifted functions (0 = all)")
     p_lift.add_argument("--json", action="store_true", help="Output JSON")
 
+    p_unpack = sub.add_parser("unpack", help="Unpack .zip/.rar/.7z/.tar.* archives and optionally decompress .nsz/.xcz files")
+    p_unpack.add_argument("target", help="Archive file (.zip, .rar, .7z, .nsz) or game directory")
+    p_unpack.add_argument("--out", help="Optional output game folder")
+    p_unpack.add_argument("--decompress-nsz", action="store_true", help="Also convert .nsz/.xcz to .nsp/.xci using prod.keys")
+    p_unpack.add_argument("--delete-archive", action="store_true", help="Delete source archive after successful extraction")
+    p_unpack.add_argument("-k", "--keys", help="Path to prod.keys for .nsz/.xcz decompression")
+    p_unpack.add_argument("--json", action="store_true", help="Output JSON")
+
     p_doc = sub.add_parser("doctor", help="Run full AetherNX repository and toolchain audit")
     p_doc.add_argument("--json", action="store_true", help="Output JSON")
 
@@ -738,6 +992,24 @@ def main():
             print(
                 f"[AetherNX] Static Recomp (nxrt) completed for {res['name']} ({res['module']}): "
                 f"{res['chunks_generated']} C11 files written to {res['output_dir']}"
+            )
+    elif args.cmd == "unpack":
+        out_p = Path(args.out).expanduser().resolve() if args.out else None
+        res = unpack_target(
+            Path(args.target).expanduser().resolve(),
+            out_dir=out_p,
+            decompress_nsz=args.decompress_nsz,
+            delete_archives=args.delete_archive,
+            keys_override=args.keys,
+        )
+        if args.json:
+            print(json.dumps(res, indent=2, ensure_ascii=False))
+        else:
+            print(
+                f"[AetherNX] Unpack completed -> {res['output_dir']} | "
+                f"Archives extracted: {len(res['extracted_archives'])} | "
+                f"NSZ/XCZ decompressed: {len(res['decompressed_nsz'])} | "
+                f"Packages ready: {len(res['packages_found'])}"
             )
     elif args.cmd == "doctor":
         rep = run_doctor()

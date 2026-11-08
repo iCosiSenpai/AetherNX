@@ -37,8 +37,10 @@ Usage:
 Commands:
   studio                      Launch the native AetherNX Studio macOS app (AetherNX.app)
   scan [--json] [dirs...]     Scan game folders for Base Game, Updates, DLCs & build status
+  unpack <file_or_dir> [...]  Unpack .zip/.rar/.7z/.tar.* archives & optionally decompress .nsz/.xcz
   build-mac <game_dir> [...]  Build a native Apple Silicon macOS .app (Base + Update + DLCs)
-  build-ios <game_dir> [...]  Build an unsigned iOS / iPadOS .ipa (Base + Update + DLCs)
+  build-ios <game_dir> [...]  Build an unsigned iOS / iPadOS .ipa (Zero-JIT, All-in-One)
+  build-ios-slim <game_dir>   Build a Slim (<250 MB) Zero-JIT .ipa for Free Apple ID / AltStore / SideStore
   prepare-xcode <game_dir>    Generate an Xcode project & workspace for iOS/iPadOS signing
   decomp-init <game_dir>      Initialize Decomp & Static Recomp workspace (functions, symbols, C++)
   lift <game_dir> [...]       Run static AArch64-to-C11 recompilation lifter (nxrt)
@@ -63,6 +65,13 @@ case "$cmd" in
     ;;
   scan)
     exec "$PYTHON_BIN" "$AETHERNX_ROOT/scripts/aethernx_decomp.py" scan "$@"
+    ;;
+  unpack)
+    if [ $# -lt 1 ]; then
+      echo "Usage: ./aethernx unpack <archive_or_dir> [--out <dir>] [--decompress-nsz] [--delete-archive]" >&2
+      exit 1
+    fi
+    exec "$PYTHON_BIN" "$AETHERNX_ROOT/scripts/aethernx_decomp.py" unpack "$@"
     ;;
   build-mac)
     if [ $# -lt 1 ]; then
@@ -89,6 +98,19 @@ case "$cmd" in
       KEYS_ARGS=(-k "$DEFAULT_KEYS")
     fi
     exec "$PYTHON_BIN" "$AETHERNX_ROOT/scripts/build_ipa_from_nsp.py" "$GAME_DIR" "${KEYS_ARGS[@]}" --platform ios "$@"
+    ;;
+  build-ios-slim)
+    if [ $# -lt 1 ]; then
+      echo "Usage: ./aethernx build-ios-slim <game_dir> [extra build_ipa_from_nsp.py flags]" >&2
+      exit 1
+    fi
+    GAME_DIR="$1"
+    shift
+    KEYS_ARGS=()
+    if ! has_keys_flag "$@" && [ -f "$DEFAULT_KEYS" ]; then
+      KEYS_ARGS=(-k "$DEFAULT_KEYS")
+    fi
+    exec "$PYTHON_BIN" "$AETHERNX_ROOT/scripts/build_ipa_from_nsp.py" "$GAME_DIR" "${KEYS_ARGS[@]}" --platform ios --romfs separate --keep-extracted "$@"
     ;;
   prepare-xcode)
     if [ $# -lt 1 ]; then
