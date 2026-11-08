@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
 
 // MARK: - Data Models
 
@@ -23,9 +24,35 @@ struct DecompManifest: Codable, Hashable, Sendable {
     let modules: [GameModuleInfo]?
 }
 
+struct PackageBaseInfo: Codable, Hashable, Sendable {
+    let name: String?
+    let path: String?
+    let size_bytes: Int64?
+}
+
+struct PackageUpdateInfo: Codable, Hashable, Sendable {
+    let version: String
+    let version_int: Int?
+    let name: String
+    let path: String
+    let size_bytes: Int64
+}
+
+struct PackageDLCInfo: Codable, Hashable, Sendable {
+    let title_id: String
+    let index: Int
+    let version: String
+    let name: String
+    let path: String
+    let size_bytes: Int64
+}
+
 struct DiscoveredGame: Identifiable, Codable, Hashable, Sendable {
     var id: String { title_id + "::" + directory }
     let directory: String
+    let work_dir: String?
+    let save_dir: String?
+    let log_file: String?
     let title_id: String
     let name: String
     let has_base: Bool
@@ -40,21 +67,35 @@ struct DiscoveredGame: Identifiable, Codable, Hashable, Sendable {
     let shader_count: Int
     let modules: [String]
     let decomp_manifest: DecompManifest?
+    let base: PackageBaseInfo?
+    let updates: [PackageUpdateInfo]?
+    let dlcs: [PackageDLCInfo]?
 }
 
 enum PipelineTab: String, CaseIterable, Identifiable {
-    case studio = "Library & Porting"
-    case decomp = "Decomp & Recomp"
+    case studio = "Libreria & Porting"
+    case setup = "Chiavi, Firmware & File"
+    case decomp = "Decomp & Static Recomp"
     case skills = "AI Skills (15)"
-    case ecosystem = "Ecosystem & Credits (31 Repos)"
+    case ecosystem = "Ecosistema & Copyright (31)"
 
     var id: String { rawValue }
     var icon: String {
         switch self {
         case .studio: return "gamecontroller.fill"
+        case .setup: return "key.radiowaves.forward.fill"
         case .decomp: return "cpu.fill"
         case .skills: return "sparkles"
         case .ecosystem: return "shippingbox.fill"
+        }
+    }
+    var subtitle: String {
+        switch self {
+        case .studio: return "COMP • RECOMP • DECOMP"
+        case .setup: return "prod.keys • Firmware • NSP/DLC"
+        case .decomp: return "Funzioni • Simboli • C11/C++20"
+        case .skills: return "15 Skill per Claude & Codex"
+        case .ecosystem: return "31 Repo Forkate & Licenze"
         }
     }
 }
@@ -88,12 +129,26 @@ final class AetherNXViewModel: ObservableObject {
     @Published var isRunningJob: Bool = false
     @Published var activeJobTitle: String = ""
     @Published var consoleLines: [String] = [
-        "[AetherNX] Universal Switch Decomp • Static Recomp • Native Apple Silicon Studio initialized.",
+        "[AetherNX] Universal Switch Decomp • Static Recomp • Native Apple Silicon Studio v1.1 PRO initialized.",
         "[AetherNX] Tri-Pipeline ready: COMP (HorizonNative/Mach-O) | RECOMP (nxrt/SwitchRecomp/mush8) | DECOMP (open-ead/sead/nnheaders)."
     ]
-    @Published var gpuBackend: String = "none"
+
+    // Paths & Environment Configuration
     @Published var customLibraryPath: String = "~/Games"
+    @Published var extraGamePaths: [String] = []
     @Published var prodKeysPath: String = "~/.switch/prod.keys"
+    @Published var titleKeysPath: String = "~/.switch/title.keys"
+    @Published var firmwarePath: String = "~/.switch/firmware.zip"
+
+    // Advanced Build & Runtime Options
+    @Published var gpuBackend: String = "none"
+    @Published var packageOverride: String = "latest" // "latest" or "v0" or specific "vXXXXX"
+    @Published var gameLanguage: String = "en-US"
+    @Published var enableMetalHUD: Bool = false
+    @Published var keepExtracted: Bool = true
+    @Published var forceReExtract: Bool = false
+    @Published var forceReRewrite: Bool = false
+    @Published var forceReTranslate: Bool = false
 
     let rootDir: String = {
         let bundleParent = Bundle.main.bundleURL.deletingLastPathComponent().path
@@ -109,11 +164,74 @@ final class AetherNXViewModel: ObservableObject {
         games.first(where: { $0.id == selectedGameID }) ?? games.first
     }
 
+    var logoImage: NSImage? {
+        if let resURL = Bundle.main.url(forResource: "aethernx-logo", withExtension: "png"),
+           let img = NSImage(contentsOf: resURL) {
+            return img
+        }
+        let fallbackPath = "\(rootDir)/assets/aethernx-logo.png"
+        if FileManager.default.fileExists(atPath: fallbackPath) {
+            return NSImage(contentsOfFile: fallbackPath)
+        }
+        return nil
+    }
+
+    var prodKeysStatus: (valid: Bool, count: Int, hasHeaderKey: Bool) {
+        guard FileManager.default.isReadableFile(atPath: prodKeysPath),
+              let content = try? String(contentsOfFile: prodKeysPath, encoding: .utf8) else {
+            return (false, 0, false)
+        }
+        let lines = content.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("#") && !$0.hasPrefix(";") && $0.contains("=") }
+        let hasHeader = lines.contains { $0.hasPrefix("header_key") }
+        return (lines.count > 10 && hasHeader, lines.count, hasHeader)
+    }
+
+    var titleKeysStatus: (valid: Bool, count: Int) {
+        guard FileManager.default.isReadableFile(atPath: titleKeysPath),
+              let content = try? String(contentsOfFile: titleKeysPath, encoding: .utf8) else {
+            return (false, 0)
+        }
+        let lines = content.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("#") && $0.contains("=") }
+        return (!lines.isEmpty, lines.count)
+    }
+
+    var firmwareStatus: (valid: Bool, label: String) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: firmwarePath) else {
+            return (false, "Non configurato")
+        }
+        if let attrs = try? fm.attributesOfItem(atPath: firmwarePath),
+           let sz = attrs[.size] as? Int64 {
+            let formatted = ByteCountFormatter.string(fromByteCount: sz, countStyle: .file)
+            let name = URL(fileURLWithPath: firmwarePath).lastPathComponent
+            return (true, "\(name) (\(formatted))")
+        }
+        return (true, URL(fileURLWithPath: firmwarePath).lastPathComponent)
+    }
+
+    let availableLanguages: [(code: String, label: String)] = [
+        ("en-US", "English (US) — Default"),
+        ("it", "Italiano (it)"),
+        ("en-GB", "English (UK)"),
+        ("ja", "日本語 (ja)"),
+        ("fr", "Français (fr)"),
+        ("de", "Deutsch (de)"),
+        ("es", "Español (es)"),
+        ("nl", "Nederlands (nl)"),
+        ("ko", "한국어 (ko)"),
+        ("zh-Hans", "简体中文 (zh-Hans)"),
+        ("zh-Hant", "繁體中文 (zh-Hant)")
+    ]
+
     let repositories: [RepoEntry] = [
-        RepoEntry(name: "HorizonNative / nxnative", upstream: "UnknownSoldier1945/HorizonNative", fork: "iCosiSenpai/HorizonNative", category: "Native Engine (COMP)", license: "GPL-3.0", role: "ARM64 NSO->Mach-O rewriter, HOS kernel/service emulation, Maxwell->Metal shader compiler"),
-        RepoEntry(name: "mush8", upstream: "Catchingalls/mush8", fork: "iCosiSenpai/mush8", category: "Static Recomp (RECOMP)", license: "MIT / Apache-2.0", role: "Rust static NSO lifter, HLE runtime, NVN->wgpu/Metal backend"),
+        RepoEntry(name: "HorizonNative / nxnative", upstream: "seedds/nxnative", fork: "iCosiSenpai/HorizonNative", category: "Native Engine (COMP)", license: "MIT", role: "ARM64 NSO->Mach-O rewriter, HOS kernel/service emulation, Maxwell->Metal shader compiler"),
+        RepoEntry(name: "nxrt", upstream: "fedebuonco/nxrt", fork: "iCosiSenpai/nxrt", category: "Static Recomp (RECOMP)", license: "Unlicense", role: "Universal C11 runtime & AArch64->C11 lifter for statically recompiled Switch binaries"),
         RepoEntry(name: "SwitchRecomp", upstream: "bgyss/SwitchRecomp", fork: "iCosiSenpai/SwitchRecomp", category: "Static Recomp (RECOMP)", license: "MIT", role: "N64Recomp-style ARM64 Switch static recompiler to C++20/Metal"),
-        RepoEntry(name: "nxrt", upstream: "fedebuonco/nxrt", fork: "iCosiSenpai/nxrt", category: "Static Recomp (RECOMP)", license: "Unlicense", role: "Universal C11 runtime for statically recompiled Switch binaries"),
+        RepoEntry(name: "mush8", upstream: "Catchingalls/mush8", fork: "iCosiSenpai/mush8", category: "Static Recomp (RECOMP)", license: "MIT / Apache-2.0", role: "Rust static NSO lifter, HLE runtime, NVN->wgpu/Metal backend"),
         RepoEntry(name: "LASRecomp", upstream: "peiikai/LASRecomp", fork: "iCosiSenpai/LASRecomp", category: "Static Recomp Profile", license: "MIT", role: "Zelda: Link's Awakening Switch static recompilation profile & tools"),
         RepoEntry(name: "EoWRecomp", upstream: "Nycolazs/EoWRecomp", fork: "iCosiSenpai/EoWRecomp", category: "Static Recomp Profile", license: "MIT", role: "Zelda: Echoes of Wisdom Switch static recompilation profile & tools"),
         RepoEntry(name: "AC-Recomp", upstream: "swaymun/AC-Recomp", fork: "iCosiSenpai/AC-Recomp", category: "Static Recomp Profile", license: "MIT", role: "Astral Chain static recompilation tools (62,566 lifted functions)"),
@@ -162,29 +280,177 @@ final class AetherNXViewModel: ObservableObject {
     ]
 
     init() {
+        autoDetectKeysAndFirmware()
         scanGames()
     }
 
     func appendLog(_ text: String) {
         let lines = text.components(separatedBy: .newlines).filter { !$0.isEmpty }
         consoleLines.append(contentsOf: lines)
-        if consoleLines.count > 600 {
-            consoleLines.removeFirst(consoleLines.count - 600)
+        if consoleLines.count > 800 {
+            consoleLines.removeFirst(consoleLines.count - 800)
         }
     }
+
+    func autoDetectKeysAndFirmware() {
+        let fm = FileManager.default
+        let prodCandidates = [
+            "~/.switch/prod.keys",
+            "\(NSHomeDirectory())/.switch/prod.keys"
+        ]
+        if let found = prodCandidates.first(where: { fm.isReadableFile(atPath: $0) }) {
+            prodKeysPath = found
+        }
+
+        let titleCandidates = [
+            "~/.switch/title.keys",
+            "\(NSHomeDirectory())/.switch/title.keys"
+        ]
+        if let found = titleCandidates.first(where: { fm.isReadableFile(atPath: $0) }) {
+            titleKeysPath = found
+        }
+
+        let fwDir = "~/.switch"
+        if let items = try? fm.contentsOfDirectory(atPath: fwDir) {
+            if let fwZip = items.sorted().last(where: { $0.lowercased().hasPrefix("firmware") }) {
+                firmwarePath = "\(fwDir)/\(fwZip)"
+            }
+        }
+    }
+
+    // MARK: - File Dialogs & File Management
+
+    func pickFile(title: String, allowedExtensions: [String] = [], canChooseDirectories: Bool = false, canChooseFiles: Bool = true) -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = title
+        panel.canChooseFiles = canChooseFiles
+        panel.canChooseDirectories = canChooseDirectories
+        panel.allowsMultipleSelection = false
+        if !allowedExtensions.isEmpty {
+            panel.allowedContentTypes = allowedExtensions.compactMap { UTType(filenameExtension: $0) }
+        }
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    func browseProdKeys() {
+        if let url = pickFile(title: "Seleziona il file prod.keys della tua Switch", canChooseDirectories: false, canChooseFiles: true) {
+            prodKeysPath = url.path
+            appendLog("[Config] Impostato prod.keys: \(url.path) (\(prodKeysStatus.count) chiavi rilevate)")
+        }
+    }
+
+    func browseTitleKeys() {
+        if let url = pickFile(title: "Seleziona il file title.keys (opzionale)", canChooseDirectories: false, canChooseFiles: true) {
+            titleKeysPath = url.path
+            appendLog("[Config] Impostato title.keys: \(url.path)")
+        }
+    }
+
+    func browseFirmware() {
+        if let url = pickFile(title: "Seleziona il Firmware Switch (.zip o cartella NCA estratta)", canChooseDirectories: true, canChooseFiles: true) {
+            firmwarePath = url.path
+            appendLog("[Config] Impostato Firmware Switch: \(url.path)")
+        }
+    }
+
+    func browseLibraryFolder() {
+        if let url = pickFile(title: "Seleziona la cartella principale dei giochi Switch", canChooseDirectories: true, canChooseFiles: false) {
+            customLibraryPath = url.path
+            appendLog("[Config] Impostata cartella libreria: \(url.path)")
+            scanGames()
+        }
+    }
+
+    func addGameFolder() {
+        if let url = pickFile(title: "Aggiungi una cartella gioco Switch (.nsp / .xci / .nsz)", canChooseDirectories: true, canChooseFiles: false) {
+            if !extraGamePaths.contains(url.path) {
+                extraGamePaths.append(url.path)
+            }
+            appendLog("[Library] Aggiunta cartella gioco: \(url.path)")
+            scanGames()
+        }
+    }
+
+    func importPackageIntoSelectedGame() {
+        guard let game = selectedGame else {
+            appendLog("[Warn] Seleziona prima un gioco nella sidebar per importare un file Base / Update / DLC.")
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.title = "Importa file .nsp / .xci / .nsz (Base Game, Ultimo Update o DLC) in \(game.name)"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        if panel.runModal() == .OK {
+            let fm = FileManager.default
+            var imported = 0
+            for srcURL in panel.urls {
+                let dstURL = URL(fileURLWithPath: game.directory).appendingPathComponent(srcURL.lastPathComponent)
+                if srcURL.standardizedFileURL == dstURL.standardizedFileURL {
+                    continue
+                }
+                do {
+                    if fm.fileExists(atPath: dstURL.path) {
+                        try fm.removeItem(at: dstURL)
+                    }
+                    try fm.copyItem(at: srcURL, to: dstURL)
+                    imported += 1
+                    appendLog("[File Manager] Copiato \(srcURL.lastPathComponent) -> \(game.directory)")
+                } catch {
+                    appendLog("[Errore] Impossibile copiare \(srcURL.lastPathComponent): \(error.localizedDescription)")
+                }
+            }
+            if imported > 0 {
+                scanGames()
+            }
+        }
+    }
+
+    func cleanShaderCache(for game: DiscoveredGame) {
+        let work = game.work_dir ?? "\(game.directory)/\(game.title_id)_build"
+        let shaderCache = "\(work)/shader"
+        do {
+            if FileManager.default.fileExists(atPath: shaderCache) {
+                try FileManager.default.removeItem(atPath: shaderCache)
+                appendLog("[File Manager] Cache shader Metal rimossa: \(shaderCache)")
+            } else {
+                appendLog("[File Manager] Nessuna cache shader presente in \(shaderCache)")
+            }
+            scanGames()
+        } catch {
+            appendLog("[Errore] Impossibile pulire cache shader: \(error.localizedDescription)")
+        }
+    }
+
+    func cleanBuildFolder(for game: DiscoveredGame) {
+        let work = game.work_dir ?? "\(game.directory)/\(game.title_id)_build"
+        do {
+            if FileManager.default.fileExists(atPath: work) {
+                try FileManager.default.removeItem(atPath: work)
+                appendLog("[File Manager] Cartella build rimossa: \(work)")
+            } else {
+                appendLog("[File Manager] Nessuna cartella build presente in \(work)")
+            }
+            scanGames()
+        } catch {
+            appendLog("[Errore] Impossibile rimuovere cartella build: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Library Scan & Pipeline Execution
 
     func scanGames() {
         guard !isScanning else { return }
         isScanning = true
         let cli = "\(rootDir)/aethernx"
-        let libPath = customLibraryPath
+        let scanDirs = [customLibraryPath] + extraGamePaths
 
         Task {
             let result: Result<[DiscoveredGame], Error> = await Task.detached {
                 let proc = Process()
                 let outPipe = Pipe()
                 proc.executableURL = URL(fileURLWithPath: cli)
-                proc.arguments = ["scan", libPath, "--json"]
+                proc.arguments = ["scan"] + scanDirs + ["--json"]
                 proc.standardOutput = outPipe
                 proc.standardError = Pipe()
                 do {
@@ -205,23 +471,23 @@ final class AetherNXViewModel: ObservableObject {
                     self.selectedGameID = decoded.first?.id
                 }
                 self.isScanning = false
-                self.appendLog("[Scan] Found \(decoded.count) Switch title(s) in \(libPath).")
+                self.appendLog("[Scan] Rilevati \(decoded.count) titoli Switch nella libreria.")
             case .failure(let error):
                 self.isScanning = false
-                self.appendLog("[Error] Failed to scan library: \(error.localizedDescription)")
+                self.appendLog("[Error] Scansione libreria fallita: \(error.localizedDescription)")
             }
         }
     }
 
     func runPipelineCommand(title: String, args: [String]) {
         guard !isRunningJob else {
-            appendLog("[Warn] Another pipeline job is currently active: \(activeJobTitle)")
+            appendLog("[Warn] Un job è già in esecuzione: \(activeJobTitle)")
             return
         }
         isRunningJob = true
         activeJobTitle = title
         appendLog("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        appendLog("▶ Starting Job: \(title)")
+        appendLog("▶ Avvio Job: \(title)")
         appendLog("  $ ./aethernx \(args.joined(separator: " "))")
 
         let cli = "\(rootDir)/aethernx"
@@ -250,7 +516,7 @@ final class AetherNXViewModel: ObservableObject {
                 self.isRunningJob = false
                 self.activeJobTitle = ""
                 self.runningProcess = nil
-                self.appendLog("✔ Job Finished (exit code \(finishedProc.terminationStatus))")
+                self.appendLog("✔ Job completato (exit code \(finishedProc.terminationStatus))")
                 self.scanGames()
             }
         }
@@ -260,33 +526,53 @@ final class AetherNXViewModel: ObservableObject {
         } catch {
             isRunningJob = false
             activeJobTitle = ""
-            appendLog("[Error] Could not start job: \(error.localizedDescription)")
+            appendLog("[Error] Impossibile avviare il job: \(error.localizedDescription)")
         }
     }
 
     func cancelRunningJob() {
         runningProcess?.terminate()
-        appendLog("[Warn] Sent SIGTERM to running job.")
+        appendLog("[Warn] Inviato SIGTERM al processo in esecuzione.")
+    }
+
+    private func buildCommonFlags() -> [String] {
+        var flags: [String] = ["-k", prodKeysPath, "--gpu", gpuBackend, "--progress", "lines"]
+        if packageOverride != "latest" {
+            flags += ["--package", packageOverride]
+        }
+        if keepExtracted {
+            flags.append("--keep-extracted")
+        }
+        if forceReExtract {
+            flags.append("--re-extract")
+        }
+        if forceReRewrite {
+            flags.append("--re-rewrite")
+        }
+        if forceReTranslate {
+            flags.append("--re-translate")
+        }
+        return flags
     }
 
     func buildMacApp(for game: DiscoveredGame) {
         runPipelineCommand(
             title: "Build Native macOS App (\(game.name))",
-            args: ["build-mac", game.directory, "-k", prodKeysPath, "--gpu", gpuBackend, "--progress", "lines"]
+            args: ["build-mac", game.directory] + buildCommonFlags()
         )
     }
 
     func buildIOSIPA(for game: DiscoveredGame) {
         runPipelineCommand(
             title: "Build Native iOS/iPadOS IPA (\(game.name))",
-            args: ["build-ios", game.directory, "-k", prodKeysPath, "--gpu", gpuBackend, "--progress", "lines"]
+            args: ["build-ios", game.directory] + buildCommonFlags()
         )
     }
 
     func prepareXcode(for game: DiscoveredGame) {
         runPipelineCommand(
             title: "Prepare Xcode Project (\(game.name))",
-            args: ["prepare-xcode", game.directory, "-k", prodKeysPath, "--gpu", gpuBackend, "--progress", "lines"]
+            args: ["prepare-xcode", game.directory] + buildCommonFlags()
         )
     }
 
@@ -297,10 +583,10 @@ final class AetherNXViewModel: ObservableObject {
         )
     }
 
-    func runStaticLifter(for game: DiscoveredGame) {
+    func runStaticLifter(for game: DiscoveredGame, module: String = "main") {
         runPipelineCommand(
-            title: "Lift ExeFS/main to C11 via nxrt (\(game.name))",
-            args: ["lift", game.directory, "--module", "main"]
+            title: "Lift ExeFS/\(module) to C11 via nxrt (\(game.name))",
+            args: ["lift", game.directory, "--module", module]
         )
     }
 
@@ -312,15 +598,35 @@ final class AetherNXViewModel: ObservableObject {
     }
 
     func launchMacApp(_ path: String) {
-        NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        var env = ProcessInfo.processInfo.environment
+        env["DM_LANG"] = gameLanguage
+        if enableMetalHUD {
+            env["MTL_HUD_ENABLED"] = "1"
+        }
+        proc.environment = env
+        proc.arguments = [path]
+        try? proc.run()
+        appendLog("[Launch] Avviato \(URL(fileURLWithPath: path).lastPathComponent) (DM_LANG=\(gameLanguage), MetalHUD=\(enableMetalHUD ? "ON" : "OFF"))")
     }
 
     func revealInFinder(_ path: String) {
-        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
+        let fm = FileManager.default
+        if fm.fileExists(atPath: path) {
+            NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: URL(fileURLWithPath: path).deletingLastPathComponent().path)
+        } else {
+            let parent = URL(fileURLWithPath: path).deletingLastPathComponent().path
+            if fm.fileExists(atPath: parent) {
+                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: parent)
+            } else {
+                appendLog("[Info] Il percorso non esiste ancora: \(path)")
+            }
+        }
     }
 }
 
-// MARK: - Views
+// MARK: - Root Split View
 
 struct ContentView: View {
     @StateObject private var vm = AetherNXViewModel()
@@ -328,7 +634,7 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             SidebarView(vm: vm)
-                .frame(minWidth: 275)
+                .frame(minWidth: 300, idealWidth: 315, maxWidth: 350)
         } detail: {
             VStack(spacing: 0) {
                 TopHeaderBar(vm: vm)
@@ -336,6 +642,8 @@ struct ContentView: View {
                 switch vm.selectedTab {
                 case .studio:
                     StudioMainView(vm: vm)
+                case .setup:
+                    SetupKeysFirmwareView(vm: vm)
                 case .decomp:
                     DecompWorkspaceView(vm: vm)
                 case .skills:
@@ -347,75 +655,240 @@ struct ContentView: View {
                 ConsoleDrawerView(vm: vm)
             }
         }
-        .frame(minWidth: 1140, minHeight: 750)
+        .frame(minWidth: 1200, minHeight: 780)
     }
 }
+
+// MARK: - Custom Sidebar (Fixed Active Tab Highlighting + Game Cards)
 
 struct SidebarView: View {
     @ObservedObject var vm: AetherNXViewModel
 
     var body: some View {
-        List(selection: $vm.selectedGameID) {
-            Section("Navigation") {
-                ForEach(PipelineTab.allCases) { tab in
-                    Button {
-                        vm.selectedTab = tab
-                    } label: {
-                        HStack {
-                            Image(systemName: tab.icon)
-                                .foregroundStyle(vm.selectedTab == tab ? Color.accentColor : Color.secondary)
-                                .frame(width: 20)
-                            Text(tab.rawValue)
-                                .fontWeight(vm.selectedTab == tab ? .semibold : .regular)
-                            Spacer()
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.vertical, 3)
+        VStack(spacing: 0) {
+            // 1. Brand Logo Header
+            HStack(spacing: 12) {
+                if let logo = vm.logoImage {
+                    Image(nsImage: logo)
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: 48, height: 48)
+                        .clipShape(RoundedRectangle(cornerRadius: 11))
+                        .shadow(color: .cyan.opacity(0.35), radius: 6)
+                } else {
+                    RoundedRectangle(cornerRadius: 11)
+                        .fill(LinearGradient(colors: [.cyan, .indigo], startPoint: .topLeading, endPoint: .bottomTrailing))
+                        .frame(width: 48, height: 48)
+                        .overlay(Image(systemName: "cpu.fill").font(.title2).foregroundStyle(.white))
                 }
-            }
-
-            Section("Switch Titles (\(vm.games.count))") {
-                ForEach(vm.games) { game in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(game.name)
-                                .font(.headline)
-                                .lineLimit(1)
-                            Spacer()
-                            if game.mac_app != nil {
-                                Image(systemName: "checkmark.seal.fill")
-                                    .foregroundStyle(.green)
-                                    .help("Native macOS .app built")
-                            }
-                        }
-                        Text(game.title_id)
-                            .font(.caption.monospaced())
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text("AETHERNX")
+                            .font(.system(size: 16, weight: .black, design: .rounded))
+                        BadgePill(text: "PRO v1.1", color: .cyan)
+                    }
+                    Text("Switch Decomp • Recomp • Mac/iOS")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(vm.prodKeysStatus.valid ? Color.green : Color.red)
+                            .frame(width: 6, height: 6)
+                        Text(vm.prodKeysStatus.valid ? "prod.keys (\(vm.prodKeysStatus.count))" : "keys mancanti")
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
                             .foregroundStyle(.secondary)
-                        HStack(spacing: 5) {
-                            BadgePill(text: game.has_base ? "BASE" : "NO BASE", color: game.has_base ? .blue : .red)
-                            if let maxUpd = game.update_versions.max() {
-                                BadgePill(text: "UPD v\(maxUpd)", color: .purple)
+                        Text("•")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Circle()
+                            .fill(vm.firmwareStatus.valid ? Color.green : Color.orange)
+                            .frame(width: 6, height: 6)
+                        Text(vm.firmwareStatus.valid ? "FW OK" : "No FW")
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.6))
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    // 2. Navigation Tabs (Explicit Active Pill Selection)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("SEZIONI STUDIO")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+
+                        ForEach(PipelineTab.allCases) { tab in
+                            let isSelected = (vm.selectedTab == tab)
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    vm.selectedTab = tab
+                                }
+                            } label: {
+                                HStack(spacing: 10) {
+                                    ZStack {
+                                        RoundedRectangle(cornerRadius: 7)
+                                            .fill(isSelected ? Color.white.opacity(0.22) : Color.accentColor.opacity(0.12))
+                                            .frame(width: 28, height: 28)
+                                        Image(systemName: tab.icon)
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundStyle(isSelected ? Color.white : Color.accentColor)
+                                    }
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(tab.rawValue)
+                                            .font(.system(size: 13, weight: isSelected ? .bold : .medium))
+                                            .foregroundStyle(isSelected ? Color.white : Color.primary)
+                                        Text(tab.subtitle)
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(isSelected ? Color.white.opacity(0.82) : Color.secondary)
+                                    }
+                                    Spacer()
+                                    if isSelected {
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption2.bold())
+                                            .foregroundStyle(.white.opacity(0.9))
+                                    }
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill(
+                                            isSelected
+                                            ? AnyShapeStyle(LinearGradient(colors: [Color.indigo, Color.blue], startPoint: .leading, endPoint: .trailing))
+                                            : AnyShapeStyle(Color.clear)
+                                        )
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .stroke(isSelected ? Color.cyan.opacity(0.55) : Color.clear, lineWidth: 1)
+                                )
+                                .contentShape(RoundedRectangle(cornerRadius: 10))
                             }
-                            if !game.dlc_ids.isEmpty {
-                                BadgePill(text: "\(game.dlc_ids.count) DLC", color: .orange)
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    Divider()
+
+                    // 3. Switch Games Library Section
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("GIOCHI SWITCH (\(vm.games.count))")
+                                .font(.system(size: 10, weight: .bold, design: .rounded))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button {
+                                vm.addGameFolder()
+                            } label: {
+                                Label("Aggiungi", systemImage: "plus.circle.fill")
+                                    .font(.caption2)
                             }
-                            if game.decomp_ready {
-                                BadgePill(text: "DECOMP", color: .teal)
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Color.accentColor)
+                            .help("Aggiungi una cartella gioco Switch (.nsp / .xci)")
+                        }
+                        .padding(.horizontal, 8)
+
+                        ForEach(vm.games) { game in
+                            let isGameSelected = (vm.selectedGame?.id == game.id)
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    vm.selectedGameID = game.id
+                                }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .fill(isGameSelected ? Color.cyan : Color.clear)
+                                        .frame(width: 4, height: 48)
+
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack {
+                                            Text(game.name)
+                                                .font(.system(size: 13, weight: .bold))
+                                                .foregroundStyle(.primary)
+                                                .lineLimit(1)
+                                            Spacer()
+                                            if game.mac_app != nil {
+                                                Image(systemName: "checkmark.seal.fill")
+                                                    .foregroundStyle(.green)
+                                                    .help("App macOS nativa pronta")
+                                            }
+                                        }
+                                        Text(game.title_id)
+                                            .font(.system(size: 10, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                        HStack(spacing: 4) {
+                                            BadgePill(text: game.has_base ? "BASE" : "NO BASE", color: game.has_base ? .blue : .red)
+                                            if let maxUpd = game.update_versions.max() {
+                                                BadgePill(text: "UPD v\(maxUpd)", color: .purple)
+                                            }
+                                            if !game.dlc_ids.isEmpty {
+                                                BadgePill(text: "\(game.dlc_ids.count) DLC", color: .orange)
+                                            }
+                                            if game.decomp_ready {
+                                                BadgePill(text: "DECOMP", color: .teal)
+                                            }
+                                            if (game.lifted_chunks ?? 0) > 0 {
+                                                BadgePill(text: "RECOMP", color: .pink)
+                                            }
+                                        }
+                                    }
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill(isGameSelected ? Color.cyan.opacity(0.14) : Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .stroke(isGameSelected ? Color.cyan.opacity(0.75) : Color.secondary.opacity(0.15), lineWidth: isGameSelected ? 1.5 : 1)
+                                )
+                                .contentShape(RoundedRectangle(cornerRadius: 10))
                             }
-                            if (game.lifted_chunks ?? 0) > 0 {
-                                BadgePill(text: "RECOMP", color: .pink)
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                if let appPath = game.mac_app {
+                                    Button("Avvia App macOS Nativa") { vm.launchMacApp(appPath) }
+                                    Divider()
+                                }
+                                Button("Importa File NSP/Update/DLC...") {
+                                    vm.selectedGameID = game.id
+                                    vm.importPackageIntoSelectedGame()
+                                }
+                                Button("Apri Cartella Gioco nel Finder") { vm.revealInFinder(game.directory) }
+                                if let work = game.work_dir {
+                                    Button("Apri Cartella Build (_build)") { vm.revealInFinder(work) }
+                                }
+                                if let save = game.save_dir {
+                                    Button("Apri Cartella Salvataggi") { vm.revealInFinder(save) }
+                                }
+                                if let log = game.log_file {
+                                    Button("Mostra Log di Gioco") { vm.revealInFinder(log) }
+                                }
+                                Divider()
+                                Button("Pulisci Cache Shader Metal") { vm.cleanShaderCache(for: game) }
+                                Button("Elimina Cartella Build Temporanea") { vm.cleanBuildFolder(for: game) }
                             }
                         }
                     }
-                    .padding(.vertical, 4)
-                    .tag(game.id)
                 }
+                .padding(12)
             }
         }
-        .listStyle(.sidebar)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 }
+
+// MARK: - Top Header Bar
 
 struct TopHeaderBar: View {
     @ObservedObject var vm: AetherNXViewModel
@@ -424,11 +897,11 @@ struct TopHeaderBar: View {
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
-                    Text("AETHERNX STUDIO")
-                        .font(.system(size: 18, weight: .black, design: .rounded))
-                    BadgePill(text: "COMP • RECOMP • DECOMP", color: .indigo)
+                    Text(vm.selectedTab.rawValue.uppercased())
+                        .font(.system(size: 16, weight: .black, design: .rounded))
+                    BadgePill(text: vm.selectedTab.subtitle, color: .indigo)
                 }
-                Text("Universal Nintendo Switch Decompilation, Static Recompilation & Apple Silicon Porting Suite")
+                Text("Consigliato: usa sempre l'ultima versione di Gioco Base + Ultimo Update + tutti i DLC, con prod.keys e Firmware aggiornati.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -452,6 +925,11 @@ struct TopHeaderBar: View {
                 .background(Color.red.opacity(0.1), in: Capsule())
             }
             Button {
+                vm.selectedTab = .setup
+            } label: {
+                Label("Chiavi & Firmware", systemImage: "key.fill")
+            }
+            Button {
                 vm.runDoctorAudit()
             } label: {
                 Label("Audit / Doctor", systemImage: "stethoscope")
@@ -460,7 +938,7 @@ struct TopHeaderBar: View {
             Button {
                 vm.scanGames()
             } label: {
-                Label("Rescan Library", systemImage: "arrow.clockwise")
+                Label("Aggiorna Libreria", systemImage: "arrow.clockwise")
             }
             Button {
                 vm.revealInFinder(vm.rootDir)
@@ -469,9 +947,53 @@ struct TopHeaderBar: View {
             }
         }
         .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
     }
 }
+
+// MARK: - Recommendation Callout Banner
+
+struct BestPracticeBannerView: View {
+    @ObservedObject var vm: AetherNXViewModel
+    var showConfigureButton: Bool = true
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "exclamationmark.shield.fill")
+                .font(.title2)
+                .foregroundStyle(.cyan)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Requisiti & Best Practice: Ultima Versione di Gioco, Update, DLC, prod.keys e Firmware Switch")
+                    .font(.subheadline.bold())
+                Text("Per garantire la massima compatibilità, il corretto funzionamento delle patch ExeFS/Mach-O, la compilazione degli shader Metal e il montaggio dei DLC, è sempre fortemente consigliato utilizzare il Gioco Base insieme all'ULTIMO Title Update disponibile e a tutti i DLC aggiornati, abbinati a prod.keys / title.keys e al Firmware della Switch aggiornati (es. 22.5.0). Tutti i file (gioco, update, DLC, chiavi e firmware) devono essere estratti o reperiti autonomamente dall'utente per conto proprio.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if showConfigureButton {
+                Button {
+                    vm.selectedTab = .setup
+                } label: {
+                    Label("Configura File & Chiavi", systemImage: "slider.horizontal.3")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.indigo)
+                .controlSize(.small)
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(LinearGradient(colors: [Color.indigo.opacity(0.14), Color.cyan.opacity(0.08)], startPoint: .leading, endPoint: .trailing))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.cyan.opacity(0.35), lineWidth: 1)
+        )
+    }
+}
+
+// MARK: - Tab 1: Studio Main View (Library, Porting, Advanced Options & Quick File Management)
 
 struct StudioMainView: View {
     @ObservedObject var vm: AetherNXViewModel
@@ -479,16 +1001,16 @@ struct StudioMainView: View {
     var body: some View {
         if let game = vm.selectedGame {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    // Hero Card
+                VStack(alignment: .leading, spacing: 16) {
+                    BestPracticeBannerView(vm: vm, showConfigureButton: true)
+
+                    // Game Hero Card
                     HStack(alignment: .top, spacing: 16) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 16)
-                                .fill(LinearGradient(colors: [.green.opacity(0.75), .teal.opacity(0.45)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                                .frame(width: 88, height: 88)
-                            Image(systemName: "gamecontroller.fill")
-                                .font(.system(size: 38))
-                                .foregroundStyle(.white)
+                        if let logo = vm.logoImage {
+                            Image(nsImage: logo)
+                                .resizable()
+                                .frame(width: 86, height: 86)
+                                .clipShape(RoundedRectangle(cornerRadius: 16))
                         }
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
@@ -502,12 +1024,12 @@ struct StudioMainView: View {
                                 .font(.caption.monospaced())
                                 .foregroundStyle(.secondary)
                             HStack(spacing: 8) {
-                                BadgePill(text: game.has_base ? "Base Game Ready" : "Missing Base", color: game.has_base ? .blue : .red)
-                                BadgePill(text: game.update_versions.isEmpty ? "No Update (v0)" : "Update v\(game.update_versions.max() ?? 0) Merged", color: .purple)
-                                BadgePill(text: "\(game.dlc_ids.count) DLC Pack(s) Mounted", color: .orange)
-                                BadgePill(text: "\(game.shader_count) Maxwell Shaders -> Metal", color: .mint)
+                                BadgePill(text: game.has_base ? "Base Game Ready" : "Base Mancante", color: game.has_base ? .blue : .red)
+                                BadgePill(text: game.update_versions.isEmpty ? "Nessun Update (v0) — Consigliato Update!" : "Ultimo Update v\(game.update_versions.max() ?? 0) Attivo", color: game.update_versions.isEmpty ? .orange : .purple)
+                                BadgePill(text: "\(game.dlc_ids.count) DLC Montati", color: .orange)
+                                BadgePill(text: "\(game.shader_count) Shader Maxwell -> Metal", color: .mint)
                                 if let chunks = game.lifted_chunks, chunks > 0 {
-                                    BadgePill(text: "\(chunks) C11 Recomp Chunks", color: .pink)
+                                    BadgePill(text: "\(chunks) C11 Chunks", color: .pink)
                                 }
                             }
                         }
@@ -517,43 +1039,44 @@ struct StudioMainView: View {
                                 Button {
                                     vm.launchMacApp(macApp)
                                 } label: {
-                                    Label("Launch Native Mac App", systemImage: "play.fill")
+                                    Label("Avvia App macOS Nativa", systemImage: "play.fill")
                                         .font(.headline)
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .tint(.green)
                                 .controlSize(.large)
                             }
-                            Button {
-                                vm.revealInFinder(game.directory)
-                            } label: {
-                                Label("Open Game Folder", systemImage: "folder.fill")
+                            HStack(spacing: 8) {
+                                Button {
+                                    vm.importPackageIntoSelectedGame()
+                                } label: {
+                                    Label("+ Importa NSP/Update/DLC", systemImage: "plus.rectangle.on.folder.fill")
+                                }
+                                Button {
+                                    vm.revealInFinder(game.directory)
+                                } label: {
+                                    Label("Cartella Gioco", systemImage: "folder.fill")
+                                }
                             }
                         }
                     }
-                    .padding(18)
+                    .padding(16)
                     .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
 
                     // Tri-Pipeline Action Cards
                     HStack(alignment: .top, spacing: 14) {
                         PipelineActionCard(
-                            title: "1. Native Porting (COMP)",
-                            subtitle: "HorizonNative AArch64 NSO->Mach-O binary rewriter + Metal shader compiler + HOS kernel",
+                            title: "1. Porting Nativo Apple Silicon (COMP)",
+                            subtitle: "HorizonNative AArch64 NSO->Mach-O rewriter + compilatore Metal + kernel HOS",
                             icon: "apple.logo",
                             accent: .blue
                         ) {
                             VStack(alignment: .leading, spacing: 8) {
-                                Picker("GPU Backend", selection: $vm.gpuBackend) {
-                                    Text("Native NVN -> Metal (Default)").tag("none")
-                                    Text("Ryujinx/Vulkan Bridge").tag("ryujinx")
-                                }
-                                .pickerStyle(.menu)
-
                                 HStack(spacing: 8) {
                                     Button {
                                         vm.buildMacApp(for: game)
                                     } label: {
-                                        Label("Build macOS .app", systemImage: "desktopcomputer")
+                                        Label("Compila App macOS (.app)", systemImage: "desktopcomputer")
                                     }
                                     .buttonStyle(.borderedProminent)
                                     .disabled(vm.isRunningJob)
@@ -561,14 +1084,14 @@ struct StudioMainView: View {
                                     Button {
                                         vm.buildIOSIPA(for: game)
                                     } label: {
-                                        Label("Build iOS/iPadOS .ipa", systemImage: "ipad.and.iphone")
+                                        Label("Compila IPA iOS/iPadOS", systemImage: "ipad.and.iphone")
                                     }
                                     .disabled(vm.isRunningJob)
                                 }
                                 Button {
                                     vm.prepareXcode(for: game)
                                 } label: {
-                                    Label("Generate Xcode Project Only", systemImage: "hammer")
+                                    Label("Genera Progetto Xcode (per firma/debug)", systemImage: "hammer.fill")
                                 }
                                 .disabled(vm.isRunningJob)
                             }
@@ -576,19 +1099,19 @@ struct StudioMainView: View {
 
                         PipelineActionCard(
                             title: "2. Static Recompiler (RECOMP)",
-                            subtitle: "nxrt C11 Runtime + SwitchRecomp C++20 Lifter + mush8 Rust Crates",
+                            subtitle: "nxrt C11 Lifter & Runtime + SwitchRecomp C++20 + mush8 Rust Crates",
                             icon: "memorychip.fill",
                             accent: .purple
                         ) {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text("Lifts AArch64 NSO modules into static C11 translation units (\(game.lifted_chunks ?? 0) chunks ready).")
+                                Text("Traduce staticamente i moduli NSO AArch64 in unità C11 native (\(game.lifted_chunks ?? 0) chunk pronti).")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                 HStack(spacing: 8) {
                                     Button {
-                                        vm.runStaticLifter(for: game)
+                                        vm.runStaticLifter(for: game, module: "main")
                                     } label: {
-                                        Label("Run Static Lifter (nxrt)", systemImage: "bolt.horizontal.circle.fill")
+                                        Label("Lift ExeFS/main -> C11", systemImage: "bolt.horizontal.circle.fill")
                                     }
                                     .buttonStyle(.borderedProminent)
                                     .tint(.purple)
@@ -598,7 +1121,7 @@ struct StudioMainView: View {
                                         Button {
                                             vm.revealInFinder("\(game.directory)/\(game.title_id)_build/decomp_workspace/recomp/lifted_c")
                                         } label: {
-                                            Label("Open C11 Chunks", systemImage: "doc.text.magnifyingglass")
+                                            Label("Apri C11 Chunks", systemImage: "doc.text.magnifyingglass")
                                         }
                                     }
                                 }
@@ -607,62 +1130,444 @@ struct StudioMainView: View {
 
                         PipelineActionCard(
                             title: "3. Clean-Room Decomp (DECOMP)",
-                            subtitle: "open-ead/nnheaders + sead + Capstone Function Harvester + 15 AI Skills",
+                            subtitle: "open-ead/nnheaders + sead + Capstone Harvester + 15 AI Skills",
                             icon: "magnifyingglass.circle.fill",
                             accent: .teal
                         ) {
                             VStack(alignment: .leading, spacing: 8) {
                                 if let manifest = game.decomp_manifest {
-                                    Text("Mapped \(manifest.total_functions ?? 0) functions and \(manifest.total_dynamic_symbols ?? 0) symbols across \(manifest.modules?.count ?? 0) NSO modules.")
+                                    Text("Mappate \(manifest.total_functions ?? 0) funzioni e \(manifest.total_dynamic_symbols ?? 0) simboli su \(manifest.modules?.count ?? 0) moduli NSO.")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 } else {
-                                    Text("Extracts full function bounds, dynamic symbols, CMake targets, and DECOMP_REPORT.md.")
+                                    Text("Estrae confini funzioni, simboli C++ demangled, CMakeLists.txt e DECOMP_REPORT.md.")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
                                 HStack(spacing: 8) {
                                     Button {
-                                        vm.selectedTab = .decomp
+                                        vm.initDecompWorkspace(for: game)
                                     } label: {
-                                        Label("Open Decomp Explorer", systemImage: "list.bullet.rectangle")
+                                        Label("Genera Decomp Workspace", systemImage: "gearshape.2.fill")
                                     }
                                     .buttonStyle(.borderedProminent)
                                     .tint(.teal)
+                                    .disabled(vm.isRunningJob)
 
-                                    if game.decomp_ready {
-                                        Button {
-                                            vm.revealInFinder("\(game.directory)/\(game.title_id)_build/decomp_workspace")
-                                        } label: {
-                                            Label("Open Workspace", systemImage: "folder")
-                                        }
+                                    Button {
+                                        vm.selectedTab = .decomp
+                                    } label: {
+                                        Label("Esplora Funzioni", systemImage: "list.bullet.rectangle")
                                     }
                                 }
                             }
                         }
                     }
 
-                    // Package Composition (Base + Update + DLC)
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Base Game, Update & DLC Composition")
-                            .font(.headline)
-                        HStack(spacing: 16) {
-                            StatBox(label: "Base NSP", value: game.has_base ? "Present (v0)" : "Missing", icon: "opticaldisc.fill")
-                            StatBox(label: "Merged Update", value: game.update_versions.isEmpty ? "None" : "v\(game.update_versions.max() ?? 0)", icon: "arrow.triangle.merge")
-                            StatBox(label: "Mounted DLCs (AOC)", value: game.dlc_ids.isEmpty ? "0" : "\(game.dlc_ids.count) (\(game.dlc_ids.joined(separator: ", ")))", icon: "puzzlepiece.extension.fill")
-                            StatBox(label: "NSO Modules", value: game.modules.isEmpty ? "Pending Extract" : game.modules.joined(separator: ", "), icon: "shippingbox")
+                    // Advanced Build & Runtime Options + File Management Bar
+                    HStack(alignment: .top, spacing: 14) {
+                        // Left: Build & Runtime Options
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label("Opzioni Avanzate di Compilazione & Avvio", systemImage: "slider.horizontal.3")
+                                .font(.headline)
+
+                            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
+                                GridRow {
+                                    Text("Backend GPU:").font(.caption.bold()).foregroundStyle(.secondary)
+                                    Picker("", selection: $vm.gpuBackend) {
+                                        Text("Nativo NVN -> Metal (Consigliato)").tag("none")
+                                        Text("Ryujinx / Vulkan-on-Metal Bridge").tag("ryujinx")
+                                    }
+                                    .labelsHidden()
+                                    .frame(maxWidth: 260)
+                                }
+                                GridRow {
+                                    Text("Versione Pacchetto:").font(.caption.bold()).foregroundStyle(.secondary)
+                                    Picker("", selection: $vm.packageOverride) {
+                                        Text("Automatico (Ultimo Update — Consigliato)").tag("latest")
+                                        Text("Solo Gioco Base (v0)").tag("v0")
+                                        ForEach(game.update_versions, id: \.self) { v in
+                                            Text("Forza Update v\(v)").tag("v\(v)")
+                                        }
+                                    }
+                                    .labelsHidden()
+                                    .frame(maxWidth: 260)
+                                }
+                                GridRow {
+                                    Text("Lingua Gioco (DM_LANG):").font(.caption.bold()).foregroundStyle(.secondary)
+                                    Picker("", selection: $vm.gameLanguage) {
+                                        ForEach(vm.availableLanguages, id: \.code) { item in
+                                            Text(item.label).tag(item.code)
+                                        }
+                                    }
+                                    .labelsHidden()
+                                    .frame(maxWidth: 260)
+                                }
+                            }
+
+                            Divider()
+
+                            HStack(spacing: 16) {
+                                Toggle("Mostra Metal HUD", isOn: $vm.enableMetalHUD)
+                                    .font(.caption)
+                                Toggle("Mantieni Estratti", isOn: $vm.keepExtracted)
+                                    .font(.caption)
+                                Toggle("Forza Re-Extract", isOn: $vm.forceReExtract)
+                                    .font(.caption)
+                                Toggle("Forza Re-Rewrite", isOn: $vm.forceReRewrite)
+                                    .font(.caption)
+                                Toggle("Forza Re-Shader", isOn: $vm.forceReTranslate)
+                                    .font(.caption)
+                            }
                         }
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+
+                        // Right: Quick File & Directory Management
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label("Gestione Rapida File, Salvataggi & Cache", systemImage: "folder.badge.gearshape")
+                                .font(.headline)
+
+                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                                Button {
+                                    vm.revealInFinder(game.directory)
+                                } label: {
+                                    Label("Cartella NSP/DLC", systemImage: "opticaldisc.fill")
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                Button {
+                                    vm.revealInFinder(game.work_dir ?? "\(game.directory)/\(game.title_id)_build")
+                                } label: {
+                                    Label("Cartella _build", systemImage: "hammer.circle.fill")
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                Button {
+                                    vm.revealInFinder(game.save_dir ?? "\(NSHomeDirectory())/Library/Application Support/HorizonNative/\(game.title_id)")
+                                } label: {
+                                    Label("Salvataggi Gioco", systemImage: "externaldrive.fill.badge.checkmark")
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                Button {
+                                    vm.revealInFinder(game.log_file ?? "\(NSHomeDirectory())/Library/Logs/HorizonNative/\(game.title_id).log")
+                                } label: {
+                                    Label("Log Runtime (.log)", systemImage: "doc.text.fill")
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                Button {
+                                    vm.cleanShaderCache(for: game)
+                                } label: {
+                                    Label("Pulisci Shader Cache", systemImage: "sparkles.rectangle.stack")
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                Button(role: .destructive) {
+                                    vm.cleanBuildFolder(for: game)
+                                } label: {
+                                    Label("Reset Build (_build)", systemImage: "trash")
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                        }
+                        .padding(14)
+                        .frame(width: 390, alignment: .leading)
+                        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
                     }
-                    .padding(16)
-                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+
+                    // Detailed Package File Breakdown (Base + Updates + DLCs)
+                    PackageFilesBreakdownCard(vm: vm, game: game)
                 }
                 .padding(18)
             }
         } else {
-            ContentUnavailableView("No Switch Game Selected", systemImage: "gamecontroller", description: Text("Add a game folder with .nsp/.xci files to ~/Games and click Rescan Library."))
+            ContentUnavailableView(
+                "Nessun Gioco Switch Selezionato",
+                systemImage: "gamecontroller",
+                description: Text("Aggiungi una cartella con i tuoi file .nsp / .xci (Gioco Base + Ultimo Update + DLC) o clicca su 'Chiavi, Firmware & File'.")
+            )
         }
     }
 }
+
+// MARK: - Package Files Breakdown Card
+
+struct PackageFilesBreakdownCard: View {
+    @ObservedObject var vm: AetherNXViewModel
+    let game: DiscoveredGame
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("File del Gioco Rilevati (Base Game + Ultimo Update + DLC)", systemImage: "shippingbox.and.arrow.backward.fill")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    vm.importPackageIntoSelectedGame()
+                } label: {
+                    Label("Aggiungi File Update / DLC (.nsp/.xci)...", systemImage: "plus.circle")
+                }
+                .controlSize(.small)
+            }
+
+            VStack(spacing: 6) {
+                // Base file row
+                if let base = game.base, let baseName = base.name, let basePath = base.path {
+                    PackageFileRow(
+                        badge: "BASE v0",
+                        badgeColor: .blue,
+                        filename: baseName,
+                        subtitle: "Title ID: \(game.title_id) • \(ByteCountFormatter.string(fromByteCount: base.size_bytes ?? 0, countStyle: .file))",
+                        statusText: "Contenitore Base",
+                        onReveal: { vm.revealInFinder(basePath) }
+                    )
+                }
+
+                // Updates rows
+                if let updates = game.updates, !updates.isEmpty {
+                    let maxVer = updates.compactMap { $0.version_int }.max() ?? 0
+                    ForEach(updates, id: \.path) { upd in
+                        let isNewest = (upd.version_int == maxVer)
+                        PackageFileRow(
+                            badge: "UPDATE \(upd.version)",
+                            badgeColor: isNewest ? .purple : .secondary,
+                            filename: upd.name,
+                            subtitle: "Patch RomFS/ExeFS • \(ByteCountFormatter.string(fromByteCount: upd.size_bytes, countStyle: .file))",
+                            statusText: isNewest ? "✔ Ultimo Update (Attivo)" : "Versione precedente",
+                            onReveal: { vm.revealInFinder(upd.path) }
+                        )
+                    }
+                } else {
+                    HStack {
+                        Image(systemName: "info.circle.fill").foregroundStyle(.orange)
+                        Text("Nessun Title Update rilevato per questo gioco. È consigliato aggiungere l'ultimo Update .nsp disponibile per sbloccare tutte le ottimizzazioni e i DLC.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(8)
+                    .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                }
+
+                // DLC rows
+                if let dlcs = game.dlcs, !dlcs.isEmpty {
+                    ForEach(dlcs, id: \.path) { dlc in
+                        PackageFileRow(
+                            badge: "DLC #\(dlc.index)",
+                            badgeColor: .orange,
+                            filename: dlc.name,
+                            subtitle: "Title ID: \(dlc.title_id) (\(dlc.version)) • \(ByteCountFormatter.string(fromByteCount: dlc.size_bytes, countStyle: .file))",
+                            statusText: "Montato in aoc/\(dlc.index).img",
+                            onReveal: { vm.revealInFinder(dlc.path) }
+                        )
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+struct PackageFileRow: View {
+    let badge: String
+    let badgeColor: Color
+    let filename: String
+    let subtitle: String
+    let statusText: String
+    let onReveal: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            BadgePill(text: badge, color: badgeColor)
+                .frame(width: 95, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(filename)
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(statusText)
+                .font(.caption2.bold())
+                .foregroundStyle(.secondary)
+            Button("Finder") {
+                onReveal()
+            }
+            .controlSize(.mini)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+// MARK: - Tab 2: Keys, Firmware & File Management View
+
+struct SetupKeysFirmwareView: View {
+    @ObservedObject var vm: AetherNXViewModel
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                BestPracticeBannerView(vm: vm, showConfigureButton: false)
+
+                // 1. Cryptographic Keys Section (prod.keys & title.keys)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Image(systemName: "key.radiowaves.forward.fill")
+                            .font(.title2)
+                            .foregroundStyle(.cyan)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("1. Chiavi Crittografiche Switch (prod.keys & title.keys)")
+                                .font(.headline)
+                            Text("Necessarie per decifrare i contenitori NCA, l'header_key e le key_area dei giochi, degli update e dei DLC (da estrarre autonomamente dalla propria console).")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button {
+                            vm.autoDetectKeysAndFirmware()
+                        } label: {
+                            Label("Rileva Automaticamente", systemImage: "wand.and.stars")
+                        }
+                    }
+
+                    Divider()
+
+                    // prod.keys row
+                    HStack(spacing: 10) {
+                        BadgePill(
+                            text: vm.prodKeysStatus.valid ? "PROD.KEYS OK (\(vm.prodKeysStatus.count) CHIAVI)" : "PROD.KEYS MANCANTE",
+                            color: vm.prodKeysStatus.valid ? .green : .red
+                        )
+                        TextField("Percorso prod.keys...", text: $vm.prodKeysPath)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12, design: .monospaced))
+                        Button("Sfoglia prod.keys...") {
+                            vm.browseProdKeys()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        Button("Finder") {
+                            vm.revealInFinder(vm.prodKeysPath)
+                        }
+                    }
+
+                    // title.keys row
+                    HStack(spacing: 10) {
+                        BadgePill(
+                            text: vm.titleKeysStatus.valid ? "TITLE.KEYS OK (\(vm.titleKeysStatus.count))" : "TITLE.KEYS OPZIONALE",
+                            color: vm.titleKeysStatus.valid ? .teal : .secondary
+                        )
+                        TextField("Percorso title.keys (opzionale)...", text: $vm.titleKeysPath)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12, design: .monospaced))
+                        Button("Sfoglia title.keys...") {
+                            vm.browseTitleKeys()
+                        }
+                        Button("Finder") {
+                            vm.revealInFinder(vm.titleKeysPath)
+                        }
+                    }
+                }
+                .padding(16)
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+
+                // 2. Switch System Firmware Section
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Image(systemName: "memorychip.fill")
+                            .font(.title2)
+                            .foregroundStyle(.purple)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("2. Firmware di Sistema Nintendo Switch (Consigliata l'Ultima Versione)")
+                                .font(.headline)
+                            Text("Fornisce i font di sistema (FontStandard), gli archivi condivisi e il supporto per i giochi e gli update più recenti (es. Firmware 22.5.0, da reperire autonomamente).")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        BadgePill(text: vm.firmwareStatus.label, color: vm.firmwareStatus.valid ? .purple : .orange)
+                    }
+
+                    Divider()
+
+                    HStack(spacing: 10) {
+                        BadgePill(
+                            text: vm.firmwareStatus.valid ? "FIRMWARE PRONTO" : "NON IMPOSTATO",
+                            color: vm.firmwareStatus.valid ? .green : .orange
+                        )
+                        TextField("Percorso Firmware (.zip o cartella NCA)...", text: $vm.firmwarePath)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12, design: .monospaced))
+                        Button("Sfoglia Firmware...") {
+                            vm.browseFirmware()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.purple)
+                        Button("Finder") {
+                            vm.revealInFinder(vm.firmwarePath)
+                        }
+                    }
+                }
+                .padding(16)
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+
+                // 3. Game Library & Multi-Package Folder Management
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Image(systemName: "externaldrive.fill.badge.plus")
+                            .font(.title2)
+                            .foregroundStyle(.blue)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("3. Libreria Giochi, Ultimi Update & DLC (.nsp / .xci / .nsz)")
+                                .font(.headline)
+                            Text("Organizza ogni gioco in una cartella contenente: 1) Gioco Base (v0), 2) Ultimo Title Update disponibile, 3) Tutti i DLC (anche in sottocartelle). AetherNX li fonde automaticamente.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button {
+                            vm.addGameFolder()
+                        } label: {
+                            Label("Aggiungi Cartella Gioco...", systemImage: "folder.badge.plus")
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+
+                    Divider()
+
+                    HStack(spacing: 10) {
+                        Text("Libreria Principale:")
+                            .font(.caption.bold())
+                        TextField("Cartella Giochi...", text: $vm.customLibraryPath)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12, design: .monospaced))
+                        Button("Cambia Cartella...") {
+                            vm.browseLibraryFolder()
+                        }
+                        Button("Scansiona Ora") {
+                            vm.scanGames()
+                        }
+                        Button("Finder") {
+                            vm.revealInFinder(vm.customLibraryPath)
+                        }
+                    }
+
+                    if let game = vm.selectedGame {
+                        Divider()
+                        PackageFilesBreakdownCard(vm: vm, game: game)
+                    }
+                }
+                .padding(16)
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+            }
+            .padding(18)
+        }
+    }
+}
+
+// MARK: - Tab 3: Decomp & Static Recomp Workspace View
 
 struct DecompWorkspaceView: View {
     @ObservedObject var vm: AetherNXViewModel
@@ -675,38 +1580,48 @@ struct DecompWorkspaceView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Decompilation & Static Recompilation Workspace — \(game.name)")
                                 .font(.title2.bold())
-                            Text("Path: \(game.directory)/\(game.title_id)_build/decomp_workspace")
+                            Text("Percorso: \(game.directory)/\(game.title_id)_build/decomp_workspace")
                                 .font(.caption.monospaced())
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
                         Button {
-                            vm.initDecompWorkspace(for: game)
+                            vm.runStaticLifter(for: game, module: "main")
                         } label: {
-                            Label("Refresh Decomp Workspace", systemImage: "arrow.clockwise")
+                            Label("Lift ExeFS/main -> C11 (nxrt)", systemImage: "bolt.horizontal.circle.fill")
                         }
                         .buttonStyle(.borderedProminent)
+                        .tint(.purple)
+                        .disabled(vm.isRunningJob)
+
+                        Button {
+                            vm.initDecompWorkspace(for: game)
+                        } label: {
+                            Label("Rigenera Decomp Workspace", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.teal)
                         .disabled(vm.isRunningJob)
                     }
 
                     if let manifest = game.decomp_manifest, let modules = manifest.modules {
                         HStack(spacing: 16) {
-                            StatBox(label: "Total Functions Discovered", value: "\(manifest.total_functions ?? 0)", icon: "function")
-                            StatBox(label: "Dynamic ELF Symbols", value: "\(manifest.total_dynamic_symbols ?? 0)", icon: "link")
-                            StatBox(label: "Static C11 Chunks Lifted", value: "\(game.lifted_chunks ?? 0)", icon: "bolt.horizontal.fill")
-                            StatBox(label: "SDK Headers Linked", value: "nnheaders + open-ead/sead", icon: "books.vertical.fill")
+                            StatBox(label: "Funzioni AArch64 Mappate", value: "\(manifest.total_functions ?? 0)", icon: "function")
+                            StatBox(label: "Simboli Dinamici ELF", value: "\(manifest.total_dynamic_symbols ?? 0)", icon: "link")
+                            StatBox(label: "Chunk C11 Static Recomp", value: "\(game.lifted_chunks ?? 0)", icon: "bolt.horizontal.fill")
+                            StatBox(label: "Header SDK Collegati", value: "nnheaders + open-ead/sead", icon: "books.vertical.fill")
                         }
 
-                        Text("NSO Module Breakdown")
+                        Text("Moduli Eseguibili NSO (ExeFS)")
                             .font(.headline)
 
                         Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
                             GridRow {
-                                Text("Module").font(.caption.bold()).foregroundStyle(.secondary)
-                                Text("Code Size (.text)").font(.caption.bold()).foregroundStyle(.secondary)
-                                Text("Functions (BL/Entry)").font(.caption.bold()).foregroundStyle(.secondary)
-                                Text("Dynamic Symbols").font(.caption.bold()).foregroundStyle(.secondary)
-                                Text("Artifacts").font(.caption.bold()).foregroundStyle(.secondary)
+                                Text("Modulo").font(.caption.bold()).foregroundStyle(.secondary)
+                                Text("Dimensione .text").font(.caption.bold()).foregroundStyle(.secondary)
+                                Text("Funzioni (.eh_frame)").font(.caption.bold()).foregroundStyle(.secondary)
+                                Text("Simboli Dinamici").font(.caption.bold()).foregroundStyle(.secondary)
+                                Text("Azioni").font(.caption.bold()).foregroundStyle(.secondary)
                             }
                             Divider()
                             ForEach(modules, id: \.name) { mod in
@@ -716,10 +1631,21 @@ struct DecompWorkspaceView: View {
                                         .font(.body.monospaced())
                                     Text("\(mod.functions ?? 0)").font(.body.monospaced())
                                     Text("\(mod.dynamic_symbols ?? 0)").font(.body.monospaced())
-                                    Button("Reveal TSV") {
-                                        vm.revealInFinder("\(game.directory)/\(game.title_id)_build/decomp_workspace/functions/\(mod.name)_functions.tsv")
+                                    HStack(spacing: 6) {
+                                        Button("Funzioni TSV") {
+                                            vm.revealInFinder("\(game.directory)/\(game.title_id)_build/decomp_workspace/functions/\(mod.name)_functions.tsv")
+                                        }
+                                        .controlSize(.small)
+                                        Button("Simboli TSV") {
+                                            vm.revealInFinder("\(game.directory)/\(game.title_id)_build/decomp_workspace/symbols/\(mod.name)_symbols.tsv")
+                                        }
+                                        .controlSize(.small)
+                                        Button("Lift C11") {
+                                            vm.runStaticLifter(for: game, module: mod.name)
+                                        }
+                                        .controlSize(.small)
+                                        .disabled(vm.isRunningJob)
                                     }
-                                    .controlSize(.small)
                                 }
                             }
                         }
@@ -727,9 +1653,9 @@ struct DecompWorkspaceView: View {
                         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
                     } else {
                         ContentUnavailableView(
-                            "Decomp Workspace Not Initialized Yet",
+                            "Decomp Workspace Non Ancora Inizializzato",
                             systemImage: "cpu",
-                            description: Text("Click 'Refresh Decomp Workspace' to analyze NSO modules, harvest functions & dynamic symbols, and scaffold CMake + nxrt descriptors.")
+                            description: Text("Clicca su 'Rigenera Decomp Workspace' per estrarre i confini delle funzioni, i simboli C++ demangled e lo scaffold CMake + nxrt.")
                         )
                     }
                 }
@@ -738,6 +1664,8 @@ struct DecompWorkspaceView: View {
         }
     }
 }
+
+// MARK: - Tab 4: Skills Catalog View
 
 struct SkillsCatalogView: View {
     @ObservedObject var vm: AetherNXViewModel
@@ -749,7 +1677,7 @@ struct SkillsCatalogView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Integrated AI Agent Skills (15 Skills)")
                             .font(.title2.bold())
-                        Text("Installed in ~/AetherNX/skills and linked in .claude/skills for Claude Code, Codex & Antigravity.")
+                        Text("Installate in \(vm.rootDir)/skills e collegate in .claude/skills per Antigravity, Claude Code e Codex.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -757,7 +1685,7 @@ struct SkillsCatalogView: View {
                     Button {
                         vm.revealInFinder("\(vm.rootDir)/skills")
                     } label: {
-                        Label("Open skills/ Folder", systemImage: "folder")
+                        Label("Apri Cartella skills/", systemImage: "folder")
                     }
                 }
 
@@ -781,7 +1709,7 @@ struct SkillsCatalogView: View {
                             HStack {
                                 BadgePill(text: skill.source, color: .indigo)
                                 Spacer()
-                                Button("Open SKILL.md") {
+                                Button("Mostra SKILL.md") {
                                     vm.revealInFinder("\(vm.rootDir)/skills/\(skill.slug)/SKILL.md")
                                 }
                                 .controlSize(.mini)
@@ -797,6 +1725,8 @@ struct SkillsCatalogView: View {
     }
 }
 
+// MARK: - Tab 5: Ecosystem & Credits View
+
 struct EcosystemCreditsView: View {
     @ObservedObject var vm: AetherNXViewModel
 
@@ -807,7 +1737,7 @@ struct EcosystemCreditsView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Unified Open-Source Ecosystem & Copyright Registry (31 Forked Repositories)")
                             .font(.title2.bold())
-                        Text("Every repository has been forked to @iCosiSenpai and attributed in COPYRIGHT.md & PROVENANCE.md.")
+                        Text("Ogni repository è stato forkato su @iCosiSenpai e documentato in COPYRIGHT.md, PROVENANCE.md e README.md.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -815,7 +1745,7 @@ struct EcosystemCreditsView: View {
                     Button {
                         vm.revealInFinder("\(vm.rootDir)/COPYRIGHT.md")
                     } label: {
-                        Label("Open COPYRIGHT.md", systemImage: "doc.text")
+                        Label("Apri COPYRIGHT.md", systemImage: "doc.text")
                     }
                 }
 
@@ -850,6 +1780,8 @@ struct EcosystemCreditsView: View {
     }
 }
 
+// MARK: - Console Drawer & Shared Components
+
 struct ConsoleDrawerView: View {
     @ObservedObject var vm: AetherNXViewModel
 
@@ -860,7 +1792,7 @@ struct ConsoleDrawerView: View {
                     .font(.caption.bold())
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Clear") {
+                Button("Pulisci Console") {
                     vm.consoleLines.removeAll()
                 }
                 .controlSize(.mini)
@@ -887,7 +1819,7 @@ struct ConsoleDrawerView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .frame(height: 155)
+        .frame(height: 145)
         .background(Color(nsColor: .underPageBackgroundColor))
     }
 }
@@ -967,11 +1899,15 @@ struct PipelineActionCard<Content: View>: View {
 struct AetherNXStudioApp: App {
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
+        if let iconURL = Bundle.main.url(forResource: "aethernx-logo", withExtension: "png"),
+           let iconImg = NSImage(contentsOf: iconURL) {
+            NSApplication.shared.applicationIconImage = iconImg
+        }
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
     var body: some Scene {
-        WindowGroup("AetherNX Studio — Universal Switch Decomp • Recomp • Native Porting") {
+        WindowGroup("AetherNX Studio PRO — Universal Switch Decomp • Recomp • Native Porting") {
             ContentView()
         }
         .windowStyle(.titleBar)

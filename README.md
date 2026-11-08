@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="./assets/aethernx-logo.png" width="175" alt="AetherNX Studio Logo" />
+
 # ⚡ AETHERNX (`switch-comp`)
 
 ### **The Universal Nintendo Switch Decompilation (`DECOMP`), Static Recompilation (`RECOMP`) & Native Apple Silicon Porting (`COMP`) Suite**
@@ -15,12 +17,12 @@
 [![License](https://img.shields.io/badge/License-MIT%20%2B%20Third--Party-32D74B?style=for-the-badge)](./LICENSE)
 
 [**Overview**](#-overview) •
+[**Prerequisites: Keys, Firmware & Game Versions**](#-prerequisites--best-practices-prodkeys-firmware--latest-gameupdatedlc) •
 [**Tri-Pipeline Architecture**](#-tri-pipeline-architecture) •
 [**Quick Start & CLI**](#-quick-start--cli-reference) •
 [**AetherNX Studio App**](#-aethernx-studio-native-swiftui-app) •
 [**Showcase: Luigi's Mansion 3**](#-flagship-showcase-luigis-mansion-3-0100dca0064a6000) •
 [**15 AI Skills**](#-integrated-ai-agent-skills-15-skills) •
-[**Repository Layout**](#-repository-layout) •
 [**Legal & Copyrights**](#-legal-notice-copyrights--third-party-licenses)
 
 </div>
@@ -38,6 +40,22 @@ Because the Nintendo Switch (**ARM Cortex-A57**, AArch64 ISA) and modern Apple d
 | **1. `COMP`**<br>*(Native Binary Porting)* | **HorizonNative (`dm/`)**<br>+ `rewrite_nso.py` + `dmsh_xlate` | Decompresses & merges **Base + Update + DLCs** (`nx_extract`), rewrites ARM64 Switch `NSO` binaries directly into native Apple **Mach-O `.dylib`** modules (patching `SVC #0x26` syscalls and `MRS Xn, TPIDRRO_EL0` TLS accesses), translates Maxwell GPU shaders into **Metal `.metallib`**, and links with the native HOS kernel (`dmhost`). | Native **macOS `.app`**, unsigned **iOS / iPadOS `.ipa`**, or ready-to-sign **Xcode Workspace**. |
 | **2. `RECOMP`**<br>*(Static Recompilation)* | **`nxrt` (`recomp/nxrt/`)**<br>+ `SwitchRecomp` + `mush8` | Statically lifts every AArch64 function from `ExeFS/main` & `ExeFS/rtld` into portable **C11 / C++20 / Rust** source chunks (`main_000.c` .. `main_NNN.c` + dispatch tables), emitting integer/control-flow in C and NEON/SIMD/FP in bit-exact inline AArch64 assembly around a `Cpu` context. | **`lifted_c/*.c`** chunks, **`main_table.c`**, **`nxrt_game_desc.c`**, native `.o` / Mach-O binaries. |
 | **3. `DECOMP`**<br>*(Clean-Room Decompilation)* | **`aethernx_decomp.py`**<br>+ `open-ead/nnheaders` + `sead` + `dread-tools` | Harvests every function boundary from `.eh_frame_hdr`, recovers and demangles `.dynsym` C++ symbols, classifies SDK subsystems (`nn::*`, `sead`, `nvn`, `libc`), and scaffolds a **C++20 CMake** project pre-wired to `nnheaders` & `sead` plus 15 AI matching-decomp skills. | **`DECOMP_REPORT.md`**, **`manifest.json`**, **`functions/*.tsv`**, **`symbols/*.tsv`**, **`CMakeLists.txt`**, **`src/main_reconstruct.cpp`**. |
+
+---
+
+## 🔑 Prerequisites & Best Practices: `prod.keys`, Firmware & Latest Game/Update/DLC
+
+> [!IMPORTANT]
+> **Self-Sourcing Notice (Da reperire autonomamente per conto proprio)**:
+> AetherNX does **not** ship with any cryptographic keys, Nintendo Switch firmware, or game files. **All required inputs — `prod.keys`, `title.keys`, Switch System Firmware, Base Game, Title Updates, and DLCs — must be extracted or obtained independently by the user on their own from their own hardware.**
+
+To achieve **100% compatibility, accurate shader translation, clean ExeFS/Mach-O binary rewriting, and full DLC mounting**, always follow these three golden rules (configurable directly in the **"Chiavi, Firmware & File"** tab of [`AetherNX.app`](./AetherNX.app)):
+
+| Requirement | Recommended Version & Format | Why It Is Essential |
+| :--- | :--- | :--- |
+| **1. Cryptographic Keys (`prod.keys` & `title.keys`)** | Latest generation **`prod.keys`** (e.g. `v22.5.0+` containing `header_key`, `key_area_key_application_*`, `titlekek_*`, and `master_key_*`) | Required by `nx_extract` to decrypt the NCA headers, `ExeFS` NSO modules, `RomFS` containers, and `BKTR` Title Update patches. |
+| **2. Switch System Firmware (`Firmware.zip` or NCA folder)** | **Latest Switch System Firmware** (e.g. `Firmware 22.5.0+`) | Provides shared system archives (`FontStandard`, `TimeZoneBinary`, Mii resources, system applets) and ensures compatibility with games and updates compiled against the newest Nintendo SDK (`nnSdk`). |
+| **3. Game Packages: Base Game + Latest Update + All DLCs (`.nsp` / `.xci` / `.nsz`)** | **Base Game (`v0`) + Latest Title Update (`vXXXXX`) + All Updated DLCs** placed inside the same game folder (or subfolders) | **It is always strongly recommended to use the latest available Title Update and all updated DLCs.** AetherNX's per-title game profiles, shader maps (`shader_map.tsv`), `BuildID`-keyed runtime hooks, and static recompilation descriptors are calibrated against the **latest official update** of each title. |
 
 ---
 

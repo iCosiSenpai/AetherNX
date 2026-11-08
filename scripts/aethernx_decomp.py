@@ -189,12 +189,17 @@ def scan_game_folder(folder: Path) -> dict | None:
     update_ints = [int(v) for v, _ in sorted(fam["updates"], key=lambda x: x[0] or 0) if v is not None]
     dlc_id_strs = [f"{t:016X}" for t, _, _ in sorted(fam["dlc"], key=lambda x: x[0])]
     modules_list = prof.words("modules") if prof else ["main", "sdk"]
+    save_dir = Path.home() / "Library" / "Application Support" / "HorizonNative" / tid_hex
+    log_file = Path.home() / "Library" / "Logs" / "HorizonNative" / f"{tid_hex}.log"
 
     return {
         "title_id": tid_hex,
         "name": game_name,
         "directory": str(folder),
         "folder": str(folder),
+        "work_dir": str(work),
+        "save_dir": str(save_dir),
+        "log_file": str(log_file),
         "has_base": base_path is not None and base_path.exists(),
         "has_verified_profile": prof is not None,
         "profile_dir": str(prof.dir) if prof else None,
@@ -610,12 +615,19 @@ def run_doctor() -> dict:
         path = shutil.which(tool)
         add_check(f"System tool: {tool}", path is not None, path or "Missing")
 
-    # 3. Keys auto-detection
+    # 3. Keys & Firmware auto-detection
     keys_path = builder.PROD_KEYS
     add_check(
         "Switch prod.keys",
         bool(keys_path and Path(keys_path).is_file()),
         keys_path or "Not configured",
+    )
+    fw_candidates = list(Path("~/.switch").glob("Firmware*.zip")) if Path("~/.switch").is_dir() else []
+    fw_path = str(fw_candidates[-1]) if fw_candidates else None
+    add_check(
+        "Switch System Firmware",
+        fw_path is not None,
+        fw_path or "Optional (user-supplied Firmware.zip)",
     )
 
     # 4. Skills check
