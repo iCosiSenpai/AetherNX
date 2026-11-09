@@ -10,11 +10,12 @@
 //   (7) the first mount: a failed pull leaves this device's save and its sync state; (8) a save that cannot be read turns sync off rather than bring the cloud's in
 //   (9) a fetch abandoned at its time limit removes only its own download, never a later one at the same path; (10) one in time is published at its path
 //   (11) a send with a folder that cannot be read sends nothing
-//   (12) a send when both changed: a newer cloud save is not replaced (also by the Mac launcher after a host that never mounted); an older one is, and is kept first
-//   (13) a cloud backup that cannot be completed is removed, and costs no older backup
+//   (12) a send when both changed sends nothing, whichever is newer: the next start decides (also for the Mac launcher after a host that never mounted); once a start chose
+//        this device's save, the send replaces the cloud save it chose against
+//   (13) a cloud backup that cannot be completed (at the start that chose this device's save) is removed, costs no older backup, and nothing is sent
 //   (14) the sync state belongs to one cloud file: another folder chosen gets the save even if it did not change; a state file from before the cloud line still counts
 //   (15) after a pull that could not be put back, nothing is synced (the host's next mount, the Mac launcher's send) until <save>.sync-stuck is deleted
-//   (16) a send whose upload fails keeps no extra cloud backup and prunes none
+//   (16) a send whose upload fails keeps no extra cloud backup and prunes none (the damaged cloud file, the one cloud save a send keeps and replaces by itself)
 #include <dirent.h>
 #include <errno.h>
 #include <stdatomic.h>
@@ -279,26 +280,34 @@ int main(void) {
         snprintf(q, sizeof q, "%s-backups", f.save);
         CHECK(!send_save(f.save, "0100ABC", f.cfile) && unchanged(f.cfile, &before) && count_dirs(q, " cloud") == 0, "the cloud's is newer: not sent, the cloud's file untouched, nothing to keep");
         set_mtime(f.prog, now + 1000);
-        CHECK(send_save(f.save, "0100ABC", f.cfile) == 1 && cloud_value(f.cfile, "LOCAL"), "this one newer: it is sent");
-        backup_of_side(f.save, "cloud", kept, sizeof kept); snprintf(p, sizeof p, "%s/save/progress", kept);
-        CHECK(*kept && same(p, "REMOTE"), "and the cloud's it replaced is kept (%s)", kept);
+        CHECK(!send_save(f.save, "0100ABC", f.cfile) && unchanged(f.cfile, &before) && count_dirs(q, " cloud") == 0, "this one newer: not sent either, the next start decides");
+        ss_meta cm; ss_read(f.cfile, NULL, &cm); write_base(f.save, f.cfile, cm.hash);   // what a start that chose this device's save records: the cloud's is the one it replaces
+        CHECK(send_save(f.save, "0100ABC", f.cfile) == 1 && cloud_value(f.cfile, "LOCAL"), "after a start that chose this one, it is sent");
     }
 
     printf("(13) a cloud backup that cannot be completed\n");
-    {   fixture f; make_fixture(&f, "send_backup_fail", 1);
+    {   fixture f; make_fixture(&f, "mount_backup_fail", 1);
         char remote[1400]; snprintf(remote, sizeof remote, "%s/remote/save/progress", f.dir);
         setxattr(remote, GUEST_NAME, "Progress", 8, 0, XATTR_NOFOLLOW);
         snprintf(p, sizeof p, "%s/remote/save", f.dir); ss_pack(p, "0100abc", f.cfile, &m);
         write_base(f.save, f.cfile, "00000000000000000000000000000000");
-        set_mtime(f.prog, time(NULL) + 1000);
+        set_mtime(f.prog, time(NULL) + 1000);   // this one is the newer: the start chooses it, keeping the cloud's first
         snprintf(q, sizeof q, "%s-backups", f.save);
         for (int i = 0; i < KEEP_BACKUPS; i++) { snprintf(p, sizeof p, "%s/2001-01-01 00.00.%02d cloud", q, i); mkdirs(p); }
         struct stat before; stat(f.cfile, &before);
-        hooks_off(); snprintf(deny_setxattr_in, sizeof deny_setxattr_in, "-backups/");
-        int ok = send_save(f.save, "0100ABC", f.cfile);
-        hooks_off();
+        char base_before[SS_HASH + 1], base_after[SS_HASH + 1]; read_base(f.save, f.cfile, base_before);
+        fflush(stdout); pid_t c = fork();
+        if (!c) {
+            setenv("DM_SAVE_SYNC", f.cloud, 1); unsetenv("DM_SAVE_SYNC_CHOICE");
+            hooks_off(); snprintf(deny_setxattr_in, sizeof deny_setxattr_in, "-backups/");
+            save_sync_mount(f.save, "0100abc");
+            pthread_mutex_lock(&g_mu); int want = g_want, failed = g_failed; pthread_mutex_unlock(&g_mu);
+            _exit(!want && failed ? 0 : 7);
+        }
+        int st; waitpid(c, &st, 0);
+        read_base(f.save, f.cfile, base_after);
         snprintf(p, sizeof p, "%s/2001-01-01 00.00.00 cloud", q);
-        CHECK(!ok && unchanged(f.cfile, &before), "not sent: the cloud's save stays");
+        CHECK(WIFEXITED(st) && !WEXITSTATUS(st) && unchanged(f.cfile, &before) && !strcmp(base_before, base_after), "not sent: the cloud's save and the sync state stay");
         CHECK(count_dirs(q, " cloud") == KEEP_BACKUPS && exists(p), "the part of a backup is removed, and the oldest whole one stays (%d)", count_dirs(q, " cloud"));
     }
 
@@ -310,7 +319,7 @@ int main(void) {
         char b[1400]; snprintf(b, sizeof b, "%s/cloudB/0100ABC/save.dmsync", f.dir);
         CHECK(send_save(f.save, "0100ABC", b) == 1 && cloud_value(b, "LOCAL"), "folder B chosen: the unchanged save goes there");
         set_mtime(f.prog, time(NULL) + 1000);   // the newer of the two, whatever second each was written in
-        CHECK(send_save(f.save, "0100ABC", f.cfile) == 1 && unchanged(f.cfile, &before) == 0 && cloud_value(f.cfile, "LOCAL"), "back to A, whose save is not this one: A gets this one (the cloud's kept first)");
+        CHECK(!send_save(f.save, "0100ABC", f.cfile) && unchanged(f.cfile, &before), "back to A, whose save is not this one: nothing is sent, the next start decides between the two");
         snprintf(p, sizeof p, "%s.sync", f.save); FILE *o = fopen(p, "w"); fprintf(o, "base\t%s\n", mine.hash); fclose(o);
         stat(b, &before);
         CHECK(send_save(f.save, "0100ABC", b) == 1 && unchanged(b, &before), "a state file without a cloud line still counts as in step");
@@ -332,16 +341,26 @@ int main(void) {
         if (!c) { setenv("DM_SAVE_SYNC", f.cloud, 1); save_sync_mount(f.save, "0100abc"); _exit(atomic_load(&g_on) ? 6 : 0); }
         waitpid(c, &st, 0);
         CHECK(WIFEXITED(st) && !WEXITSTATUS(st), "the next start stays off too");
+        {   // what the player does (docs/settings.md, Cloud saves): put this device's save back from the backup the file names, then delete the file
+            char kept_dir[PATH_MAX] = "", from[PATH_MAX + 16]; FILE *sf = fopen(p, "r");
+            if (sf) { if (fgets(kept_dir, sizeof kept_dir, sf)) kept_dir[strcspn(kept_dir, "\n")] = 0; fclose(sf); }
+            const char *place[2] = {f.save, f.dev};
+            for (int i = 0; i < 2 && *kept_dir; i++) {
+                snprintf(from, sizeof from, "%s/%s", kept_dir, FOLDERS[i]);
+                if (exists(from)) { rm_tree(place[i]); rename(from, place[i]); }
+            }
+            CHECK(*kept_dir && local_intact(&f, 1), "this device's save is whole in the backup the file names (%s)", kept_dir);
+        }
         unlink(p);
         setenv("DM_SAVE_SYNC", f.cloud, 1);
-        CHECK(save_sync_after_exit(f.save, "0100abc") == 1, "once the file is deleted, syncing resumes");
+        CHECK(save_sync_after_exit(f.save, "0100abc") == 1, "once the save is restored and the file deleted, syncing resumes");
         unsetenv("DM_SAVE_SYNC");
     }
 
     printf("(16) a send whose upload fails\n");
     {   fixture f; make_fixture(&f, "send_store_fail", 1);
+        put(f.cfile, "DAMAGED");   // no save can be read from it: the send keeps the file, then replaces it
         write_base(f.save, f.cfile, "00000000000000000000000000000000");
-        set_mtime(f.prog, time(NULL) + 1000);   // this one newer: it would replace the cloud's after keeping it
         snprintf(q, sizeof q, "%s-backups", f.save);
         for (int i = 0; i < KEEP_BACKUPS; i++) { snprintf(p, sizeof p, "%s/2001-01-01 00.00.%02d cloud", q, i); mkdirs(p); }
         char title_dir[1400]; snprintf(title_dir, sizeof title_dir, "%s/0100ABC", f.cloud);
@@ -351,9 +370,9 @@ int main(void) {
         chmod(title_dir, 0755);
         snprintf(p, sizeof p, "%s/2001-01-01 00.00.00 cloud", q);
         CHECK(!ok1 && !ok2 && unchanged(f.cfile, &before), "not sent, twice: the cloud keeps its save");
-        CHECK(count_dirs(q, " cloud") == KEEP_BACKUPS && exists(p), "no backup of the unchanged cloud save is kept, and the oldest one stays (%d)", count_dirs(q, " cloud"));
+        CHECK(count_dirs(q, " cloud") == KEEP_BACKUPS && exists(p), "no backup of the unchanged cloud file is kept, and the oldest one stays (%d)", count_dirs(q, " cloud"));
         CHECK(send_save(f.save, "0100ABC", f.cfile) == 1 && cloud_value(f.cfile, "LOCAL") && count_dirs(q, " cloud") == KEEP_BACKUPS && !exists(p),
-              "once the folder takes it, it is sent, the cloud's is kept and only then the oldest backup goes");
+              "once the folder takes it, it is sent, the damaged file is kept and only then the oldest backup goes");
     }
 
     printf("== save sync faults: %d checks, %d failed ==\n", checks, fails);

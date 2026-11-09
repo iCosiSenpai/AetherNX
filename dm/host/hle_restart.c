@@ -7,8 +7,8 @@
 //   3. dm_program_restart_run (on the main guest thread, outside guest code): wait for every other thread to end, run the RELEASE hooks (guest memory still holds the old program),
 //      then the RESET hooks (guest memory remapped, the modules' data restored and relocated, the per-program tables cleared), then publish the launch parameter. main.c enters
 //      the program again from its start: nnosInitialize, the SDK's startup, the modules' constructors, nnMain.
-// Only program index 0 is packed (the ExeFS holds one program). Another index restarts program 0 without the parameter, which was meant for the other program: the game comes
-// back to its start. Returning to the game instead, as before, left it waiting to be ended, its picture frozen and its music going on (the Ezio Collection's Brotherhood is
+// hle_oe.c's ExecuteProgram restarts in place a program that starts itself again, and this program, without the parameter, when the requested one cannot start here: the game
+// comes back to its start. Returning to the game instead, as before, left it waiting to be ended, its picture frozen and its music going on (the Ezio Collection's Brotherhood is
 // program 1).
 #include "hle.h"
 #include <mach-o/getsect.h>
@@ -65,13 +65,8 @@ __attribute__((noreturn)) void dm_thread_terminate_on_gate_stack(void);   // hle
 
 // nn::oe::ExecuteProgram on a guest thread. Returns only when the request is refused (a parameter too large); otherwise the calling thread ends
 void dm_program_execute(int index, const void *param, size_t n) {
-    if (index != 0) {
-        LOG("[RED] oe::ExecuteProgram(%d, %zu bytes of parameters): program %d is not packed, only program 0 is; restarting program 0 without the parameter, back to its start",
-            index, n, index);
-        index = 0; param = NULL; n = 0;
-    }
     if (n > LAUNCH_PARAM_MAX || (n && !param)) {
-        LOG("[RED] oe::ExecuteProgram(0, %zu bytes of parameters): a launch parameter of more than %u bytes is not kept; the game carries on", n, LAUNCH_PARAM_MAX);
+        LOG("[RED] oe::ExecuteProgram(%d, %zu bytes of parameters): a launch parameter of more than %u bytes is not kept; the game carries on", index, n, LAUNCH_PARAM_MAX);
         return;
     }
     uint8_t *copy = n ? malloc(n) : NULL;
@@ -102,6 +97,6 @@ void dm_program_restart_run(void) {
     g_req.param = NULL; g_req.n = 0; g_req.pending = 0;
     pthread_mutex_unlock(&g_mu);
     atomic_fetch_add(&g_restarts, 1);
-    LOG("restart: the guest threads ended in %.0f ms, the program state was reset in %.0f ms; entering program 0 again with a %zu-byte launch parameter",
-        (t1 - t0) / 1e6, (now_ns() - t1) / 1e6, g_lp.n);
+    LOG("restart: the guest threads ended in %.0f ms, the program state was reset in %.0f ms; entering program %d again with a %zu-byte launch parameter",
+        (t1 - t0) / 1e6, (now_ns() - t1) / 1e6, g_prev_index, g_lp.n);
 }

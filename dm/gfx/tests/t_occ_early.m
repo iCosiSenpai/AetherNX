@@ -29,11 +29,11 @@ int main(void) { @autoreleasepool {
     state_reset(); atomic_store(&g_cur_frame, 42); report(rec[0]);
     CHECK(g_npost == 1 && g_post[0].kind == 3 && g_post[0].frame == 42, "samples-passed completion retains its encode frame");
     CHECK(early ? rec[0][0] != 0 && rec[0][1] >= before && rec[0][1] <= gpu_ticks() : rec[0][0] == 0 && rec[0][1] == 0, "report is provisional only with DM_NVN_OCC_EARLY=1");
-    CHECK(rc_occ_has((uint64_t)rec[0]) && !rc_value((uint64_t)rec[0], &v), "samples-passed stays unknown to conditional rendering");
+    CHECK(rc_find((uint64_t)rec[0]) && !rc_value((uint64_t)rec[0], &v), "samples-passed stays unknown to conditional rendering");
 
     // The switch is read once; later resets and submissions must not restart the provisional counter (AC II compares two reports).
     setenv("DM_NVN_OCC_EARLY", early ? "0" : "1", 1);
-    g_rc_npend = 0; atomic_store(&g_cur_frame, 44); report(rec[1]);
+    rc_commit(1); atomic_store(&g_cur_frame, 44); report(rec[1]);   // the first submission ends: its report waits for fence 1
     CHECK(early ? rec[1][0] > rec[0][0] && rec[1][0] - rec[0][0] == 1ull << 20 : rec[1][0] == 0 && rec[1][1] == 0, "switch is cached and successive provisional reports differ by 1 << 20");
     CHECK(!rc_value((uint64_t)rec[0], &v) && !rc_value((uint64_t)rec[1], &v), "both addresses stay unknown across submissions");
     p_render_cond cond = {.mode = 0, .addr = (uint64_t)rec[0]};

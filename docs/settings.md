@@ -7,8 +7,8 @@ A dot beside a setting means it differs from the game's tested default; touch an
 **With a game controller**: up and down move through the screen, left and right change the setting that is selected (or move along the summary row), A chooses (opens a menu's next value, turns a switch on or off, follows a summary entry to its setting), B goes back to **Play**, and + (Menu) starts the game from anywhere. The selected item has a coloured ring, and a line under the summary row shows the buttons in your controller's own symbols. The same works in the Mac window, where the controller also reaches **Show this window at launch** and **Quit**.
 
 - [Tested defaults](#tested-defaults)
-- [Game](#game): [Frame rate](#frame-rate), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Sharpness](#sharpness), [Pixels](#pixels), [Screen](#screen), [Game language](#game-language), [Frame-rate counter](#frame-rate-counter), [Texture filtering](#texture-filtering)
-- [Controls](#controls): [Controllers](#controllers), [Button layout](#button-layout), [Stick dead zone](#stick-dead-zone), [All controllers are player 1](#all-controllers-are-player-1), [Motion controls](#motion-controls), [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff)
+- [Game](#game): [Frame rate](#frame-rate), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Game's upscaler](#games-upscaler), [Sharpness](#sharpness), [Pixels](#pixels), [Screen](#screen), [Game language](#game-language), [Picture](#picture), [Frame-rate counter](#frame-rate-counter), [Texture filtering](#texture-filtering)
+- [Controls](#controls): [Controllers](#controllers), [Button layout](#button-layout), [Stick dead zone](#stick-dead-zone), [All controllers are player 1](#all-controllers-are-player-1), [Motion controls](#motion-controls), [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff), [Press a button to join](#press-a-button-to-join)
 - [Performance](#performance): [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
 - [The in-game menu](#the-in-game-menu): [Controllers during play](#controllers-during-play), [Touch controls](#touch-controls)
 - [The Mac settings window](#the-mac-settings-window): [Display mode](#display-mode), [The Mac Controllers menu](#the-mac-controllers-menu)
@@ -29,6 +29,12 @@ A Mac app carries the same list (`Contents/Resources/dm/launcher.json`), without
 ### Frame rate
 
 Games whose speed the app controls (Breath of the Wild, Tears of the Kingdom and a few others) offer **30 fps** or **60 fps**. 60 is smoother; 30 is what the Switch ran and uses less power, so the phone stays cooler and the battery lasts longer. The game runs at real speed either way.
+
+On a Mac, a game checked at that speed (Fire Emblem Fortune's Weave, Mario & Luigi: Brothership) also offers **120 fps**. It needs a screen that shows 120 Hz, and uses more GPU and power. When frames do not fit, during movies, or on a slower screen, the game drops to 60 for a while, so it keeps its real speed. If you see the frame rate move between 60 and 120 and would rather it stayed still, choose 60.
+
+### Dynamic resolution
+
+Off, the default, keeps the 3D picture at full size. On lets the game lower its resolution when frames run heavy and raise it again when they fit, as on the Switch: steadier frame rate, at times a softer picture. Only games whose resolution control the app can hold offer it (NieR:Automata, Ocarina of Time).
 
 ### Render scale
 
@@ -71,9 +77,34 @@ Sharpens the picture as it goes to the screen, after the upscaling: edges and sm
 
 **Game's shape**, the default, keeps the game's 16:9 picture with black bars at the sides of a wider screen. **Fill the screen** stretches it over the whole screen (on an iPhone about 22 % wider than the game drew it).
 
+### Game's upscaler
+
+Shown only for games that upscale their own picture with a network of their own before the app sees it: agl's NDSR network, in Donkey Kong Bananza and Splatoon Raiders. **Game's own**, the default, keeps the game's upscaler. **MetalFX** replaces it with Apple's MetalFX spatial scaler: the same input and output sizes, at a fraction of the GPU time, but Apple's scaler's picture rather than the game's.
+
+```mermaid
+flowchart LR
+    R["Game's render<br/>e.g. 960x540"] --> U{Game's upscaler}
+    U -->|Game's own| N["The game's network<br/>3.5-5 ms on an M1"]
+    U -->|MetalFX| M["MetalFX spatial scaler<br/>about 1 ms on an M1"]
+    N --> O["Game's output, e.g. 1920x1080<br/>then the game draws its HUD"]
+    M --> O
+```
+
+- **When to change it:** when the game falls short of its frame rate in busy scenes because of GPU time: Donkey Kong Bananza's upscaler is the largest single piece of a heavy frame on an M1 (3.5-5 ms of about 24 in handheld mode). Compare the look side by side before keeping it.
+- **Cost:** none in GPU time (it saves 2.5-4 ms a frame in that case); the picture is Apple's scaler's rather than the game's. Frames where the game renders at its output size are not upscaled and keep the game's shader either way. Devices without MetalFX keep the game's upscaler.
+- **Not the same as [Upscaling](#upscaling):** that one scales the finished picture, HUD included, to the screen; this one replaces the game's own step inside the frame. Both can be on.
+
 ### Game language
 
-The game's own languages. The app was packed with one of them; pick another here without repacking.
+The game's own languages. The app was packed with one of them; pick another here without repacking. A game packed from a dump or a NUP may come without its list: every language is offered then, with a note, and a game that lacks the one you pick may show another.
+
+### Picture
+
+iPhone and iPad. **Fit**, the default, shows the game's picture (16:9, or the taller one of [Picture shape](#picture-shape)) as large as it fits, with black bars where the screen has another shape. **Fill** enlarges it until it covers the whole screen and crops what lies outside; nothing is stretched. An iPhone loses some of the top and bottom, an iPad some of each side, so health bars, subtitles or maps near the edges can be cut off. A picture that fills the screen without cropping needs a patch for each game that renders a wider view. Fill applies in landscape; in portrait the picture stays fitted above the controls, and on a TV it is always fitted.
+
+### Picture shape
+
+Games whose profile supports it (Breath of the Wild, Animal Crossing: New Horizons). **iPhone Duo screen (1.43:1)** renders a taller picture of the Duo's own shape: the sides of 16:9 with more above and below, and the HUD at the screen's edges. **16:9** is the Switch's picture. The taller picture has about a quarter more pixels, so it runs a little slower and warmer.
 
 ### Frame-rate counter
 
@@ -124,6 +155,10 @@ How strong the game's vibration is, from 0 to 300 %.
 ### Rumble cutoff
 
 A controller's vibration weaker than this stays off, and the rest is spread over the full range. Off (0 %) by default. A controller with rotating motors can rumble all the time in a game that sends a quiet texture: Mario Kart 8 Deluxe needs about 45 % to rumble only on crashes and drifts. The phone's own vibration is not affected.
+
+### Press a button to join
+
+Off by default: each controller is a player as soon as it connects, in the order the system lists them. On: a controller becomes a player only when you press one of its buttons, as the lowest player free, so the players choose their order and how many play. That press also reaches the game. When a game asks for more players than have joined, a prompt over the game waits for the others to press a button; B closes it.
 
 ## Performance
 
@@ -267,6 +302,10 @@ Turn off **Show this window at launch** to start the game at once with your choi
 
 In the Mac game window's menu bar, **Controllers** offers **Button layout** (Switch or Xbox / PlayStation) and **Stick dead zone** (0, 5, 10, 15 or 20 %). Each change applies immediately and, in a packed Mac app, is kept in the same preferences as its launcher; choosing the tested default removes the saved choice. Values fixed by an environment file or at launch stay locked, and `DM_SAVED_CHOICES=0` leaves saved choices alone. A bare development host without an app settings list applies changes for that run only. The launcher's slider also offers the other dead-zone values up to 30 %.
 
+### Switch 2 controllers
+
+**Off** by default. On, the game takes Joy-Con 2 and Pro Controller 2 over Bluetooth: hold the small Sync button on one during the game, until its player lights sweep, to pair it with this Mac; after that a press of any of its buttons connects it ([Switch 2 controllers](playing.md#switch-2-controllers-mac)). macOS asks for Bluetooth access the first time, and again after the app is packed again. In an `env.txt`: `DM_SW2=1`.
+
 ### Cloud saves folder
 
 **Choose a folder…** picks the iCloud Drive folder the game's save is synced through, the one the iPhone app chose in its launcher's **Cloud saves**, or the game's own folder inside it, named after its title ID ([Cloud saves](#cloud-saves)); **Turn off** stops it. Off by default. macOS may ask once whether the app may open iCloud Drive; if the game log says `this app may not open iCloud Drive`, allow it in System Settings › Privacy & Security › Files and Folders. In an `env.txt`: `DM_SAVE_SYNC=<folder>`, or `DM_SAVE_SYNC=icloud` for iCloud Drive › HorizonNative Saves; the window then shows it fixed.
@@ -277,13 +316,13 @@ In the Mac game window's menu bar, **Controllers** offers **Button layout** (Swi
 
 The Mac app and the iPhone app of one game can share a save through iCloud Drive. Choose the same iCloud Drive folder on both: **Cloud saves** › **Choose a folder…** in the Mac settings window, and **Cloud saves** in the iPhone launcher (any folder, for instance one named **HorizonNative Saves**). Each game keeps one file there, `<title ID>/save.dmsync`, which holds the whole save.
 
-When the game starts, it brings the save from iCloud Drive in if that one is the one to keep; a few seconds after the game saves, it sends its save. The iPhone app also sends when it goes to the background, and the Mac app once the game has quit. If you played on both without the save getting across in between, the newer save wins: a newer one in iCloud Drive is never replaced by an older one from this device, also not by the Mac app after a game that stopped before it loaded its save; it comes in at the next start. After you choose another folder, the save goes there at the next start even if it did not change.
+When the game starts, it brings the save from iCloud Drive in if only that one changed since the last sync; a few seconds after the game saves, it sends its save if only this one changed. The iPhone app also sends when it goes to the background, and the Mac app once the game has quit. If you played on both without the save getting across in between, the next start decides: the newer save wins and the other is kept. A send never replaces a save in iCloud Drive that changed since the last sync, also not the Mac app's after a game that stopped before it loaded its save: that waits for the next start. After you choose another folder, the save goes there at the next start even if it did not change.
 
 If the save on the device cannot be read (a permissions or disk error), cloud saves stay off for that start rather than treat it as no save, and nothing in iCloud Drive replaces it. A save brought in from iCloud Drive replaces both of the device's save folders or neither: if moving one fails, everything moved before it is put back. If even that fails (the disk refuses the moves back), the game log says which `save-backups` folder holds this device's save, and cloud saves stay off, here and in the Mac app's send after the game, until you copy that save back and delete the file `save.sync-stuck` beside the save (on the Mac in `~/Library/Application Support/HorizonNative/<title ID>/`, on the iPhone in the app's Documents).
 
 A save that is replaced, on the device or in iCloud Drive, is kept first, beside the save in a folder named after it with `-backups` (on the iPhone `save-backups` in the Files app, under the app's name; on the Mac `~/Library/Application Support/HorizonNative/<title ID>/save-backups`): `<date> local` holds this device's save, `<date> cloud` the one that was in iCloud Drive. The newest 10 of each kind stay, and older ones are removed; other folders you put there are left alone.
 
-iCloud Drive takes a moment to carry a file from one device to the other. Quit the game on one device and give it a few seconds before you start it on the other. Without a connection the game plays on with the save it has and sends it later. The game log says what came in and what went out (lines starting with `save sync:`).
+iCloud Drive takes a moment to carry a file from one device to the other. Quit the game on one device and give it a few seconds before you start it on the other. Without a connection, or when the save in iCloud Drive has not arrived in time, the game plays on with the save it has and sends it later. If the save in iCloud Drive changed meanwhile, the game sends nothing that session, and the next start decides between the two as above. The game log says what came in and what went out (lines starting with `save sync:`).
 
 ## Add-on content bought later
 
@@ -305,22 +344,26 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 
 | Setting | Variable | Values |
 |---|---|---|
-| Frame rate | `DM_FPS_TARGET` | `30`, `60` |
+| Frame rate | `DM_FPS_TARGET` | `30`, `60`, `120` (Mac, games with `fps_max 120`) |
 | Render scale | `DM_RENDER_SCALE` | `0.5` to `1.0` |
 | Console mode | `DM_OPMODE` | `1` docked, `0` handheld |
 | Game language | `DM_LANG` | a language code, such as `ja` |
 | Display mode (Mac) | `DM_FULLSCREEN` | `1` fullscreen, `0` a window |
 | Cloud saves folder (Mac) | `DM_SAVE_SYNC` | a folder; `icloud`: iCloud Drive › HorizonNative Saves; `0`: off |
+| Picture (iPhone and iPad) | `DM_PICTURE_FIT` | `fit` 16:9 with black bars, `fill` covers the screen, cropped |
+| Picture shape | `DM_SCREEN_ASPECT` | `auto` the app window's own shape where it is taller than 16:9 (iPad 4:3, iPhone Duo 1.43:1), else 16:9 (iOS only); `1.43` the iPhone Duo's shape, `0` 16:9 |
 | Frame-rate counter | `DM_SHOW_FPS` | `1`, `0` |
 | Touch feedback | `DM_TOUCH_HAPTICS` | `1`, `0` |
 | Game rumble | `DM_RUMBLE` | `1`, `0` |
 | Rumble strength | `DM_RUMBLE_GAIN` | `0` to `3` |
 | Rumble cutoff | `DM_RUMBLE_MIN` | `0` to `0.9` |
+| Press a button to join | `DM_PAD_PRESS_TO_JOIN` | `1`, `0` |
 | Upscaling | `DM_PRESENT_UPSCALE` | `off`, `metalfx` |
 | Sharpness | `DM_PRESENT_SHARPEN` | `0` to `1` |
 | Pixels | `DM_PRESENT_FILTER` | `linear`, `nearest` |
 | Screen | `DM_PRESENT_FIT` | `aspect`, `stretch` |
 | Texture filtering | `DM_ANISO` | `0` (the game's own), `2`, `4`, `8`, `16` |
+| Game's upscaler | `DM_UPSCALER` | `game`, `metalfx` |
 | Frame buffering | `DM_PRESENT_SNAP` | `1`, `0` |
 | Metal 4 pipelines | `DM_PSO_MTL4` | `1`, `0` |
 | Pipeline prebuild | `DM_PSO_PREBUILD` | `1`, `0` |

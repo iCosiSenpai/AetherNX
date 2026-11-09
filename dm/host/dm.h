@@ -53,6 +53,14 @@ typedef struct {
     unsigned ue_malloc_slot;   // the slot of its name getter, which names the slot layout
     struct { char name[32]; uint64_t off; } ue_cvar[8];   // Unreal console variables found by their registered names (patch_nso.py, ue_cvar.py; UE_CVAR:<name>): each one's TAutoConsoleVariable
     int n_ue_cvar;
+    uint64_t fps_target_ptr;   // a target frame rate the game steps by, an int32 at [main + fps_target_ptr] + fps_target_field (patch_nso.py, fps_target.py; hle_fpslock.c); 0 = none
+    uint32_t fps_target_field;
+    uint64_t ue_fixed_ptr;     // Unreal's GEngine (main's offset of the global) and UEngine::FixedFrameRate in it, a float (patch_nso.py, ue_fixed_rate.py; hle_fpslock.c); 0 = none
+    uint32_t ue_fixed_field;
+    uint32_t ue_fixed_flag;    // bUseFixedFrameRate in UEngine: byte offset << 8 | bit mask; the rate is written only while it is set
+    uint64_t unity_target_fps; // Unity's Application.targetFrameRate, an int32 at main + this (patch_nso.py, unity_fps.py; hle_fpslock.c); 0 = none
+    uint64_t unity_qs_ptr;     // Unity's QualitySettings (main's offset of the global pointer); the current level's vSyncCount, an int32, is at
+    uint32_t unity_qs_idx, unity_qs_arr, unity_qs_size, unity_qs_vsync;   // [obj + arr] + (int32)[obj + idx] * size + vsync; 0 = none
     uint64_t fps_state_off;    // frame step state page (patch_nso.py FRAME_STEP: Tears of the Kingdom 1.4.3 and Breath of the Wild 1.9.0 main); 0 = none
     int64_t patch_off;         // patch area relative to the base; negative = before the base (image too large, see patch_nso.py FAR), and size does not include it
     uint64_t image_size, file_image_len, patch_len;   // only with the patch area before the base: whole image (with bss and key page), length of the image part of the file, patch area length
@@ -88,14 +96,17 @@ void run_module_inits(void);
 module_t *nro_find(const uint8_t sha256[32]);   // the mapped NRO with this hash (loader.c)
 int nro_refused(const uint8_t sha256[32]);      // an NRO the pack refused (an online SDK, nro.tsv "refused")
 void nro_load(module_t *m);     // relocate an NRO against the loaded modules and bind the earlier modules' imports it defines (the caller runs its init)
+void nro_load_alone(module_t *m);   // relocate an NRO against itself only: a JIT plugin, which on Horizon is not linked with the game (hle_jit.c)
+const char *dm_jit_serve_dir(void); uint8_t *dm_jit_layout_base(void);   // a served nn::jit image and the layout the modules are mapped in for it (loader.c, hle_jit.c)
 void nro_unload(module_t *m);   // take an NRO out of the lookups and bind the imports that pointed into it again
 int svc_nro_deactivate(module_t *m);   // mark inactive under the memory map lock, refusing while a stack borrows its data
+void dm_device_share(const void *p, uint64_t size, int share);   // guest memory a device maps (share 1) or no longer maps (0): Horizon's DeviceShared attribute, which refuses unmapping it (hle_svc.c)
 void *module_sym(module_t *m, const char *name);
 int dm_sdk_major(void);   // SDK major version from the sdk module's version string (loader.c); 0 = unknown
 int dm_sdk_ounce(void);   // 1 when the sdk module was built for the Switch 2 (its spec string "spec: Ounce", loader.c)
 int dm_sdk_nvn2_item(unsigned item, int *out);   // a constant NVN2's own nvnDeviceGetInteger answers for item, read from the sdk module (loader.c); 0 when it has none
 #define DM_SDK_OLD(major) ((major) > 0 && (major) <= 10)   // SDK 10 and older: NVN API 53, the shared-font address points at the TTF itself
-int dm_main_imports(const char *prefix);   // main imports a symbol whose name starts with prefix (loader.c)
+int dm_game_imports(const char *prefix);   // main or an NRO imports a symbol whose name starts with prefix (loader.c)
 void *guest_sym(const char *name);
 module_t *module_of(const void *p);
 // Gate dispatch: rewritten svc / timer reads come in through the common entry, ret_addr = the return point of that gate block, regs points to the saved x0..x30
@@ -113,12 +124,14 @@ void gate_obs_set(int id, void (*fn)(uint64_t *regs, int param));
 int gate_obs_present(int id);
 uint64_t now_ns(void);
 uint64_t guest_ns(void);              // Guest clock (hle_os.c; does not advance while frozen, guest_clock_freeze)
+uint64_t guest_ns_at_host_time(uint64_t host_ns);  // Host Mach-absolute ns projected into the current guest clock
 uint64_t guest_ticks(void);           // The guest's system counter on that clock: 19.2 MHz, or 31.25 MHz for the Switch 2 (hle_os.c)
 int dm_detclock_enabled(void);
 void dm_guest_clock_advanced(void);
 void guest_clock_freeze(int on);
 void guest_clock_freeze_for(int reason, int on);   // Freeze by reason (1 background, 2 system keyboard, 3 in-game menu); see hle_os.c
-void guest_clock_read_wait(void);     // A guest read of the system counter: waits while the app is in the background (hle_os.c)
+void guest_clock_read_wait(void);     // A guest read of the system counter: counts it in dm_clock_reads and waits while the app is in the background (hle_os.c)
+extern __thread uint64_t dm_clock_reads;   // the calling thread's guest reads of the system counter (hle_os.c; thr_yield tells clock waits by them)
 void dm_guest_frame_tick(void);        // Called on every present (hle_nvn.c): when DM_DETCLOCK is on, advances the guest clock by one fixed step
 uint64_t dm_nvn_frame_count(void);
 uint64_t dm_nvn_sub_cpu_ns(void);     // Cumulative CPU nanoseconds of submit (excluding present)
@@ -138,6 +151,7 @@ void hle_clear_system_event(void *g);    // hle_thread.c: clear a bound service-
 int hle_signal_bound_system_event(void *g);   // hle_thread.c: signal a service-layer SystemEvent only if it is bound (any thread); 0 when it is not
 uint64_t hle_system_event_binding(void *g);   // Opaque lifetime ID of a binding, 0 if unbound; a rebind gets a new ID even if its address and handle are reused
 int hle_signal_system_event_binding(uint64_t binding);   // Signal only this binding lifetime (any thread); 0 after its write handle closes
+uint32_t hle_new_event(uint32_t *write_end);   // hle_thread.c: a new kernel event's read end (a service's handle copied to its client); its write end in *write_end, none when NULL (never signaled)
 uint32_t hle_dup_readable_handle(uint32_t h);   // hle_thread.c: a second read end of a kernel event (the copy a service hands its client), 0 if h is no read end
 // Page fault hook / hook before the host writes guest memory (crash.c; used for write-protect dirty page tracking)
 void dm_fault_hook_register(int (*fn)(void *addr, int is_write, void *uc));
@@ -210,5 +224,7 @@ unsigned dm_restart_count(void);        // programs started by a restart so far 
 // inside, where the lock would stay held; it ends at its next SVC once the count is back to 0
 extern __thread int dm_kill_hold;
 __attribute__((noreturn)) void dm_thread_terminate_self(void);   // hle_thread.c: end the calling guest thread for a restart (the main guest thread goes back to the restart loop)
+int dm_thread_is_guest(void);   // hle_thread.c: the calling thread is a guest thread (one that a restart can end)
 __attribute__((noreturn)) void dm_main_restart_jump(void);       // main.c: the main guest thread's way back to its restart loop
+void dm_host_shutdown_then(const char *why, void (*then)(void *), void *arg);   // The same, then(arg) in place of the last _exit(0) (oe::ExecuteProgram: execve of the next program)
 void dm_host_shutdown(const char *why);   // Graceful exit (crash.c): stop background threads and audio, drain graphics, then _exit(0); used by SIGTERM and the iOS App termination callback   // graphics side: screenshot of the k-th frame after the current presented frame (nvn_mtl.m)

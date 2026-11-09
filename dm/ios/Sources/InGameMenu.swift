@@ -15,7 +15,8 @@ import GameController
     init() {
         let env = ProcessInfo.processInfo.environment
         fixed = Set(((env["DM_ENV_FILE_KEYS"] ?? "") + " " + (env["DM_ENV_LAUNCH_KEYS"] ?? "")).split(separator: " ").map(String.init))
-        if let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url),
+        let dir = getenv("DM_APP_DM").map { URL(fileURLWithPath: String(cString: $0)) } ?? Bundle.main.resourceURL?.appendingPathComponent("dm")   // a game of several programs: the running one's (main.m)
+        if let url = dir?.appendingPathComponent("launcher.json"), let data = try? Data(contentsOf: url),
            let file = try? JSONDecoder().decode(SettingsFile.self, from: data) {
             for s in file.settings { byEnv[s.env] = s }
         }

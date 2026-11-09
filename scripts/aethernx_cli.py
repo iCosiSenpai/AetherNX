@@ -107,6 +107,34 @@ def has_packages_here(folder):   # packages directly in the folder (not in its s
     except OSError: return False
 
 
+def package_contents(paths):
+    """A keyless stand-in for the packing script's content-meta reader (package_reader, which needs prod.keys and builds nx_extract), enough to list a library: a package's
+    title IDs from its tickets' names (an NSP or NSZ lists `<rights ID>.tik`, whose first 16 digits are the title ID), else from a [<title ID>] tag in its file name; its version
+    from a [v<N>] tag, else 0. {path: [(type, title ID, version)]}, or {path: why} for one that tells neither. The build reads the content metas themselves"""
+    out = {}
+    for p in paths:
+        tids = []
+        try:
+            with open(p, 'rb') as f:
+                head = f.read(16)
+                if len(head) == 16 and head[:4] == b'PFS0':
+                    n, table = struct.unpack_from('<II', head, 4)
+                    if n <= 4096 and table <= 1 << 20:
+                        body = f.read(n * 24 + table); names = body[n * 24:]
+                        for i in range(n if len(body) == n * 24 + table else 0):
+                            at = struct.unpack_from('<I', body, i * 24 + 16)[0]
+                            end = names.find(b'\0', at)
+                            name = names[at:end if end >= 0 else len(names)].decode('ascii', 'replace')
+                            if re.fullmatch(r'[0-9a-fA-F]{32}\.tik', name): tids.append(int(name[:16], 16))
+        except OSError as e:
+            out[p] = f'cannot be read ({e.strerror})'; continue
+        if not tids and (m := re.search(r'\[([0-9A-Fa-f]{16})\]', p.name)): tids.append(int(m[1], 16))
+        if not tids: out[p] = 'no ticket and no [title ID] in its name; a build reads its content meta with prod.keys'; continue
+        v = int(m[1]) if (m := re.search(r'\[v(\d+)\]', p.name)) else 0
+        out[p] = [('Application' if t & 0xFFF == 0 else 'Patch' if t & 0xFFF == 0x800 else 'AddOnContent', t, v) for t in dict.fromkeys(tids)]
+    return out
+
+
 def scan_game(folder):
     """One game folder as a dict, or None when the folder holds no game. Raises CliError with the reason when it holds an unreadable one."""
     b = builder()
@@ -119,7 +147,7 @@ def scan_game(folder):
         if b.dump_folder(folder):
             app, fam = b.scan_dump(folder); kind = 'dump'
         elif b.package_files(folder):
-            app, fam = b.scan_nsps(folder)
+            app, fam = b.scan_nsps(folder, package_contents)   # without keys: a scan only lists the library
         elif archives:
             return {'id': str(folder), 'kind': 'archives', 'title_id': None, 'name': folder.name, 'folder': str(folder), 'profile': False,
                     'archives': [file_entry(p) for p in archives], 'notes': ['The game is still in an archive: unpack it first.']}
