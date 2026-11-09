@@ -1,7 +1,7 @@
 MIT License
 
-Copyright (c) 2026 Alessio Cosi (iCosiSenpai) — AetherNX (switch-comp) & HorizonNative (https://github.com/iCosiSenpai)
-Copyright (c) 2026 seedds — the imported base HorizonNative started from
+Copyright (c) 2026 Alessio Cosi (iCosiSenpai) - AetherNX and HorizonNative, https://github.com/iCosiSenpai/AetherNX
+Copyright (c) 2026 seedds - nxnative, the engine HorizonNative is forked from, https://github.com/seedds/nxnative
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -20,12 +20,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-================================================================================
-THIRD-PARTY SUBPROJECTS & EMBEDDED COMPONENTS
-================================================================================
-AetherNX unifies 31 open-source repositories and third-party libraries. Each
-integrated component retains its original copyright and license (MIT, Apache-2.0,
-BSD-3-Clause, zlib, Unlicense, or GPL-3.0 for optional standalone frontends).
-See COPYRIGHT.md, PROVENANCE.md, NOTICE, and dm/third_party/README.md for the
-complete attribution registry and license texts.

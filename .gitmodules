@@ -1,0 +1,63 @@
+[submodule "vendor/SwitchRecomp"]
+	path = vendor/SwitchRecomp
+	url = https://github.com/iCosiSenpai/SwitchRecomp.git
+[submodule "vendor/mush8"]
+	path = vendor/mush8
+	url = https://github.com/iCosiSenpai/mush8.git
+[submodule "vendor/LASRecomp"]
+	path = vendor/LASRecomp
+	url = https://github.com/iCosiSenpai/LASRecomp.git
+[submodule "vendor/EoWRecomp"]
+	path = vendor/EoWRecomp
+	url = https://github.com/iCosiSenpai/EoWRecomp.git
+[submodule "vendor/AC-Recomp"]
+	path = vendor/AC-Recomp
+	url = https://github.com/iCosiSenpai/AC-Recomp.git
+[submodule "vendor/smo-recomp"]
+	path = vendor/smo-recomp
+	url = https://github.com/iCosiSenpai/smo-recomp.git
+[submodule "vendor/dread-decomp"]
+	path = vendor/dread-decomp
+	url = https://github.com/iCosiSenpai/dread-decomp.git
+[submodule "vendor/nnheaders"]
+	path = vendor/nnheaders
+	url = https://github.com/iCosiSenpai/nnheaders.git
+[submodule "vendor/sead"]
+	path = vendor/sead
+	url = https://github.com/iCosiSenpai/sead.git
+[submodule "vendor/LumaNX"]
+	path = vendor/LumaNX
+	url = https://github.com/iCosiSenpai/LumaNX.git
+[submodule "vendor/NxLibrary"]
+	path = vendor/NxLibrary
+	url = https://github.com/iCosiSenpai/NxLibrary.git
+[submodule "vendor/nx-os"]
+	path = vendor/nx-os
+	url = https://github.com/iCosiSenpai/nx-os.git
+[submodule "vendor/NX2Apple"]
+	path = vendor/NX2Apple
+	url = https://github.com/iCosiSenpai/NX2Apple.git
+[submodule "vendor/game-decompilation-skill"]
+	path = vendor/game-decompilation-skill
+	url = https://github.com/iCosiSenpai/Game-Decompilation-Skill-For-Claude.git
+[submodule "vendor/decomp-skills"]
+	path = vendor/decomp-skills
+	url = https://github.com/iCosiSenpai/decomp-skills.git
+[submodule "vendor/decompile-skill"]
+	path = vendor/decompile-skill
+	url = https://github.com/iCosiSenpai/decompile-skill.git
+[submodule "vendor/gba-matching-decomp-skill"]
+	path = vendor/gba-matching-decomp-skill
+	url = https://github.com/iCosiSenpai/gba-matching-decomp-skill.git
+[submodule "vendor/ns-game-apple-arm-port"]
+	path = vendor/ns-game-apple-arm-port
+	url = https://github.com/iCosiSenpai/ns-game-apple-arm-port.git
+[submodule "vendor/re-skill"]
+	path = vendor/re-skill
+	url = https://github.com/iCosiSenpai/re-skill.git
+[submodule "vendor/switch-port-to-apple"]
+	path = vendor/switch-port-to-apple
+	url = https://github.com/iCosiSenpai/switch-port-to-apple.git
+[submodule "vendor/nxrt"]
+	path = vendor/nxrt
+	url = https://github.com/iCosiSenpai/nxrt.git

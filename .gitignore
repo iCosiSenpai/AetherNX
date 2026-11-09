@@ -22,3 +22,11 @@ dm/games/*/cb_extent.tsv
 *_build/
 dm/build/
 
+
+# The Python environment ./aethernx setup makes
+/.venv/
+# Studio app build output (released as a signed download, never committed)
+/build/
+/AetherNX.app/
+# Local design-tool state
+/.impeccable/
