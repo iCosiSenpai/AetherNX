@@ -354,7 +354,7 @@ static void fpos_case(const char *dir) {
     CHECK(green != nil, "the green pipeline compiles");
     tex_t source; id<MTLTexture> attachment = target_format(&source, 99796, NVN_FORMAT_RG8, 1);
     mtl_reg_tex(tid, &source, NULL);
-    { void *tv = NULL; tex_fast_rid(tid, &tv); id<MTLTexture> t = (__bridge id<MTLTexture>)tv; MTLTextureSwizzleChannels w = t.swizzle;
+    { void *tv = NULL; tex_fast_rid(tid, &tv); id<MTLTexture> t = (__bridge id<MTLTexture>)tv; MTLTextureSwizzleChannels w = t.swizzle;   // NOLINT(clang-analyzer-osx.cocoa.RetainCount): tex_fast_rid hands back an unretained texture; the map holds hm_put_id's CFBridgingRetain'd reference until the entry is replaced; the analyzer loses it in nvn_hm_put's inline rehash
       printf("feedback pixel position: the RG8 map is sampled through channel mapping %d %d %d %d\n", (int)w.red, (int)w.green, (int)w.blue, (int)w.alpha); }
     float *mem = NULL; if (posix_memalign((void **)&mem, (size_t)getpagesize(), (size_t)getpagesize())) abort(); memset(mem, 0, (size_t)getpagesize());
     mem[24] = mem[25] = 0.125f; mtl_pool_add(mem, (uint64_t)getpagesize());   // c[6].xy in memory: 1/8
