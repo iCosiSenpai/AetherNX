@@ -892,12 +892,13 @@ HLE_FORCE("_ZN2nn2fs15CreateDirectoryEPKc", "fsp-srv → mkdir(2)", Result, h_fs
 // for a folder after it was listed) is removed itself and the folder it points at is untouched. rm_fd_contents empties the folder fd names and closes fd.
 static int rm_fd_contents(int fd) {
     DIR *d = fdopendir(fd); if (!d) { close(fd); return -1; }
+    int dfd = dirfd(d); if (dfd < 0) { closedir(d); return -1; }   // dirfd may fail: never hand -1 to openat / unlinkat
     struct dirent *e; int rc = 0;
     while ((e = readdir(d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
-        int sub = e->d_type == DT_DIR || e->d_type == DT_UNKNOWN ? openat(dirfd(d), e->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) : -1;
-        if (sub >= 0) rc |= rm_fd_contents(sub) | unlinkat(dirfd(d), e->d_name, AT_REMOVEDIR);
-        else rc |= unlinkat(dirfd(d), e->d_name, 0);
+        int sub = e->d_type == DT_DIR || e->d_type == DT_UNKNOWN ? openat(dfd, e->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) : -1;
+        if (sub >= 0) rc |= rm_fd_contents(sub) | unlinkat(dfd, e->d_name, AT_REMOVEDIR);
+        else rc |= unlinkat(dfd, e->d_name, 0);
     }
     closedir(d);
     return rc;

@@ -66,8 +66,9 @@ static void ogg_pages(void) {
         assert(len <= cap);
         size_t at = 0, got = 0; int pages = 0;
         while (at < len) {
-            uint8_t *h = out + at; assert(!memcmp(h, "OggS", 4));
-            int seg = h[26]; size_t body = 0; for (int i = 0; i < seg; i++) body += h[27 + i];
+            uint8_t *h = out + at; assert(len - at >= 27 && !memcmp(h, "OggS", 4));   // a whole header, then a whole lacing table, before reading them
+            int seg = h[26]; assert(len - at >= 27 + (size_t)seg);
+            size_t body = 0; for (int i = 0; i < seg; i++) body += h[27 + i];
             assert(h[5] == (pages ? 1 : 2));
             int64_t g; memcpy(&g, h + 6, 8);
             int last = at + 27 + (size_t)seg + body == len;

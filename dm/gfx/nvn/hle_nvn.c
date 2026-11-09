@@ -886,8 +886,11 @@ static uint8_t *hostseg_take(const cmd_t *o, size_t n) {
     for (int i = 0; i < g_nhostseg && !m; i++)
         if (!g_hostseg[i].busy && g_hostseg[i].n == n) { g_hostseg[i] = (hostseg_t){ g_hostseg[i].mem, n, f, 1, lo, hi }; m = g_hostseg[i].mem; }
     if (!m && g_hostseg_bytes + n <= HOSTSEG_CAP && (m = malloc(n))) {
-        if (g_nhostseg == g_caphostseg) { g_caphostseg = g_caphostseg ? g_caphostseg * 2 : 64; g_hostseg = realloc(g_hostseg, sizeof *g_hostseg * (size_t)g_caphostseg); }
-        g_hostseg[g_nhostseg++] = (hostseg_t){ m, n, f, 1, lo, hi }; g_hostseg_bytes += n;
+        if (g_nhostseg == g_caphostseg) {   // a failed realloc keeps the table as it was: the segment is given back and the caller stops below
+            int cap = g_caphostseg ? g_caphostseg * 2 : 64; hostseg_t *grown = realloc(g_hostseg, sizeof *g_hostseg * (size_t)cap);
+            if (grown) { g_hostseg = grown; g_caphostseg = cap; } else { free(m); m = NULL; }
+        }
+        if (m) { g_hostseg[g_nhostseg++] = (hostseg_t){ m, n, f, 1, lo, hi }; g_hostseg_bytes += n; }
     }
     unsigned t = ++total; int ns = g_nhostseg; uint64_t bytes = g_hostseg_bytes;
     pthread_mutex_unlock(&g_hostseg_mu);
@@ -2785,9 +2788,12 @@ static int lv_cmp(const void *a, const void *b) {
 static void nvn_restart_release(void) {
     dm_gfx_suspend(1);
     pthread_mutex_lock(&g_lv_mu);
-    lv_ent *e = calloc(g_lv.n ? g_lv.n : 1, sizeof *e); size_t n = 0;
+    size_t room = g_lv.n ? g_lv.n : 1; lv_ent *e = calloc(room, sizeof *e); size_t n = 0;
     if (!e) die("restart: NVN ledger allocation failed");
-    for (uint32_t i = 0; i < g_lv.cap; i++) if (g_lv.vals[i]) { memcpy(&e[n].o, g_lv.keys + (size_t)i * 8, 8); e[n++].v = (uint64_t)(uintptr_t)g_lv.vals[i]; }
+    for (uint32_t i = 0; i < g_lv.cap; i++) if (g_lv.vals[i]) {
+        if (n == room) die("restart: the NVN ledger holds more entries than its count (%zu)", room);
+        memcpy(&e[n].o, g_lv.keys + (size_t)i * 8, 8); e[n++].v = (uint64_t)(uintptr_t)g_lv.vals[i];
+    }
     nvn_hm_clear(&g_lv, NULL);
     pthread_mutex_unlock(&g_lv_mu);
     qsort(e, n, sizeof *e, lv_cmp);

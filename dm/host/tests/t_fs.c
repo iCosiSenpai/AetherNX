@@ -224,7 +224,7 @@ int main(void) {
     CHECK(write_save("save:/a", "ok2") == RES_OK && h_fs_Commit("save") == RES_OK, "the next transaction commits as usual");
     // 6c Cloning the work directory at mount fails: do not exit; mount the committed directory read-only instead. Reads work, writes fail, commits are no-ops, the committed version is unchanged, and the front end is notified once; the next normal mount works as before
     setenv("DM_TEST_FS_FAILAT", "mountclone:1", 1); g_nmnt = 0; nf0 = g_nfail;
-    snprintf(p, sizeof p, "rm -rf '%s'", work); system(p);
+    rm_tree(work);   // the host's own recursive delete: no shell, links removed and not followed
     CHECK(h_fs_MountSave("save", NULL) == RES_OK && g_nfail == nf0 + 1, "mount returns success, front end notified once (actually %d times)", g_nfail - nf0);
     CHECK(read_fs("save:/a", got, sizeof got) && !strcmp(got, "ok2"), "the read-only mount reads the committed a=ok2 (read %s)", got);
     CHECK(write_save("save:/a", "zzz") != RES_OK, "writes fail");
@@ -263,7 +263,7 @@ int main(void) {
         CHECK(write_save("save:/a", "ok5") == RES_OK && h_fs_Commit("save") == RES_OK, "a commit with a linked save.new beside the save succeeds");
         CHECK(same(keep, "keep"), "the folder save.new pointed at keeps its files");
         snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok5"), "committed a = ok5");
-        g_nmnt = 0; snprintf(p, sizeof p, "rm -rf '%s'", work); system(p); symlink(outside, work);
+        g_nmnt = 0; rm_tree(work); symlink(outside, work);
         CHECK(h_fs_MountSave("save", NULL) == RES_OK && write_save("save:/a", "ok6") == RES_OK && h_fs_Commit("save") == RES_OK, "a mount with a linked save.work replaces the link and works as usual");
         CHECK(same(keep, "keep"), "the folder save.work pointed at keeps its files");
         struct stat ls; CHECK(!lstat(work, &ls) && S_ISDIR(ls.st_mode), "save.work is a real folder again");
@@ -302,7 +302,7 @@ int main(void) {
         CHECK(rm_tree(lnk) == 0 && lstat(lnk, &lst) && errno == ENOENT && same(vf, "keep"), "rm_tree of a symlink to a directory removes the link only and leaves the target alone");
     }
 
-    char cmd[1200]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", root); system(cmd);
+    rm_tree(root);
     printf("== %d checks, %d failed ==\n", checks, fails);
     return fails != 0;
 }

@@ -537,9 +537,10 @@ done:
 
 // ---------- the host: the first mount, the sender, flushes ----------
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER, g_mount_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_mount_cv = PTHREAD_COND_INITIALIZER;
 static pthread_cond_t g_cv = PTHREAD_COND_INITIALIZER;
 static _Atomic int g_on;
-static int g_mounted, g_want, g_busy, g_failed;   // the mount ran; a send asked for without a Commit (the mount found this save newer, a flush); a send running; the last one failed
+static int g_mounted, g_want, g_busy, g_failed;   // the mount: 0 not yet, 1 running, 2 done; a send asked for without a Commit (the mount found this save newer, a flush); a send running; the last one failed
 static uint64_t g_commits, g_sent;                // Commits seen; the Commits the last send covered
 static char g_save[PATH_MAX], g_title[24], g_cloud[PATH_MAX];
 
@@ -614,7 +615,14 @@ static void mount_once(const char *save, const char *title) {
 
 void save_sync_mount(const char *save, const char *title) {   // the first mount does it; a second one (the device save) waits for it
     pthread_mutex_lock(&g_mount_mu);
-    if (!g_mounted) { g_mounted = 1; mount_once(save, title); }
+    if (!g_mounted) {
+        g_mounted = 1;
+        pthread_mutex_unlock(&g_mount_mu);   // the pull reads and writes files: not while holding the lock
+        mount_once(save, title);
+        pthread_mutex_lock(&g_mount_mu);
+        g_mounted = 2; pthread_cond_broadcast(&g_mount_cv);
+    }
+    while (g_mounted != 2) pthread_cond_wait(&g_mount_cv, &g_mount_mu);
     pthread_mutex_unlock(&g_mount_mu);
 }
 

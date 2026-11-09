@@ -55,14 +55,14 @@ int main(void) { @autoreleasepool {
     CHECK(!S.bst[1] && !S.bst[2] && vo && vo->sh[0] == pother->sh[0] && !vo->sh[1], "an object with more than six stages is not a program: its stages are unbound");
     // A finalized program (Finalize clears the magic) keeps its stages, as before: its stages' code is still readable guest memory
     state_reset();
-    two_stage(940006, &vf); bind_stages(&vf, 0x1f); bind_stages(&other, 0x1); vf.magic = 0;
+    two_stage(940006, &vf); bind_stages(&vf, 0x1f); bind_stages(&other, 0x1); vf.magic = 0; // NOLINT(clang-analyzer-osx.cocoa.RetainCount): two_stage's NvProg is owned by g_by_serial (serial_put's CFBridgingRetain)
     c = bind_stages(&other, 0x1);
     CHECK(S.bst[1] == &vf && c != &other, "a finalized program (magic 0) keeps its stages");
     // A program given new shaders keeps its stages (a new serial, still a program)
     state_reset();
     bind_stages(&all, 0x1f);   // the junk above: unbound at once
     CHECK(!S.bst[0], "a bind of an object that is not a program binds nothing");
-    two_stage(940004, &all); bind_stages(&all, 0x1f);
+    two_stage(940004, &all); bind_stages(&all, 0x1f); // NOLINT(clang-analyzer-osx.cocoa.RetainCount): two_stage's NvProg is owned by g_by_serial (serial_put's CFBridgingRetain)
     all.serial = 940005; serial_put(940005, pall);
     CHECK(bind_stages(NULL, 0) == &all, "new shaders on a bound program keep its stages");
 

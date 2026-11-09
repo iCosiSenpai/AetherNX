@@ -7145,11 +7145,11 @@ static id<MTLTexture> tbuf_write_shadow(int tid, id<MTLTexture> t, uint64_t *rid
     if (t.pixelFormat != c.pixelFormat || memcmp(&sw, &csw, sizeof sw)) {
         uint64_t key[2] = {tt->serial, (uint64_t)(__bridge void *)t}; id<MTLTexture> v = hm_get_id(&g_tbwv, key);
         if (!v) { v = [c newTextureViewWithPixelFormat:t.pixelFormat textureType:MTLTextureTypeTextureBuffer levels:NSMakeRange(0, 1) slices:NSMakeRange(0, 1) swizzle:sw];
-            if (!v) { RED_ONCE(118, "cannot create a view of an aligned image buffer copy (texture ID %d)", tid); return t; }
+            if (!v) { RED_ONCE(118, "cannot create a view of an aligned image buffer copy (texture ID %d)", tid); return t; } // NOLINT(clang-analyzer-osx.cocoa.RetainCount): g_tbw / g_tbwv own the aligned copy and its views (hm_put_id's CFBridgingRetain); ARC releases the local reference, the analyzer does not model the C hash table
             hm_put_id(&g_tbwv, key, v); [g_tbs_views addObject:v]; }
         c = v;
     }
-    *rid = c.gpuResourceID._impl; return c;
+    *rid = c.gpuResourceID._impl; return c; // NOLINT(clang-analyzer-osx.cocoa.RetainCount): g_tbw / g_tbwv own the aligned copy and its views (hm_put_id's CFBridgingRetain); ARC releases the local reference, the analyzer does not model the C hash table
 }
 static id<MTLSamplerState> dummy_samp(void) {
     static id<MTLSamplerState> s; if (!s) { MTLSamplerDescriptor *d = [MTLSamplerDescriptor new]; d.supportArgumentBuffers = YES; s = [g_dev newSamplerStateWithDescriptor:d]; }
@@ -7250,7 +7250,7 @@ static void image_prepare(NvProg *pr, unsigned stages) {
             tex_t image = g_treg[tid].t; image.d.flags |= NVN_TEXTURE_FLAGS_IMAGE;
             id<MTLTexture> base = tex_mtl(&image); while (base.parentTexture) base = base.parentTexture;
             uint64_t rid = 0; id<MTLTexture> shadow = tbuf_write_shadow(tid, base, &rid, 1);
-            if (shadow != base) { os_unfair_lock_unlock(&g_rmu); continue; }   // before any stage's arguments: a vertex sample and a fragment image store must name the same copy
+            if (shadow != base) { os_unfair_lock_unlock(&g_rmu); continue; }   // before any stage's arguments: a vertex sample and a fragment image store must name the same copy // NOLINT(clang-analyzer-osx.cocoa.RetainCount): the shadow copy is owned by g_tbw (tbuf_write_shadow's hm_put_id); ARC releases the local reference
             int upgrade = base && !(base.usage & MTLTextureUsageShaderWrite);
             os_unfair_lock_unlock(&g_rmu);
             if (!upgrade) continue;

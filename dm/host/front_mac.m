@@ -352,8 +352,8 @@ static void pads_start(void) {
 static NSDictionary *pad_menu_setting(NSString *env) {
     static NSArray *settings; static dispatch_once_t once;
     dispatch_once(&once, ^{
-        NSURL *url = [NSBundle.mainBundle.resourceURL URLByAppendingPathComponent:@"dm/launcher.json"];
-        NSData *data = [NSData dataWithContentsOfURL:url];
+        NSURL *url = [NSBundle.mainBundle.resourceURL URLByAppendingPathComponent:@"dm/launcher.json"];   // nil for a bare dmhost outside an app bundle
+        NSData *data = url ? [NSData dataWithContentsOfURL:url] : nil;
         id file = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
         id rows = [file isKindOfClass:NSDictionary.class] ? file[@"settings"] : nil;
         settings = [rows isKindOfClass:NSArray.class] ? rows : @[];

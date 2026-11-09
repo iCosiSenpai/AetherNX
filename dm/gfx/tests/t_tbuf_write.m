@@ -109,6 +109,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         "kernel void get(constant R &a [[buffer(0)]], uint i [[thread_position_in_grid]]) { a.out[i] = a.image.read(i).x; }\n" options:nil error:&error];
     CHECK(lib != nil, "image writer and sampled reader compile"); if (!lib) { fprintf(stderr, "%s\n", error.localizedDescription.UTF8String); return 1; }
     writer = [NvShader new]; reader = [NvShader new]; writer->fn = [lib newFunctionWithName:@"put"]; reader->fn = [lib newFunctionWithName:@"get"];
+    CHECK(writer->fn && reader->fn, "image writer and sampled reader functions found"); if (!writer->fn || !reader->fn) return 1;
     for (NvShader *sh in @[writer, reader]) {
         sh->stage = 5; sh->ae = [sh->fn newArgumentEncoderWithBufferIndex:0]; sh->arg_len = sh->ae.encodedLength; sh->rf.nb = 2;
         sh->rf.b[0] = (nvn_rbind){.kind = sh == writer ? NVN_RB_IMG : NVN_RB_TBUF, .aid = 0, .reg = 0, .rw = sh == writer, .dtt = MTLTextureTypeTextureBuffer, .dpf = NVN_DPF_UINT};

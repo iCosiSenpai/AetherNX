@@ -9,7 +9,7 @@ dm/gfx/gl/hle_gl.m	clang-analyzer-nullability.NullablePassedToNonnull	1
 dm/gfx/gl/hle_gl.m	clang-analyzer-security.ArrayBound	1
 dm/gfx/gl/hle_gl.m	misc-redundant-expression	1
 dm/gfx/nvn/hle_nvn.c	bugprone-suspicious-memory-comparison	1
-dm/gfx/nvn/hle_nvn.c	bugprone-suspicious-realloc-usage	6
+dm/gfx/nvn/hle_nvn.c	bugprone-suspicious-realloc-usage	5
 dm/gfx/nvn/hle_nvn.c	clang-analyzer-core.uninitialized.Assign	1
 dm/gfx/nvn/hle_nvn.c	clang-analyzer-security.ArrayBound	1
 dm/gfx/nvn/nvn_border.h	bugprone-suspicious-memory-comparison	1
@@ -25,7 +25,7 @@ dm/gfx/nvn/nvn_mtl.m	bugprone-misplaced-widening-cast	1
 dm/gfx/nvn/nvn_mtl.m	bugprone-signed-char-misuse	1
 dm/gfx/nvn/nvn_mtl.m	bugprone-suspicious-memory-comparison	8
 dm/gfx/nvn/nvn_mtl.m	bugprone-suspicious-realloc-usage	20
-dm/gfx/nvn/nvn_mtl.m	clang-analyzer-core.NullDereference	11
+dm/gfx/nvn/nvn_mtl.m	clang-analyzer-core.NullDereference	10
 dm/gfx/nvn/nvn_mtl.m	clang-analyzer-core.uninitialized.Assign	2
 dm/gfx/nvn/nvn_mtl.m	clang-analyzer-nullability.NullableDereferenced	5
 dm/gfx/nvn/nvn_mtl.m	clang-analyzer-nullability.NullablePassedToNonnull	15
@@ -105,7 +105,6 @@ dm/gfx/vk/hle_vk.m	clang-analyzer-core.uninitialized.Assign	1
 dm/gfx/vk/hle_vk.m	clang-analyzer-security.ArrayBound	2
 dm/gfx/vk/hle_vk.m	clang-analyzer-unix.Malloc	1
 dm/gfx/vk/hle_vk.m	misc-misplaced-const	5
-dm/host/crash.c	bugprone-command-processor	1
 dm/host/haptics_apple.m	clang-analyzer-nullability.NullablePassedToNonnull	1
 dm/host/hle_fs.c	bugprone-suspicious-realloc-usage	4
 dm/host/hle_fs.c	clang-analyzer-unix.Errno	2
@@ -124,7 +123,6 @@ dm/host/tests/t_audio_device.c	bugprone-assert-side-effect	1
 dm/host/tests/t_audio_spsc.c	clang-analyzer-core.StackAddressEscape	1
 dm/host/tests/t_audio_spsc.c	clang-analyzer-unix.Malloc	4
 dm/host/tests/t_fpslock.c	clang-analyzer-core.NullDereference	1
-dm/host/tests/t_fs.c	bugprone-command-processor	2
 dm/host/tests/t_fs.c	clang-analyzer-unix.Stream	1
 dm/host/tests/t_fs_case.c	clang-analyzer-core.CallAndMessage	2
 dm/host/tests/t_fs_case.c	clang-analyzer-unix.Stream	1
