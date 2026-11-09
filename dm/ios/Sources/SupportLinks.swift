@@ -10,7 +10,7 @@ enum SupportLink: String, CaseIterable, Identifiable {
 
     var url: URL {
         switch self {
-        case .github: return URL(string: "https://github.com/iCosiSenpai/HorizonNative")!
+        case .github: return URL(string: "https://github.com/iCosiSenpai/AetherNX")!
         case .paypal: return URL(string: "https://paypal.me/AlessioCosi")!
         case .coffee: return URL(string: "https://buymeacoffee.com/icosisenpai")!
         }

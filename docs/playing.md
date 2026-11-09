@@ -1,6 +1,6 @@
 # Playing
 
-How to build and install a game: [README](../README.md#how-to-play).
+How to build and install a game: [README](../README.md#get-started).
 
 - **Settings:** a screen before the game starts sets frame rate, resolution, docked or handheld mode, language, rumble and more. Tap **Play**; your choices are remembered. What each one does: [Settings](settings.md).
 - **Saves and logs** are in the Files app, under the game's name: `save/` and `log.txt` (the previous run is `log.prev.txt`). When something goes wrong, send `log.txt`.
@@ -24,7 +24,7 @@ A controller that supplies gyro data through Apple's controller support (DualSen
 
 `DM_PHONE_MOTION=0` in `Documents/env.txt` stops the phone's gyro, `DM_MOTION=0` all motion. If motion misbehaves, pack with `--no-motion` (`MOTION = False` in Spyder) for an app without it; `DM_MOTION=1` in `Documents/env.txt` turns it back on.
 
-On the Mac, HorizonNative reads a Switch Pro Controller's gyro through its own passive HID adapter; hardware calibration and compatibility with every controller revision are still being validated. Report problems at [iCosiSenpai/HorizonNative](https://github.com/iCosiSenpai/HorizonNative/issues).
+On the Mac, HorizonNative reads a Switch Pro Controller's gyro through its own passive HID adapter; hardware calibration and compatibility with every controller revision are still being validated. Report problems at [iCosiSenpai/AetherNX](https://github.com/iCosiSenpai/AetherNX/issues).
 
 **Shaking.** Shake the iPhone to shake the controller, in games that read its motion: Super Mario Odyssey's motion moves (such as the cap throw on a shake) need it, and Odyssey only takes them in its default docked mode. A light bump does not count; a sharp flick of the phone does.
 

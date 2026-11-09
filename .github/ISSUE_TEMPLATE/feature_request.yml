@@ -5,7 +5,7 @@ body:
     attributes:
       value: |
         Suggestions for a graphical app to pack, list and start games are welcome. Describe the intended workflow and what the current build tools are missing.
-        A new platform or device class, a second implementation of an existing path, or a change of more than about 1,000 lines: agree on the scope here first ([CONTRIBUTING.md](https://github.com/iCosiSenpai/HorizonNative/blob/main/CONTRIBUTING.md#large-changes-and-other-platforms)).
+        A new platform or device class, a second implementation of an existing path, or a change of more than about 1,000 lines: agree on the scope here first ([CONTRIBUTING.md](https://github.com/iCosiSenpai/AetherNX/blob/main/CONTRIBUTING.md#large-changes-and-other-platforms)).
   - type: textarea
     id: problem
     attributes:

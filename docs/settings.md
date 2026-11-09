@@ -293,7 +293,7 @@ On the Mac, put the files in `~/Library/Application Support/HorizonNative/<title
 
 ## Support the project
 
-HorizonNative is free and made by [iCosiSenpai](https://github.com/iCosiSenpai). At the bottom of every game's settings screen (on the iPhone and in the Mac window), **Support HorizonNative** opens the project on [GitHub](https://github.com/iCosiSenpai/HorizonNative) and the donation pages on [PayPal](https://paypal.me/AlessioCosi) and [Buy Me a Coffee](https://buymeacoffee.com/icosisenpai).
+HorizonNative is free and made by [iCosiSenpai](https://github.com/iCosiSenpai). At the bottom of every game's settings screen (on the iPhone and in the Mac window), **Support HorizonNative** opens the project on [GitHub](https://github.com/iCosiSenpai/AetherNX) and the donation pages on [PayPal](https://paypal.me/AlessioCosi) and [Buy Me a Coffee](https://buymeacoffee.com/icosisenpai).
 
 ## TV
 

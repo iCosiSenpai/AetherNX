@@ -17,7 +17,7 @@ import docs_symptoms   # noqa: E402
 import docs_gallery   # noqa: E402
 import docs_patches   # noqa: E402
 
-SKIP = ('third_party', 'node_modules', 'frontends', 'recomp', 'decomp', 'skills', '.claude')
+SKIP = ('third_party', 'node_modules', 'vendor', '.claude')
 AGENTS_WORDS, GUIDE_WORDS = 1500, 6000
 
 

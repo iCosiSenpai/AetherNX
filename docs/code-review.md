@@ -49,7 +49,7 @@ Fixed on 2026-10-29. Each regression test below fails against the reviewed revis
 
 ### Second audit round
 
-A second round, with Codex, audited the host, graphics, Python tooling and front end in parallel read-only passes. The front-end pass completed its report. The host, graphics and Python passes stopped at the Codex account's usage limit before writing theirs; the leads they had already confirmed in their logs were each verified independently against the code before any fix. Severity follows the first round's scale.
+A second round audited the host, graphics, Python tooling and front end in parallel read-only passes. The front-end pass completed its report. The host, graphics and Python passes stopped before writing theirs; the leads they had already confirmed in their logs were each verified independently against the code before any fix. Severity follows the first round's scale.
 
 | Area | Finding | Fix | Evidence |
 |---|---|---|---|
@@ -75,7 +75,7 @@ The leads the interrupted passes had named without confirming them were all conf
 
 ### Third audit round
 
-On 2026-10-30 Codex ran again once its usage limit had reset. It first reviewed this working tree's fixes, then completed the host, graphics and Python passes. Each finding below was checked against the code before it was fixed.
+On 2026-10-30 the review ran again. It first checked this working tree's fixes, then completed the host, graphics and Python passes. Each finding below was checked against the code before it was fixed.
 
 | Area | Finding | Fix | Evidence |
 |---|---|---|---|
@@ -107,7 +107,7 @@ The `dmsh_build.py` change moves the shader chain to `5ba3d294ee74`: game shader
 
 ### Fourth audit round
 
-On 2026-10-30, after the first run on an iPhone, Codex audited identity and attribution, first-use pipelines (from that run's log), the host and graphics, and the front ends, and surveyed open-source Switch emulators for features (in-game menus, on-screen control editing, Metal picture options, shader caches); the survey's ideas are in [settings.md](settings.md#the-in-game-menu) and [rendering.md](reference/rendering.md#picture-options-of-the-present). Each finding below was checked against the code before it was fixed.
+On 2026-10-30, after the first run on an iPhone, a review audited identity and attribution, first-use pipelines (from that run's log), the host and graphics, and the front ends, and surveyed open-source Switch emulators for features (in-game menus, on-screen control editing, Metal picture options, shader caches); the survey's ideas are in [settings.md](settings.md#the-in-game-menu) and [rendering.md](reference/rendering.md#picture-options-of-the-present). Each finding below was checked against the code before it was fixed.
 
 | Area | Finding | Fix | Evidence |
 |---|---|---|---|
@@ -135,7 +135,7 @@ On 2026-10-30, after the first run on an iPhone, Codex audited identity and attr
 
 ### Security audit round
 
-On 2026-10-31 Codex audited the whole repository for security in four read-only passes (host and game-file tools; graphics and packaging; front ends and apps; tooling and repository), against this threat model: game packages, downloaded files, a shared iCloud folder, a player's `env.txt` and the Files-visible Documents folder are untrusted; the maintainer's keys and signing identity must not leak. It reported 15 distinct findings; each was checked against the code. Twelve are fixed, one is a hardening of the loader, one is by design and documented, and one concerns only the imported base's own history.
+On 2026-10-31 a review audited the whole repository for security in four read-only passes (host and game-file tools; graphics and packaging; front ends and apps; tooling and repository), against this threat model: game packages, downloaded files, a shared iCloud folder, a player's `env.txt` and the Files-visible Documents folder are untrusted; the maintainer's keys and signing identity must not leak. It reported 15 distinct findings; each was checked against the code. Twelve are fixed, one is a hardening of the loader, one is by design and documented, and one concerns only the imported base's own history.
 
 | Area | Finding | Fix | Evidence |
 |---|---|---|---|

@@ -161,6 +161,23 @@ jobs:
           path: coverage
           retention-days: 7
 
+  studio:
+    name: AetherNX Studio and the aethernx tool
+    runs-on: xcode-27
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the app (ad-hoc signed)
+        run: bash studio/build.sh
+      - name: The command-line tool starts and answers
+        run: |
+          ./aethernx version
+          ./aethernx help > /dev/null
+          if ./aethernx no-such-command 2> /dev/null; then echo "::error::an unknown command must fail"; exit 1; fi
+          ./aethernx scan --json "$RUNNER_TEMP" | python3 -c 'import json, sys; d = json.load(sys.stdin); assert d["games"] == [] and d["errors"] == []'
+
   tool-tests:
     name: Tool tests
     runs-on: xcode-27

@@ -43,6 +43,6 @@ These source reports identify investigation targets. None has been reproduced or
 
 ## Periodic review
 
-A daily review in the associated Codex chat checks source commits and recently updated issues and pull requests. It compares them with current HorizonNative code and reports useful fixes, regressions and compatibility findings. It does not merge or publish external code automatically.
+A daily review checks source commits and recently updated issues and pull requests. It compares them with current HorizonNative code and reports useful fixes, regressions and compatibility findings. It does not merge or publish external code automatically.
 
 Advance the local review cursor only after reviewing the retrieved changes. Continue monitoring until the owner decides the project has enough independent progress to pause it. Assess improvements with repeatable tests and benchmarks rather than a repository name or commit count.
