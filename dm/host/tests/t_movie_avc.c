@@ -14,6 +14,7 @@ static OSStatus synthetic_decode(VTDecompressionSessionRef, CMSampleBufferRef, V
 
 uint64_t now_ns(void) { return 1; }
 __thread _Atomic int dm_host_work;   // hle_thread.c
+__thread int dm_kill_hold;           // hle_thread.c: hle_movie.c holds program restarts off around guest calls (the ASan build keeps md_pump_ev, which -dead_strip drops)
 void dm_host_lock(pthread_mutex_t *m) { pthread_mutex_lock(m); }
 void dm_host_helper_qos(qos_class_t q) { (void)q; }
 void *dm_guest_thread_spawn(void (*fn)(void *), void *arg, int prio, size_t stack_size) { (void)fn; (void)arg; (void)prio; (void)stack_size; return NULL; }   // the deferred signals' thread: none here, the queue is inspected
