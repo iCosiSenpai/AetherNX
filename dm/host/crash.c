@@ -12,10 +12,10 @@
 #include <stdatomic.h>
 #include <time.h>
 #if TARGET_OS_OSX
+#include <crt_externs.h>
 #include <fcntl.h>
 #include <spawn.h>
 #include <sys/wait.h>
-extern char **environ;
 #endif
 
 static _Atomic uint64_t g_watch_last_ns;
@@ -45,6 +45,28 @@ void crash_watch_frame(void) { if (atomic_load(&g_watch_pregame)) crash_watch_pr
 void crash_watch_pregame_done(void) { atomic_store(&g_watch_pregame, 0); }
 void crash_watch_pregame_again(void) { atomic_store(&g_watch_pregame, 1); }   // Back from a run to the front end: count progress by presented frames again (diag.c)
 void crash_dump_now(const char *why);
+#if TARGET_OS_OSX
+// Keep the output path as one argument: shell quoting breaks apostrophes and can
+// execute path contents, and a command buffer can truncate a long path.
+static int watch_sample(const char *path) {
+    char pid[32];
+    snprintf(pid, sizeof pid, "%d", (int)getpid());
+    char *argv[] = {"/usr/bin/sample", pid, "1", "-f", (char *)path, NULL};
+    posix_spawn_file_actions_t actions;
+    int error = posix_spawn_file_actions_init(&actions);
+    if (error) return -1;
+    error = posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+    if (!error) error = posix_spawn_file_actions_adddup2(&actions, STDOUT_FILENO, STDERR_FILENO);
+    pid_t child;
+    if (!error) error = posix_spawn(&child, argv[0], &actions, NULL, argv, *_NSGetEnviron());
+    posix_spawn_file_actions_destroy(&actions);
+    if (error) return -1;
+    int status;
+    pid_t waited;
+    do { waited = waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
+    return waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1;
+}
+#endif
 static void *watchdog_main(void *arg) {
     (void)arg;
     for (;;) {
@@ -68,13 +90,7 @@ static void *watchdog_main(void *arg) {
 #if TARGET_OS_OSX
             { const char *d = getenv("DM_WATCH_SAMPLE");   // Mac diagnostics: when stuck, sample itself for 1 second and write the thread stacks to this path
               // The path is one argument of sample, never shell text: a quote in it cannot start a command (it used to go through system())
-              if (d && *d) { char pid[16]; snprintf(pid, sizeof pid, "%d", (int)getpid());
-                  char *av[] = {"/usr/bin/sample", pid, "1", "-f", (char *)d, NULL}; posix_spawn_file_actions_t fa; pid_t sp; int st = 0, err;
-                  posix_spawn_file_actions_init(&fa);
-                  posix_spawn_file_actions_addopen(&fa, 1, "/dev/null", O_WRONLY, 0); posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0);
-                  err = posix_spawn(&sp, av[0], &fa, NULL, av, environ); posix_spawn_file_actions_destroy(&fa);
-                  if (!err) while (waitpid(sp, &st, 0) < 0 && errno == EINTR) {}
-                  if (err || !WIFEXITED(st) || WEXITSTATUS(st)) LOG("watchdog: sampling failed"); else LOG("watchdog: thread stacks written to %s", d); } }
+              if (d) { if (watch_sample(d)) LOG("watchdog: sampling failed"); else LOG("watchdog: thread stacks written to %s", d); } }
 #endif
             _exit(128 + SIGALRM);
         }

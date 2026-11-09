@@ -4,7 +4,7 @@ AetherNX is built on other people's work. This page lists where each part comes 
 
 ## The engine (`dm/`, `scripts/`, `docs/`)
 
-HorizonNative is a fork of **[nxnative](https://github.com/seedds/nxnative)** by **seedds** and its contributors, under the MIT License ([LICENSE](LICENSE)). It began as **[d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)** (MIT). Third-party code inside the engine (Ryujinx's shader translator, the Vulkan headers, libvpx, stb_vorbis, deko3d's texture layout, NVIDIA FLIP and others) keeps its own license: see [dm/third_party/README.md](dm/third_party/README.md).
+HorizonNative is a fork of **[nxnative](https://github.com/seedds/nxnative)** by **seedds** and its contributors, under the MIT License ([LICENSE](LICENSE)). It began as **[d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)** (MIT). Third-party code inside the engine (Ryujinx's shader translator, the Vulkan headers, libvpx, dav1d, stb_vorbis, deko3d's texture layout, NVIDIA FLIP and others) keeps its own license: see [dm/third_party/README.md](dm/third_party/README.md).
 
 ## AetherNX (`studio/`, `aethernx`, `scripts/aethernx_cli.py`)
 

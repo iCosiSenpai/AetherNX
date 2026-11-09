@@ -8,6 +8,8 @@
     <!-- Release tools ship without personal source paths or debug symbols. -->
     <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <!-- AnyCPU under any -r: a build for a runtime ID otherwise ties the dll to that architecture, and the universal launcher's x86_64 half cannot load an arm64 dll (upstream issue #803) -->
+    <PlatformTarget>AnyCPU</PlatformTarget>
     <RyuSrc Condition="'$(RyuSrc)' == ''">$(MSBuildThisFileDirectory)../../../third_party/ryujinx</RyuSrc>
   </PropertyGroup>
   <ItemGroup>

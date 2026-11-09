@@ -1,7 +1,7 @@
 // Launcher: the screen shown before the game starts (front_ios.m dm_show_launcher), laid out as the game's own product card. The header names the game (icon, name, version)
 // with Play; the summary strip states what Play starts with (the basic settings, cloud saves, the memory available) and takes the player to each setting; the settings follow,
 // grouped by section (rows and shared parts: LauncherRow.swift). When the header scrolls away, the navigation bar takes a small icon and Play.
-// Its settings come from the app's dm/launcher.json, which build_ipa.sh writes for this game from dm/games/settings.tsv (dm/games/settings.py): each sets an environment variable the
+// Its settings come from the app's dm/launcher.json (an app of several programs: dm/p<N>/launcher.json), which build_ipa.sh writes for this game from dm/games/settings.tsv (dm/games/settings.py): each sets an environment variable the
 // host reads when the game starts. A variable an env file set (Documents/env.txt, the bundle's dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) or the launch environment set is shown,
 // locked. Choices that differ from the game's default are kept in UserDefaults; Reset to tested defaults shows the defaults, and Play then forgets them. DM_LAUNCHER=0 in
 // Documents/env.txt starts the game at once with the saved choices; DM_SAVED_CHOICES=0 ignores them (and keeps them). A game controller moves through the screen (LauncherNav):
@@ -317,7 +317,9 @@ private struct LauncherView: View {
 // Shows the launcher over the root view controller and calls done once the settings are in the environment; false (done is not called) when there is no launcher
 @_cdecl("dm_show_launcher")
 public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
-    guard let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) else { return false }   // packed without settings: nothing to choose
+    // a game of several programs (main.m): the running program's settings, in its dm/p<N>
+    let dir = getenv("DM_APP_DM").map { URL(fileURLWithPath: String(cString: $0)) } ?? Bundle.main.resourceURL?.appendingPathComponent("dm")
+    guard let url = dir?.appendingPathComponent("launcher.json"), let data = try? Data(contentsOf: url) else { return false }   // packed without settings: nothing to choose
     let env = ProcessInfo.processInfo.environment
     var settings: [Setting] = [], problem: String?
     do { settings = try JSONDecoder().decode(SettingsFile.self, from: data).settings }
@@ -337,7 +339,7 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
         model.apply()
         h.dismiss(animated: false) { done() }
     }
-    let h = UIHostingController(rootView: view)
+    let h = DmHostingController(rootView: view)
     h.modalPresentationStyle = .fullScreen
     host = h
     parent.present(h, animated: false)

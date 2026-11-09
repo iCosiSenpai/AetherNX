@@ -38,6 +38,9 @@ int dm_detclock_enabled(void) { return 0; }
 void dm_audio_suspend(int on) { (void)on; }
 void guest_clock_freeze_for(int reason, int on) { (void)reason; (void)on; }
 void dm_gfx_suspend(int on) { (void)on; }
+__thread uint64_t dm_clock_reads;   // guest clock reads per thread (hle_os.c in the host; thr_yield reads it)
+void dm_host_shutdown_then(const char *why, void (*then)(void *), void *arg) { (void)why; (void)then; (void)arg; abort(); }   // ExecuteProgram of another packed program: none here
+void dm_host_shutdown(const char *why) { (void)why; abort(); }
 // "Guest code": while a thread runs spin() it is in a module, so the pause signal sends it to its gate stack
 static module_t g_fake_module; static __thread int t_in_guest;
 module_t *module_of(const void *p) { (void)p; return t_in_guest ? &g_fake_module : NULL; }

@@ -15,7 +15,7 @@ import game   # noqa: E402
 OUT = REPO / 'docs' / 'agents' / 'game-patches.md'
 SDK = REPO / 'dm/tools/sdk_patches.py'
 HOST = ['dm/host', 'dm/gfx', 'dm/ios']   # tracked files only: dm/host/gen and other build output are git-ignored
-HOST_EXT = ('.c', '.m', '.mm', '.h', '.swift')
+HOST_EXT = ('.c', '.m', '.mm', '.h', '.inc', '.swift')
 # What a build-keyed host table does (the table's name in the source; a row of another table is listed under its own name)
 TABLES = {'k_locks': 'engine frame limit set to fps_target', 'k_ue': "Unreal's allocator on a host malloc zone", 'k_nier_dr': 'frame interval and dynamic-resolution floor'}
 # Profile keys that are not behaviour switches: per-game data or controls, not something the host does differently
@@ -68,8 +68,6 @@ def payoff(gap):   # the Gaps order: open gaps, then blocked, kept and unreviewe
 
 # The host's build-keyed rows: (table, the start of the row's label ('' = any), main build ('' = any), entry); the first that fits classifies a row
 HOST_BINDING = [
-    ('k_locks', 'Unity', '', {'what': "Unity's Application.targetFrameRate at a fixed address", 'now': 'build', 'goal': 'engine', 'purpose': 'frame rate',
-     'why': 'an IL2CPP player registers the setter by its icall name, so the field can be found in any Unity game; whether to raise it stays the profile\'s'}),
     ('k_locks', 'RE Engine', '', {'what': "RE Engine's frame limit at a fixed pointer", 'now': 'build', 'goal': 'engine', 'purpose': 'frame rate',
      'why': 'engine code other RE Engine games ship', 'blocked': 'one RE Engine game here'}),
     ('k_locks', 'NLG', '', {'what': "Next Level Games' frame limiter target at a fixed address", 'now': 'build', 'goal': 'engine', 'purpose': 'frame rate',
@@ -95,6 +93,7 @@ SWITCH_BINDING = [
     ('render_cond', '', {'what': 'NVN conditional rendering', 'now': 'game', 'goal': 'host', 'purpose': 'rendering',
      'why': f'what the GPU does; off by default only because other games drew everything before: {DEFAULT_SOON}'}),
     ('gpu_timestamps', '', {'what': 'timestamp reports per segment', 'now': 'game', 'goal': 'host', 'purpose': 'rendering', 'why': f'what hardware records: {DEFAULT_SOON}'}),
+    ('draw_barriers', '', {'what': 'draw passes ordered by the game\'s own barriers', 'now': 'game', 'goal': 'host', 'purpose': 'frame rate', 'why': f'what NVN specifies: {DEFAULT_SOON}'}),
     ('mem_map_limit', '', {'what': 'MapPhysicalMemory limited to the application pool', 'now': 'game', 'goal': 'host', 'purpose': 'memory',
      'why': "Horizon's limit; off by default because Ace Attorney Investigations Collection maps a little more than its profile's 1 GB pool, which is the thing to fix"}),
     ('alloc_big_align', '', {'what': "StandardAllocator blocks of 64 KB and more aligned to 64 KB", 'now': 'game', 'goal': 'host', 'purpose': 'memory',
@@ -113,17 +112,28 @@ SWITCH_BINDING = [
      'why': f'what iOS does for every game: {DEFAULT_SOON}'}),
     ('present_snap', '', {'what': 'present snapshots', 'now': 'game', 'goal': 'host', 'purpose': 'rendering', 'why': f'a setting the game was tested with: {DEFAULT_SOON}'}),
     ('pso_mtl4', '', {'what': 'MTL4Compiler pipelines on iOS', 'now': 'game', 'goal': 'host', 'purpose': 'rendering', 'why': f'a setting the game was tested with on an iPhone: {DEFAULT_SOON}'}),
+    ('screen_aspect', '', {'what': 'a picture of a taller screen\'s own shape (DM_SCREEN_ASPECT)', 'now': 'game', 'goal': 'game', 'purpose': 'rendering',
+     'why': "the output size is the host's, but the stubs that follow it (projections, layout panes, screen copies) are this build's code"}),
     ('game_env', 'DOTNET_GCRegionRange=', {'what': ".NET's garbage-collector region range", 'now': 'game', 'goal': 'game', 'purpose': 'address space', 'why': "measured for the game's regions"}),
     ('stdalloc_cap', '', {'what': "StandardAllocator's address space", 'now': 'game', 'goal': 'game', 'purpose': 'address space',
      'why': "what the regions after it need, measured by the NSP script's region check; the host's cap is the default"}),
     ('shader_key_skip', '', {'what': 'control-section bytes left out of shader keys', 'now': 'game', 'goal': 'game', 'purpose': 'shaders',
      'why': "the engine shares one control section among shaders; leaving GLSLC's compile information out of every game's keys would change every shader key"}),
     ('ue_texture_pool', '', {'what': "Unreal's texture streaming pool", 'now': 'game', 'goal': 'game', 'purpose': 'memory', 'why': "the game's own budget, raised to its Windows value"}),
+    ('snowdrop_pools', '', {'what': "Snowdrop's three page pools' address ranges", 'now': 'game', 'goal': 'game', 'purpose': 'address space',
+     'why': "the rewriter finds the allocator in any build (snowdrop_pools.py); the sizes are measured against each game's regions, and the cause, an iPhone's address space, is a platform limit"}),
     ('present_interval', '', {'what': 'one frame per display tick', 'now': 'game', 'goal': 'game', 'purpose': 'frame rate', 'why': 'right only for games whose logic does not count frames'}),
     ('fps_hold', '', {'what': 'no frame held past the cap', 'now': 'game', 'goal': 'game', 'purpose': 'frame rate', 'why': "the game's pacing"}),
     ('fps_target', '', {'what': 'frame rate target', 'now': 'game', 'goal': 'game', 'purpose': 'frame rate', 'why': 'a choice per game'}),
     ('ue_fps_cvar', '', {'what': "the game's own Unreal frame-limit variable", 'now': 'game', 'goal': 'game', 'purpose': 'frame rate', 'why': "the game's own variable, which its settings apply to t.MaxFPS; the rewriter finds it by name (ue_cvar.py)"}),
     ('perf_mode', '', {'what': 'Boost whatever the operation mode', 'now': 'game', 'goal': 'game', 'purpose': 'runtime', 'why': 'a combination a Switch 1 never reports: a choice per game'}),
+    ('launch_param', '', {'what': 'the launch parameter its launcher program passes', 'now': 'game', 'goal': 'game', 'purpose': 'runtime',
+     'why': "what another program of the application hands over with oe::ExecuteProgram, for one run alone"}),
+    ('programs', '', {'what': 'the other programs of a game of several programs', 'now': 'game', 'goal': 'game', 'purpose': 'runtime', 'why': 'which programs a game has that this host can run: a fact of its files, the profiles that exist for them'}),
+    ('program_of', '', {'what': 'the first program of the game this one belongs to', 'now': 'game', 'goal': 'game', 'purpose': 'runtime', 'why': 'as programs'}),
+    ('jit_key_data', '', {'what': 'the bytes of a nn::jit request that make the request', 'now': 'game', 'goal': 'game', 'purpose': 'runtime', 'why': "the layout of the game's own request struct, for the image an iPhone serves"}),
+    ('jit_route', '', {'what': 'a route for the nn::jit capture', 'now': 'game', 'goal': 'game', 'purpose': 'runtime', 'why': "the game's own menus, for the image an iPhone serves"}),
+    ('jit_out_code', '', {'what': 'where a nn::jit output lists the code it made', 'now': 'game', 'goal': 'game', 'purpose': 'runtime', 'why': "the layout of the game's own output buffer, for the image an iPhone serves"}),
     ('op_mode', '', {'what': 'the operation mode at start', 'now': 'game', 'goal': 'game', 'purpose': 'runtime', 'why': "the game's controls (handheld: the touch screen instead of a gyro pointer)"}),
 ]
 
@@ -160,19 +170,29 @@ def build_rows(gs):   # {build ID: [(game, display version, module)]}
     return out
 
 
-def frame_step_sites(fn):   # (offset, reason) of each site a FRAME_STEP function writes, and whether it marks a render-scale stub
-    pos, puts = [0x8000000], []
+OTHER_BASE = 0x10000000   # where the dry run puts a MATCH_FRAME_STEP rule's other functions, 16 MB apart, so their sites read as offsets in them
+
+
+def frame_step_sites(fn, base=0, others=()):   # (offset, reason) of each site a FRAME_STEP function (or a MATCH_FRAME_STEP stub, its function at base) writes, whether it marks a
+    pos, puts = [0x8000000], []                    # render-scale stub, the sites in each of the rule's other functions ({label: [(offset, reason)]}) and the capabilities it declares
     def emit(w): pos[0] += 4
-    ctx = types.SimpleNamespace(here=lambda: pos[0], emit=emit, site=lambda off, orig: None, put=lambda off, words, why: puts.append((off, why)), state=0x9000000, render_scale=0)
+    at = {label: OTHER_BASE + i * 0x1000000 for i, label in enumerate(others)}
+    ctx = types.SimpleNamespace(here=lambda: pos[0], emit=emit, site=lambda off, orig: None, put=lambda off, words, why: puts.append((off, why)), state=0x9000000, render_scale=0, base=base,
+                                others=at, capabilities=set())
     fn(ctx)
-    return sorted(puts), ctx.render_scale
+    in_others = {label: sorted((off - a, why) for off, why in puts if a <= off < a + 0x1000000) for label, a in at.items()}
+    return sorted((off, why) for off, why in puts if off < OTHER_BASE), ctx.render_scale, in_others, sorted(ctx.capabilities)
+
+
+def host_files():   # the host's tracked sources without its tests: what the build-ID scan below and the title-ID check (test_architecture.py) read
+    tracked = subprocess.run(['git', 'ls-files', *HOST], cwd=REPO, capture_output=True, text=True, check=True).stdout.split('\n')
+    files = sorted(REPO / f for f in set(tracked) if f)   # a set: ls-files lists a file in a merge conflict once per stage
+    return [p for p in files if p.suffix in HOST_EXT and 'tests' not in p.relative_to(REPO).parts[2:]]
 
 
 def host_rows(builds):   # {build ID: [(file, line, what)]}: rows and checks of the host keyed by a main build ID
     out = {}
-    tracked = subprocess.run(['git', 'ls-files', *HOST], cwd=REPO, capture_output=True, text=True, check=True).stdout.split('\n')
-    for p in sorted(REPO / f for f in set(tracked) if f):   # a set: ls-files lists a file in a merge conflict once per stage
-        if p.suffix not in HOST_EXT or 'tests' in p.relative_to(REPO).parts[2:]: continue
+    for p in host_files():
         table = None
         for n, line in enumerate(p.read_text(errors='replace').split('\n'), 1):
             m = re.search(r'\b(k_\w+)\s*\[\]\s*=', line)
@@ -258,7 +278,7 @@ def page():
         m = mods.get(g.id)
         if not m and g.id not in host_games: continue
         text = files[g.id].read_text() if m else ''
-        cuts, obs, fs, mc, caps = (getattr(m, k, {}) for k in ('CUTS', 'OBS', 'FRAME_STEP', 'MATCH_CUTS', 'CAPABILITIES'))
+        cuts, obs, fs, mc, mfs, caps = (getattr(m, k, {}) for k in ('CUTS', 'OBS', 'FRAME_STEP', 'MATCH_CUTS', 'MATCH_FRAME_STEP', 'CAPABILITIES'))
         bids = list(dict.fromkeys([*cuts, *obs, *fs, *caps, *sorted(host_games.get(g.id, ()))]))
         n_fs = 0; lines = [f'### {name(g)}', '', f'{note(g)}, `{g.id}`' + (f', {link(files[g.id])}' if m else '') + '.', '']
         es = list(bound(m, rel(files[g.id]), own=True)) if m else []
@@ -276,18 +296,26 @@ def page():
             for off, ob, nb, why in cuts.get(bid, []): lines.append(f'  - cut `+{off:#x}`: {why}')
             for off, gate, word, why in obs.get(bid, []): lines.append(f'  - gate {gate} at `+{off:#x}`: {why}')
             if bid in fs:
-                sites, scale = frame_step_sites(fs[bid]); n_fs += len(sites)
+                sites, scale, _, fs_caps = frame_step_sites(fs[bid]); n_fs += len(sites)
                 fold = len(sites) > 12   # a long list (ASTRAL CHAIN's) folds
                 if fold: lines += [f'  <details><summary>{len(sites)} frame-step sites</summary>', '']
                 for off, why in sites: lines.append(f'  - frame step `+{off:#x}`: {why}')
                 if fold: lines += ['', '  </details>', '']
                 if scale: lines.append('  - render scale stub (the launcher offers DM_RENDER_SCALE)')
-            if caps.get(bid): lines.append(f'  - launcher capabilities: {", ".join(caps[bid])}')
+            if caps.get(bid) or (bid in fs and fs_caps): lines.append(f'  - launcher capabilities: {", ".join(sorted(set(caps.get(bid, ())) | set(fs_caps if bid in fs else ())))}')
             for p, n, what, _ in host.get(bid, []): lines.append(f'  - host {link(p, n)}: {what}')
         for module, rules in mc.items():
             for r in rules:
                 fns = r.get('functions', [r]); ncut = sum(len(f['cuts']) for f in fns)
                 lines.append(f'- **function-matched** (`{module}` of builds without CUTS): {r["name"]}: {len(fns)} function{"s" * (len(fns) > 1)}, {ncut} cut{"s" * (ncut > 1)}')
+        for module, rules in mfs.items():
+            for i, r in enumerate(rules):
+                sites, _, in_others, fs_caps = frame_step_sites(r['stub'], others=r.get('others', {})); n_fs += (len(sites) + sum(map(len, in_others.values()))) * (i == 0)
+                lines.append(f'- **function-matched frame step** (`{module}` of builds without FRAME_STEP): {r["name"]}: a function of {r["size"]:#x} bytes, '
+                             + ', '.join(f'`+{off:#x}`' for off, _ in sites) + ' in it'
+                             + ''.join(f'; {label}, a function of {r["others"][label]["size"]:#x} bytes, ' + ', '.join(f'`+{off:#x}`' for off, _ in got) + ' in it'
+                                       for label, got in in_others.items())
+                             + (f'; launcher capabilities: {", ".join(fs_caps)}' if fs_caps else ''))
         sections += lines + ['']
         n_host = sum(len(host.get(b, [])) for b in bids)
         kinds = {}
