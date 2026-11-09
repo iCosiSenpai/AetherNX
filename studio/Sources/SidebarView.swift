@@ -1,3 +1,4 @@
+import CoreImage
 import SwiftUI
 
 struct SidebarView: View {
@@ -167,6 +168,28 @@ struct GameIcon: View {
 @MainActor
 enum IconCache {
     private static let cache = NSCache<NSString, NSImage>()
+
+    private static let backdrops = NSCache<NSString, NSImage>()
+
+    /// The icon blurred, saturated and darkened toward the bottom: Console Mode's background, made once per game.
+    static func backdrop(at path: String) -> NSImage? {
+        if let image = backdrops.object(forKey: path as NSString) { return image }
+        guard let source = CIImage(contentsOf: URL(filePath: path)) else { return nil }
+        let small = source.transformed(by: CGAffineTransform(scaleX: 256 / max(source.extent.width, 1), y: 256 / max(source.extent.height, 1)))
+        let blurred = small.clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 22])
+            .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 1.3, kCIInputBrightnessKey: -0.18])
+            .cropped(to: small.extent)
+        let shade = CIFilter(name: "CILinearGradient", parameters: [
+            "inputPoint0": CIVector(x: 0, y: 256), "inputColor0": CIColor(red: 0, green: 0, blue: 0, alpha: 0.4),
+            "inputPoint1": CIVector(x: 0, y: 0), "inputColor1": CIColor(red: 0, green: 0, blue: 0, alpha: 0.85),
+        ])?.outputImage?.cropped(to: small.extent)
+        let final = shade.map { $0.composited(over: blurred) } ?? blurred
+        guard let cg = CIContext().createCGImage(final, from: small.extent) else { return nil }
+        let image = NSImage(cgImage: cg, size: NSSize(width: 256, height: 256))
+        backdrops.setObject(image, forKey: path as NSString)
+        return image
+    }
 
     static func image(at path: String) -> NSImage? {
         if let image = cache.object(forKey: path as NSString) { return image }

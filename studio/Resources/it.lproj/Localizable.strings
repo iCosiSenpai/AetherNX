@@ -199,3 +199,18 @@
 "prod.keys not set" = "prod.keys non impostato";
 "v%lld, newest of %lld" = "v%lld, il più recente di %lld";
 "“%@” is not an AetherNX folder: it has no aethernx command and build scripts." = "“%@” non è una cartella di AetherNX: non contiene il comando aethernx e gli script di build.";
+
+/* Console Mode */
+"Add a library folder in the main window, then come back here to play from the couch." = "Aggiungi una cartella della libreria nella finestra principale, poi torna qui per giocare dal divano.";
+"Back" = "Indietro";
+"Battery %lld percent" = "Batteria al %lld per cento";
+"Build again" = "Ricompila";
+"Building" = "In compilazione";
+"Connect a controller, or use the arrow keys" = "Collega un controller, o usa i tasti freccia";
+"Console Mode" = "Modalità Console";
+"Controller" = "Controller";
+"No games yet" = "Ancora nessun gioco";
+"Not built yet: the first build takes 30 to 60 minutes" = "Non ancora compilato: la prima build richiede da 30 a 60 minuti";
+"Play from the couch: the library full screen, for a controller (⌃⌘C, or ≡ on the controller)" = "Gioca dal divano: la libreria a tutto schermo, da usare col controller (⌃⌘C, oppure ≡ sul controller)";
+"Ready to play" = "Pronto per giocare";
+"Needs a build" = "Da compilare";

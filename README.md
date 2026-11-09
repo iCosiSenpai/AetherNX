@@ -19,6 +19,7 @@
 <p align="center">
   <a href="#get-started"><b>Get started</b></a> ·
   <a href="#the-app"><b>The app</b></a> ·
+  <a href="#console-mode"><b>Console Mode</b></a> ·
   <a href="#command-line"><b>Command line</b></a> ·
   <a href="#iphone-and-ipad"><b>iPhone and iPad</b></a> ·
   <a href="#games"><b>Games</b></a> ·
@@ -37,6 +38,7 @@ The Switch and Apple silicon run the same kind of processor code (64-bit ARM). T
 **AetherNX** puts a library and one-click builds on top of it:
 
 - **AetherNX Studio**, a Mac app: your games with their files and builds, a Build button with live progress, Play, and settings in one place.
+- **Console Mode**: the library full screen, driven by a game controller, so the Mac plays like a console from the couch.
 - **`./aethernx`**, a command-line tool: scan a library, unpack archives, build, check your setup.
 - **Developer tools** for reverse engineering your own copy: function and symbol tables, and a C translation with [nxrt](https://github.com/fedebuonco/nxrt).
 
@@ -96,10 +98,17 @@ The sidebar lists your games; a game's page shows its files, what was built from
 | <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>R</kbd> | Rescan the library |
 | <kbd>⌥</kbd> <kbd>⌘</kbd> <kbd>R</kbd> | Show the game in Finder |
 | <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>Y</kbd> | Show or hide the activity log |
+| <kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>C</kbd> | Console Mode (or ≡ on a controller) |
 | <kbd>⌘</kbd> <kbd>F</kbd> | Search the library |
 | <kbd>⌘</kbd> <kbd>,</kbd> | Settings |
 
 **Settings** has three panes: **General** (library folders, the AetherNX folder, setup check), **Keys** (your `prod.keys`, checked without ever showing a key) and **Building** (what the Build button makes, the game's language, kept files, pre-built shader pipelines, the frame-rate counter on iPhone, a signing identity for the Mac app). The app is in English and Italian.
+
+## Console Mode
+
+<img src="docs/images/console.png" alt="Console Mode: the library full screen, the selected game's art behind it, and the controller's buttons at the bottom">
+
+Pick up a controller and press **≡** (Menu), or choose View → Console Mode (<kbd>⌃</kbd> <kbd>⌘</kbd> <kbd>C</kbd>): the library fills the screen, with each game's art behind it. Move with the stick, the d-pad or the arrow keys; **A** plays the game, or builds it if it is not built yet; **Y** builds it again; **B** goes back. The hints show your controller's own buttons (Xbox, PlayStation, Switch Pro and other MFi controllers), and a build's progress shows right on the game.
 
 ## Command line
 

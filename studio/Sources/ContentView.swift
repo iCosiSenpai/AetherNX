@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
     @State private var search = ""
 
     var body: some View {
@@ -38,6 +39,11 @@ struct ContentView: View {
             Text(confirmation.message)
         }
         .animation(.easeOut(duration: 0.2), value: model.showsActivity)
+        .onChange(of: model.consoleRequested) { _, requested in
+            guard requested else { return }
+            model.consoleRequested = false
+            openWindow(id: "console")
+        }
     }
 }
 
@@ -85,6 +91,9 @@ private struct MainToolbar: ToolbarContent {
             }
         }
         ToolbarItem(placement: .primaryAction) {
+            ConsoleModeButton()
+        }
+        ToolbarItem(placement: .primaryAction) {
             Button {
                 model.showsActivity.toggle()
             } label: {
@@ -92,6 +101,19 @@ private struct MainToolbar: ToolbarContent {
             }
             .help("Show or hide the activity log (⇧⌘Y)")
         }
+    }
+}
+
+private struct ConsoleModeButton: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button {
+            openWindow(id: "console")
+        } label: {
+            Label("Console Mode", systemImage: "gamecontroller")
+        }
+        .help("Play from the couch: the library full screen, for a controller (⌃⌘C, or ≡ on the controller)")
     }
 }
 

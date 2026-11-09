@@ -10,9 +10,11 @@ The first release under the AetherNX name.
 - Builds show their real progress (step, progress bar, time left) from the build script's JSON events, can be stopped, and log to an Activity panel.
 - Settings (⌘,) in three panes: General, Keys, Building. Choices are kept between launches.
 - Keyboard shortcuts for every action, listed in the README.
+- **Console Mode**: the library full screen for the couch, driven by a game controller (A plays, B goes back, Y builds again) or the arrow keys, with each game's art behind it and the controller's own button glyphs. ≡ on a controller or ⌃⌘C opens it.
 - A setup check that lists what is missing and the command that installs it, and installs the Python packages for you.
 - First launch finds the AetherNX tools or downloads them; it no longer depends on one machine's folders.
 - English and Italian.
+- A new icon, original artwork with no console or controller shapes.
 - Signed with a Developer ID and notarized.
 
 **`./aethernx`**, rewritten:

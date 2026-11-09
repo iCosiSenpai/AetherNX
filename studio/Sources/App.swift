@@ -19,6 +19,15 @@ struct AetherNXApp: App {
             AppCommands(model: model)
         }
 
+        Window("Console Mode", id: "console") {
+            ConsoleView()
+                .environment(model)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1280, height: 800)
+        .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
+
         Settings {
             SettingsView()
                 .environment(model)
@@ -45,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct AppCommands: Commands {
     let model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
         SidebarCommands()
@@ -88,6 +98,8 @@ struct AppCommands: Commands {
         CommandGroup(after: .sidebar) {
             Button(model.showsActivity ? "Hide Activity" : "Show Activity") { model.showsActivity.toggle() }
                 .keyboardShortcut("y", modifiers: [.command, .shift])
+            Button("Console Mode") { openWindow(id: "console") }
+                .keyboardShortcut("c", modifiers: [.command, .control])
             Divider()
         }
 

@@ -116,6 +116,10 @@ final class AppModel {
     var keys = KeysStatus.current()
     var confirmation: Confirmation?
     var errorMessage: String?
+    /// Game controller input; ≡ (Menu) opens Console Mode, which then takes the input.
+    let gamepad = Gamepad()
+    var consoleRequested = false
+    @ObservationIgnored var consoleHandler: (@MainActor (Gamepad.Event) -> Void)?
 
     init() {
         Pref.register()
@@ -123,6 +127,14 @@ final class AppModel {
         engine = Engine.locate(saved: UserDefaults.standard.string(forKey: Pref.enginePath) ?? "")
         readEngineVersion()
         rescan()
+        gamepad.onEvent = { [weak self] event in
+            guard let self else { return }
+            if let handler = consoleHandler {
+                handler(event)
+            } else if event == .menu {
+                consoleRequested = true
+            }
+        }
     }
 
     var selectedGame: Game? {
