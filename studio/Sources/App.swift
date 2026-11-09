@@ -5,6 +5,7 @@ import SwiftUI
 struct AetherNXApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = AppModel()
+    @AppStorage(Pref.showsMenuBarItem) private var showsMenuBarItem = true
 
     var body: some Scene {
         Window("AetherNX", id: "main") {
@@ -32,12 +33,24 @@ struct AetherNXApp: App {
             SettingsView()
                 .environment(model)
         }
+
+        MenuBarExtra(isInserted: $showsMenuBarItem) {
+            MenuBarContent()
+                .environment(model)
+        } label: {
+            MenuBarLabel()
+                .environment(model)
+        }
     }
 }
 
 /// Asks before quitting while a build runs: quitting stops it.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var model: AppModel?
+
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated { model?.playLog.flush() }
+    }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let model, let job = model.job, job.isRunning else { return .terminateNow }
@@ -58,6 +71,13 @@ struct AppCommands: Commands {
 
     var body: some Commands {
         SidebarCommands()
+
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") {
+                openWindow(id: "main")
+                model.checkForUpdates(userInitiated: true)
+            }
+        }
 
         CommandGroup(replacing: .newItem) {
             Button("Add Library Folder…") { model.chooseLibraryFolder() }
@@ -104,6 +124,7 @@ struct AppCommands: Commands {
         }
 
         CommandGroup(replacing: .help) {
+            Button("Setup Assistant…") { model.showsSetupAssistant = true }
             Button("Check Setup…") { model.showsSetupCheck = true }
             Divider()
             Link("AetherNX on GitHub", destination: Links.repository)

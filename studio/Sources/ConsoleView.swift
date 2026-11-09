@@ -10,9 +10,13 @@ struct ConsoleView: View {
     @State private var focusedID: Game.ID?
     @FocusState private var hasKeyboardFocus: Bool
 
+    /// Built games first, the most recently played of them first; then the rest by name.
     private var games: [Game] {
-        model.games.filter(\.isBuildable).sorted { a, b in
+        let log = model.playLog
+        return model.games.filter(\.isBuildable).sorted { a, b in
             if (a.macApp != nil) != (b.macApp != nil) { return a.macApp != nil }
+            let la = log.record(for: a)?.lastPlayed ?? .distantPast, lb = log.record(for: b)?.lastPlayed ?? .distantPast
+            if la != lb { return la > lb }
             return a.name.localizedStandardCompare(b.name) == .orderedAscending
         }
     }
@@ -24,7 +28,7 @@ struct ConsoleView: View {
             ConsoleTopBar(gamepad: model.gamepad)
             Spacer(minLength: 24)
             if let game = focused {
-                ConsoleHero(game: game, job: model.jobFor(game))
+                ConsoleHero(game: game, job: model.jobFor(game), played: model.playLog.record(for: game))
                     .id(game.id)
                     .transition(.opacity)
                 Spacer(minLength: 32)
@@ -39,7 +43,7 @@ struct ConsoleView: View {
         .padding(.horizontal, 56)
         .padding(.vertical, 40)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background { ConsoleBackground(game: focused) }
+        .background { ConsoleBackground(path: focused.flatMap { model.artwork.backdrop(for: $0) }) }
         .preferredColorScheme(.dark)
         .background(WindowFullScreen())
         .focusable()
@@ -64,7 +68,8 @@ struct ConsoleView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 28) {
                     ForEach(games) { game in
-                        ConsoleTile(game: game, isFocused: game.id == focused?.id, isBusy: model.jobFor(game)?.isRunning == true)
+                        ConsoleTile(game: game, icon: model.artwork.icon(for: game), isFocused: game.id == focused?.id, isBusy: model.jobFor(game)?.isRunning == true)
+                            .task(id: game.titleId) { model.artwork.request(game) }
                             .id(game.id)
                             .onTapGesture(count: 2) { focusedID = game.id; handle(.primary) }
                             .onTapGesture { focusedID = game.id }
@@ -113,12 +118,12 @@ struct ConsoleView: View {
 // MARK: - Pieces
 
 private struct ConsoleBackground: View {
-    let game: Game?
+    let path: String?
 
     var body: some View {
         GeometryReader { geometry in
             Group {
-                if let path = game?.icon, let image = IconCache.backdrop(at: path) {
+                if let path, let image = IconCache.backdrop(at: path) {
                     Image(nsImage: image)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
@@ -177,9 +182,11 @@ private struct ConsoleTopBar: View {
 private struct ConsoleHero: View {
     let game: Game
     let job: Job?
+    let played: PlayRecord?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if game.isSwitch2 { Switch2Badge().scaleEffect(1.3, anchor: .leading) }
             Text(game.name)
                 .font(.system(size: 52, weight: .bold))
                 .lineLimit(2)
@@ -218,12 +225,14 @@ private struct ConsoleHero: View {
         var parts: [String] = []
         if let version = game.displayVersion { parts.append(String(localized: "Version \(version)")) }
         if !game.dlc.isEmpty { parts.append(String(localized: "\(game.dlc.count) DLC")) }
+        if let played, !played.summary.isEmpty { parts.append(played.summary) }
         return parts.joined(separator: " · ")
     }
 }
 
 private struct ConsoleTile: View {
     let game: Game
+    let icon: String?
     let isFocused: Bool
     let isBusy: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -231,13 +240,13 @@ private struct ConsoleTile: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 44, style: .continuous)
         Group {
-            if let path = game.icon, let image = IconCache.image(at: path) {
+            if let icon, let image = IconCache.image(at: icon) {
                 Image(nsImage: image)
                     .resizable()
                     .interpolation(.high)
                     .aspectRatio(contentMode: .fill)
             } else {
-                // No icon until the first build extracts it: the name on a tile
+                // No picture online and none extracted yet: the name on a tile
                 LinearGradient(colors: [Color(red: 0.24, green: 0.18, blue: 0.55), Color(red: 0.09, green: 0.07, blue: 0.24)], startPoint: .topLeading, endPoint: .bottomTrailing)
                     .overlay {
                         Text(game.name)

@@ -100,6 +100,15 @@ struct Game: Decodable, Hashable, Identifiable {
     var ipa: String? { ipas.first }
     var latestUpdate: UpdatePackage? { updates.max { $0.version < $1.version } }
     var isExtracted: Bool { !extractedVersions.isEmpty }
+    /// Switch 2 games have title IDs that start with 04 (Switch games: 01).
+    var isSwitch2: Bool { titleId?.hasPrefix("04") == true }
+
+    /// About what a first build needs free, as the build script measures it: the game's image (the base game with its
+    /// newest update, or a dump's newest version) and 6 GB for the shaders.
+    var firstBuildSpace: Int64 {
+        let image = kind == .dump ? (latestUpdate?.size ?? base?.size ?? 0) : (base?.size ?? 0) + (latestUpdate?.size ?? 0)
+        return image + 6 * 1_073_741_824
+    }
 
     var totalSize: Int64 {
         (base?.size ?? 0) + updates.reduce(0) { $0 + $1.size } + dlc.reduce(0) { $0 + $1.size } + archives.reduce(0) { $0 + $1.size }

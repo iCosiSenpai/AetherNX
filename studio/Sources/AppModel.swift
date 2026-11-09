@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import UniformTypeIdentifiers
+import UserNotifications
 
 /// Keys of the settings the app keeps in UserDefaults.
 enum Pref {
@@ -15,6 +16,12 @@ enum Pref {
     static let showFPS = "showFPS"
     static let macSigningIdentity = "macSigningIdentity"
     static let extraArguments = "extraArguments"
+    static let setupCompleted = "setupCompleted"
+    static let downloadArtwork = "downloadArtwork"
+    static let notifyBuilds = "notifyBuilds"
+    static let checkUpdatesAtLaunch = "checkUpdatesAtLaunch"
+    static let showsMenuBarItem = "showsMenuBarItem"
+    static let seenUpdates = "seenUpdates"
 
     static func register() {
         UserDefaults.standard.register(defaults: [
@@ -22,6 +29,10 @@ enum Pref {
             pipelineArchive: true,
             showFPS: false,
             defaultTarget: BuildTarget.mac.rawValue,
+            downloadArtwork: true,
+            notifyBuilds: true,
+            checkUpdatesAtLaunch: true,
+            showsMenuBarItem: true,
         ])
     }
 }
@@ -111,6 +122,8 @@ final class AppModel {
     private var nextLineID = 0
     var showsActivity = false
     var showsSetupCheck = false
+    var showsSetupAssistant = false
+    var showsUpdates = false
     private(set) var setupReport: SetupReport?
     private(set) var isCheckingSetup = false
     var keys = KeysStatus.current()
@@ -120,13 +133,23 @@ final class AppModel {
     let gamepad = Gamepad()
     var consoleRequested = false
     @ObservationIgnored var consoleHandler: (@MainActor (Gamepad.Event) -> Void)?
+    let artwork = ArtworkStore()
+    let updates = UpdateCenter()
+    let playLog = PlayLog()
+    /// What each game takes on disk, by kind, for its Danger Zone; measured when its page opens, forgotten at each scan.
+    private(set) var removalPlans: [Game.ID: RemovalPlan] = [:]
+    @ObservationIgnored private var measuring: Set<Game.ID> = []
+    var removalRequest: RemovalRequest?
+    private(set) var removingGameID: Game.ID?
 
     init() {
         Pref.register()
+        showsSetupAssistant = !UserDefaults.standard.bool(forKey: Pref.setupCompleted)
         libraryFolders = UserDefaults.standard.stringArray(forKey: Pref.libraryFolders) ?? []
         engine = Engine.locate(saved: UserDefaults.standard.string(forKey: Pref.enginePath) ?? "")
         readEngineVersion()
         rescan()
+        if UserDefaults.standard.bool(forKey: Pref.checkUpdatesAtLaunch) { checkForUpdates(userInitiated: false) }
         gamepad.onEvent = { [weak self] event in
             guard let self else { return }
             if let handler = consoleHandler {
@@ -191,7 +214,28 @@ final class AppModel {
         startJob(Job(title: String(localized: "Updating AetherNX"), gameID: nil, target: nil),
                  executable: URL(filePath: "/usr/bin/git"), arguments: ["pull", "--ff-only"], directory: engine) { [weak self] _ in
             self?.readEngineVersion()
+            self?.checkForUpdates(userInitiated: true)
         }
+    }
+
+    // MARK: Updates
+
+    /// Checks the app, the tools and nxnative. At launch the window shows what turned up, once per new finding;
+    /// asked for, it always shows.
+    func checkForUpdates(userInitiated: Bool) {
+        if userInitiated { showsUpdates = true }
+        updates.check(engine: engine) { [weak self] in
+            guard let self, !userInitiated else { return }
+            let findings = updates.findings
+            if !findings.isEmpty, findings != UserDefaults.standard.string(forKey: Pref.seenUpdates), !showsSetupAssistant {
+                showsUpdates = true
+            }
+        }
+    }
+
+    /// The window was closed: what it showed does not open it again at the next launch.
+    func dismissUpdateNotice() {
+        UserDefaults.standard.set(updates.findings, forKey: Pref.seenUpdates)
     }
 
     private func readEngineVersion() {
@@ -239,6 +283,10 @@ final class AppModel {
                 games = decoded.games
                 scanErrors = decoded.errors
                 scanFailure = nil
+                removalPlans = [:]
+                var apps: [String: String] = [:]
+                for game in games { for app in game.macApps { apps[URL(filePath: app).standardizedFileURL.path] = PlayLog.key(for: game) } }
+                playLog.setKnownApps(apps)
                 if selectedGameID == nil || !games.contains(where: { $0.id == selectedGameID }) {
                     selectedGameID = games.first?.id
                 }
@@ -273,14 +321,45 @@ final class AppModel {
     // MARK: Jobs
 
     func build(_ game: Game, target: BuildTarget) {
-        guard canStartJob, let engine, game.isBuildable else { return }
+        guard canStartJob, engine != nil, game.isBuildable else { return }
         keys = KeysStatus.current()
-        guard keys.isUsable else {
+        // A dump holds the game's files already decrypted: only packages need the keys
+        guard keys.isUsable || game.kind == .dump else {
             errorMessage = String(localized: "Set your prod.keys in Settings → Keys before building.")
             return
         }
+        // The build stops at once without room for the game's image; say so here, with what can be done about it
+        if !game.isExtracted, let space = Storage.space(at: game.folder), space.free < game.firstBuildSpace {
+            let need = game.firstBuildSpace.fileSize, free = space.free.fileSize
+            if space.withPurgeable >= game.firstBuildSpace {
+                confirmation = Confirmation(
+                    title: String(localized: "Free the space held by Time Machine snapshots?"),
+                    message: String(localized: "The first build of \(game.name) needs about \(need) free, and the disk has \(free). macOS keeps \(space.purgeable.fileSize) more in local Time Machine snapshots of files deleted in the last 24 hours. Removing those snapshots frees it now; backups on other disks stay."),
+                    actionTitle: String(localized: "Remove Snapshots and Build")) { [weak self] in
+                    Task {
+                        guard let self else { return }
+                        self.log(String(localized: "Removing local Time Machine snapshots…"), kind: .info)
+                        let ok = await Storage.thinLocalSnapshots()
+                        let after = Storage.space(at: game.folder)?.free ?? 0
+                        self.log(String(localized: "\(after.fileSize) free now."), kind: ok ? .info : .error)
+                        if after >= game.firstBuildSpace { self.startBuild(game, target: target) } else {
+                            self.errorMessage = String(localized: "There is still not enough room: \(after.fileSize) free of about \(need) needed.")
+                        }
+                    }
+                }
+            } else {
+                errorMessage = String(localized: "The first build of \(game.name) needs about \(need) free on its disk, and there is \(free). Free some space, for example in the Danger Zone of a game you no longer play, or move the game to a disk with more room.")
+            }
+            return
+        }
+        startBuild(game, target: target)
+    }
+
+    private func startBuild(_ game: Game, target: BuildTarget) {
+        guard canStartJob, let engine else { return }
         let defaults = UserDefaults.standard
-        var args = ["build", game.folder, "--target", target.rawValue, "-k", keys.path, "--progress", "json"]
+        var args = ["build", game.folder, "--target", target.rawValue, "--progress", "json"]
+        if keys.isUsable { args += ["-k", keys.path] }
         args.append(defaults.bool(forKey: Pref.keepExtracted) || target == .xcode ? "--keep-extracted" : "--no-keep-extracted")
         if let language = defaults.string(forKey: Pref.language), !language.isEmpty { args += ["--language", language] }
         if !defaults.bool(forKey: Pref.pipelineArchive) { args += ["--gpu", "none"] }
@@ -290,9 +369,14 @@ final class AppModel {
             args += extra.split(separator: " ").map(String.init)
         }
         let job = Job(title: target.jobTitle, gameID: game.id, target: target)
+        if defaults.bool(forKey: Pref.notifyBuilds) { Notifier.requestPermission() }
         startJob(job, executable: engine.appending(path: "aethernx"), arguments: args, directory: engine) { [weak self] ok in
             guard let self else { return }
             if ok, target == .mac { self.log(String(localized: "\(game.name) is ready: press Play."), kind: .info) }
+            if defaults.bool(forKey: Pref.notifyBuilds) && !NSApp.isActive {
+                Notifier.post(title: ok ? String(localized: "\(game.name) is ready") : String(localized: "The build of \(game.name) stopped"),
+                              body: ok ? (target == .mac ? String(localized: "Open AetherNX and press Play.") : target.jobTitle) : (job.failureMessage ?? ""))
+            }
         }
     }
 
@@ -436,6 +520,101 @@ final class AppModel {
         }
     }
 
+    func chooseKeysFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.showsHiddenFiles = true
+        panel.message = String(localized: "Choose your prod.keys file.")
+        if panel.runModal() == .OK, let url = panel.url {
+            UserDefaults.standard.set(url.path, forKey: Pref.keysPath)
+            keys = KeysStatus.current()
+        }
+    }
+
+    // MARK: Danger Zone
+
+    func measure(_ game: Game) {
+        guard removalPlans[game.id] == nil, !measuring.contains(game.id) else { return }
+        measuring.insert(game.id)
+        Task {
+            let plan = await Task.detached(priority: .utility) { RemovalPlan.make(for: game) }.value
+            measuring.remove(game.id)
+            removalPlans[game.id] = plan
+        }
+    }
+
+    /// Removes the chosen parts of a game, to the Trash or for good. With the game files gone, its folder goes too when
+    /// nothing else is left in it, and a library folder that was only this game leaves the library.
+    func remove(_ items: [RemovalPlan.Item], of game: Game, permanently: Bool, forgetsGame: Bool) {
+        guard removingGameID == nil, jobFor(game)?.isRunning != true else { return }
+        removingGameID = game.id
+        let paths = items.flatMap(\.paths)
+        let domains = items.flatMap(\.domains)
+        let size = items.reduce(0) { $0 + $1.size }
+        let folder = game.folder
+        let ownsFolder = game.kind != .archives || game.id == game.folder
+        log(permanently ? String(localized: "Deleting \(size.fileSize) of \(game.name)…") : String(localized: "Moving \(size.fileSize) of \(game.name) to the Trash…"), kind: .info)
+        Task {
+            // The launcher's settings first: cfprefsd keeps a copy of a plist removed under it
+            for domain in domains {
+                _ = await CommandRunner.capture(executable: URL(filePath: "/usr/bin/defaults"), arguments: ["delete", domain], directory: nil)
+            }
+            var failures = await Self.discard(paths, permanently: permanently)
+            if forgetsGame && ownsFolder && Self.isSafeToRemove(folder) && Self.holdsNoFiles(folder) {
+                failures += await Self.discard([folder], permanently: permanently)
+                if libraryFolders.contains(folder) { libraryFolders.removeAll { $0 == folder } }
+            }
+            if forgetsGame { playLog.forget(game) }
+            for failure in failures { log(failure, kind: .error) }
+            log(failures.isEmpty ? String(localized: "\(game.name): \(size.fileSize) removed.") : String(localized: "\(game.name): some items could not be removed."), kind: failures.isEmpty ? .info : .error)
+            removingGameID = nil
+            removalPlans[game.id] = nil
+            if forgetsGame, selectedGameID == game.id { selectedGameID = nil }
+            rescan()
+        }
+    }
+
+    private nonisolated static func discard(_ paths: [String], permanently: Bool) async -> [String] {
+        let urls = paths.map { URL(filePath: $0) }.filter { FileManager.default.fileExists(atPath: $0.path) || (try? $0.checkResourceIsReachable()) == true }
+        guard !urls.isEmpty else { return [] }
+        if permanently {
+            return await Task.detached(priority: .userInitiated) {
+                var failures: [String] = []
+                for url in urls {
+                    do { try FileManager.default.removeItem(at: url) } catch { failures.append("\(url.lastPathComponent): \(error.localizedDescription)") }
+                }
+                return failures
+            }.value
+        }
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                NSWorkspace.shared.recycle(urls) { _, error in
+                    continuation.resume(returning: error.map { [$0.localizedDescription] } ?? [])
+                }
+            }
+        }
+    }
+
+    /// A folder that is not the home folder, a top-level folder or a volume.
+    nonisolated static func isSafeToRemove(_ path: String) -> Bool {
+        let url = URL(filePath: path).standardizedFileURL
+        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+        return url.pathComponents.count > 3 && url != home && !home.path.hasPrefix(url.path + "/")
+    }
+
+    /// Whether a folder holds nothing but empty folders and Finder's own files.
+    nonisolated static func holdsNoFiles(_ path: String) -> Bool {
+        guard let walker = FileManager.default.enumerator(at: URL(filePath: path), includingPropertiesForKeys: [.isDirectoryKey]) else { return false }
+        for case let url as URL in walker {
+            if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true { continue }
+            let name = url.lastPathComponent
+            if name == ".DS_Store" || name.hasPrefix("._") || name == "Icon\r" { continue }
+            return false
+        }
+        return true
+    }
+
     // MARK: Setup check
 
     func runSetupCheck() {
@@ -457,5 +636,20 @@ extension JSONDecoder {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         return decoder
+    }
+}
+
+/// macOS notifications when a build ends while AetherNX is in the background.
+enum Notifier {
+    static func requestPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    static func post(title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
 }

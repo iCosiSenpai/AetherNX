@@ -83,7 +83,16 @@ Use the newest update you have: the game profiles are made for it. A game still 
 
 ## The app
 
-The sidebar lists your games; a game's page shows its files, what was built from them, and the actions. Everything else lives in the menus and in Settings.
+The first launch opens the **Setup Assistant**: it finds or downloads the build tools, runs the setup check, takes your `prod.keys` and your library folder, and asks a few choices. Help → Setup Assistant opens it again.
+
+The sidebar lists your games, with the free space on their disk at the bottom; a game's page shows its files, what was built from them, and the actions. Everything else lives in the menus and in Settings.
+
+- **Game artwork from the internet.** Icons and banners of Switch games come from [nlib.cc](https://api.nlib.cc) by title ID; a game it does not list, Switch 2 games among them, gets its box art from Wikipedia by name. Only the title ID or the name is sent, the pictures are kept on the Mac, and the icon in the game's own files is the fallback. Settings → General turns it off.
+- **Danger Zone.** At the bottom of each game's page, in red: what the game takes on the Mac (game files, build folder, apps, saves, log and settings), with **Remove…** for each part and **Remove Everything…** for all of it, to the Trash or deleted for good. iCloud saves are only removed when you tick them.
+- **Room for the first build.** Before a first build the app checks the free space the build needs. When it is short only because macOS keeps it in local Time Machine snapshots of files you deleted, it offers to remove those snapshots and start the build.
+- **Play time.** Time played and the last session of each game, counted whenever its Mac app runs while AetherNX is open, also when opened from Finder; Console Mode puts the last played game first.
+- **Notifications** when a build ends while the app is in the background.
+- **Updates**, checked at launch, from AetherNX → Check for Updates, and from the AetherNX item in the menu bar: a new release of the app (downloaded, checked against the release's checksum and Developer ID signature, installed and reopened; a copy you built yourself opens the release page instead), new changes of the tools' Git checkout (**Update** pulls them), and how many changes nxnative has made since AetherNX's engine was last synced with it, with a link to them. The menu bar item also shows a running build. Both can be turned off in Settings → General.
 
 | Shortcut | Action |
 |---|---|
@@ -102,7 +111,7 @@ The sidebar lists your games; a game's page shows its files, what was built from
 | <kbd>⌘</kbd> <kbd>F</kbd> | Search the library |
 | <kbd>⌘</kbd> <kbd>,</kbd> | Settings |
 
-**Settings** has three panes: **General** (library folders, the AetherNX folder, setup check), **Keys** (your `prod.keys`, checked without ever showing a key) and **Building** (what the Build button makes, the game's language, kept files, pre-built shader pipelines, the frame-rate counter on iPhone, a signing identity for the Mac app). The app is in English and Italian.
+**Settings** has three panes: **General** (library folders, the AetherNX folder, setup check, game artwork, notifications), **Keys** (your `prod.keys`, checked without ever showing a key) and **Building** (what the Build button makes, the game's language, kept files, pre-built shader pipelines, the frame-rate counter on iPhone, a signing identity for the Mac app). The app is in English and Italian.
 
 ## Console Mode
 

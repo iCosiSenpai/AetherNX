@@ -26,6 +26,9 @@ struct ContentView: View {
         .frame(minWidth: 820, minHeight: 520)
         .toolbar { MainToolbar() }
         .sheet(isPresented: $model.showsSetupCheck) { SetupCheckView() }
+        .sheet(isPresented: $model.showsSetupAssistant) { SetupAssistantView() }
+        .sheet(isPresented: $model.showsUpdates, onDismiss: { model.dismissUpdateNotice() }) { UpdatesSheet() }
+        .sheet(item: $model.removalRequest) { RemovalSheet(request: $0) }
         .alert("Something went wrong", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -88,6 +91,16 @@ private struct MainToolbar: ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             if let job = model.job, job.isRunning {
                 JobToolbarIndicator(job: job)
+            }
+        }
+        ToolbarItem(placement: .primaryAction) {
+            if model.updates.hasUpdates {
+                Button {
+                    model.showsUpdates = true
+                } label: {
+                    Label("Update Available", systemImage: "arrow.down.circle.fill")
+                }
+                .help("An update of AetherNX or its tools is ready")
             }
         }
         ToolbarItem(placement: .primaryAction) {

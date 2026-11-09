@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+**AetherNX Studio**
+
+- A **Setup Assistant** on first launch: the build tools (found or downloaded), the setup check with its fixes, `prod.keys`, the library folder and a few choices. Help → Setup Assistant opens it again.
+- **Game artwork from the internet**: icons and banners from nlib.cc by title ID, box art from Wikipedia by name for games nlib does not list (Switch 2 games among them), kept on the Mac; the icon in the game's files is the fallback. The game's page shows the banner and the publisher and year; Console Mode uses the banner behind the game.
+- A red **Danger Zone** on each game's page: the space each part of the game takes, **Remove…** for the build folder, the apps or the saves, and **Remove Everything…** (also in the sidebar's context menu), to the Trash or deleted for good. A game folder left empty goes too, and a library folder that was only that game leaves the library.
+- Before a first build, a **space check** that says what is missing; space held by local Time Machine snapshots can be freed from the dialog.
+- **Play time** and last played for each game, Console Mode ordered by last played, a **Switch 2** tag, the free space in the sidebar, and a **notification** when a build ends in the background.
+- A dump folder builds without `prod.keys`.
+- **Update checks** at launch, in the AetherNX menu (Check for Updates…) and in a new **menu bar item**: the app's newest release, installed in place after its checksum and Developer ID signature are checked; the tools' new commits, with Update; and nxnative's changes since AetherNX's last sync, with a link. A toolbar button appears while an update is ready.
+
 ## 0.1.0
 
 The first release under the AetherNX name.

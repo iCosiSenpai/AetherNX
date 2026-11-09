@@ -134,7 +134,7 @@ struct SetupCheckView: View {
     }
 }
 
-private struct CheckRow: View {
+struct CheckRow: View {
     let check: SetupReport.Check
 
     var body: some View {

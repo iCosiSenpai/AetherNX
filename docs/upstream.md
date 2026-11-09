@@ -1,6 +1,8 @@
 # External update reviews
 
-HorizonNative is an independently maintained repository owned by iCosiSenpai. Source-monitor configuration, import revision and original issue URLs are private local metadata in `.git/horizonnative-upstream-review.json` and the associated automation. They are not product configuration, network endpoints used by the application or versioned project files. Required notices remain in [LICENSE](../LICENSE) and the third-party license files.
+HorizonNative is an independently maintained repository owned by iCosiSenpai. Source-monitor configuration, import revision and original issue URLs are private local metadata in `.git/horizonnative-upstream-review.json` and the associated automation. They are not product configuration or versioned project files. Required notices remain in [LICENSE](../LICENSE) and the third-party license files.
+
+The one place the application reads the source repository is AetherNX Studio's update check: it takes the nxnative commit from the subject of the last sync commit (`Sync with seedds/nxnative up to <commit> (<date>)`, so keep that form) and asks GitHub's public compare API how many commits the source has made since, read-only and without credentials. The review below stays local.
 
 Mentions of an **upstream PR #N** or **upstream issue #N** in inherited notes record the original evidence. They are not HorizonNative issue numbers and do not establish that measurements have been repeated here. The local review metadata identifies the corresponding source tracker.
 

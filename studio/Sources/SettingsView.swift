@@ -17,6 +17,10 @@ struct SettingsView: View {
 
 private struct GeneralSettings: View {
     @Environment(AppModel.self) private var model
+    @AppStorage(Pref.downloadArtwork) private var downloadArtwork = true
+    @AppStorage(Pref.notifyBuilds) private var notifyBuilds = true
+    @AppStorage(Pref.checkUpdatesAtLaunch) private var checkUpdatesAtLaunch = true
+    @AppStorage(Pref.showsMenuBarItem) private var showsMenuBarItem = true
 
     var body: some View {
         Form {
@@ -79,6 +83,37 @@ private struct GeneralSettings: View {
                 Text("AetherNX Tools")
             } footer: {
                 Text("The folder with the aethernx command and the build scripts. The app runs the builds from there.")
+            }
+
+            Section {
+                Toggle("Download game artwork", isOn: $downloadArtwork)
+                HStack {
+                    Text("\(model.artwork.art.values.filter { $0.source != nil }.count) games have artwork")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Download Again") { model.artwork.clear() }
+                        .help("Forget the saved pictures; each game is looked up again when it shows")
+                }
+            } header: {
+                Text("Game Artwork")
+            } footer: {
+                Text("Icons and banners of Switch games come from nlib.cc by title ID; other games, Switch 2 ones among them, get their box art from Wikipedia by name. Only the title ID or the name is sent. Without a picture online, the icon in the game's own files is used.")
+            }
+
+            Section {
+                Toggle("Check for updates at launch", isOn: $checkUpdatesAtLaunch)
+                Toggle("Show AetherNX in the menu bar", isOn: $showsMenuBarItem)
+                Button("Check for Updates…") { model.checkForUpdates(userInitiated: true) }
+            } header: {
+                Text("Updates")
+            } footer: {
+                Text("The app from AetherNX's GitHub releases, the tools from their Git remote, and what nxnative, the engine AetherNX is built on, changed since AetherNX's last sync.")
+            }
+
+            Section {
+                Toggle("Notify me when a build finishes", isOn: $notifyBuilds)
+                    .onChange(of: notifyBuilds) { _, on in if on { Notifier.requestPermission() } }
+                Button("Open Setup Assistant…") { model.showsSetupAssistant = true }
             }
         }
         .formStyle(.grouped)

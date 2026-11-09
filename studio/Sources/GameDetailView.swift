@@ -7,6 +7,7 @@ struct GameDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                GameBanner(game: game)
                 GameHeader(game: game)
                 if let job = model.jobFor(game) {
                     JobCard(job: job)
@@ -28,6 +29,7 @@ struct GameDetailView: View {
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                 }
+                DangerZoneSection(game: game)
             }
             .padding(24)
             .frame(maxWidth: 760, alignment: .leading)
@@ -37,6 +39,30 @@ struct GameDetailView: View {
 }
 
 // MARK: - Header
+
+/// The game's wide banner from the internet, when a service has one.
+private struct GameBanner: View {
+    let game: Game
+    @Environment(AppModel.self) private var model
+    @AppStorage(Pref.downloadArtwork) private var downloadArtwork = true   // redraws when the setting changes
+
+    var body: some View {
+        if let path = model.artwork.banner(for: game), let image = IconCache.image(at: path) {
+            Color.clear
+                .frame(height: 200)
+                .frame(maxWidth: .infinity)
+                .overlay {
+                    Image(nsImage: image)
+                        .resizable()
+                        .interpolation(.high)
+                        .aspectRatio(contentMode: .fill)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.separator, lineWidth: 0.5))
+                .accessibilityHidden(true)
+        }
+    }
+}
 
 private struct GameHeader: View {
     let game: Game
@@ -70,7 +96,15 @@ private struct GameHeader: View {
                     .monospacedDigit()
                     .textSelection(.enabled)
                 if game.isBuildable {
-                    ProfileLabel(hasProfile: game.profile)
+                    HStack(spacing: 8) {
+                        if game.isSwitch2 { Switch2Badge() }
+                        ProfileLabel(hasProfile: game.profile)
+                    }
+                }
+                if let record = model.playLog.record(for: game), !record.summary.isEmpty {
+                    Label(record.summary, systemImage: model.playLog.isRunning(game) ? "play.circle.fill" : "clock")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -78,6 +112,10 @@ private struct GameHeader: View {
 
     private var subtitle: String {
         var parts: [String] = []
+        if let info = model.artwork.info(for: game) {
+            if let publisher = info.publisher { parts.append(publisher) }
+            if let year = info.releaseDate?.prefix(4), year.count == 4 { parts.append(String(year)) }
+        }
         if let version = game.displayVersion { parts.append(String(localized: "Version \(version)")) }
         if let titleId = game.titleId { parts.append(titleId) }
         if parts.isEmpty { parts.append(game.kind == .archives ? String(localized: "Archive") : game.folder) }
@@ -111,6 +149,19 @@ private struct GameHeader: View {
             }
             MoreMenu(game: game)
         }
+    }
+}
+
+/// A small "Switch 2" tag for games of the newer console.
+struct Switch2Badge: View {
+    var body: some View {
+        Text("Switch 2")
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .foregroundStyle(.white)
+            .background(Color(red: 0.86, green: 0.12, blue: 0.2), in: Capsule())
+            .help("A Nintendo Switch 2 game")
     }
 }
 

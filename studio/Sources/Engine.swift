@@ -106,7 +106,7 @@ final class CommandRunner {
     }
 
     /// Runs to the end and returns stdout and stderr; for short commands such as scan and doctor.
-    nonisolated static func capture(executable: URL, arguments: [String], directory: URL?) async -> (status: Int32, stdout: Data, stderr: String) {
+    nonisolated static func capture(executable: URL, arguments: [String], directory: URL?, environment: [String: String] = [:]) async -> (status: Int32, stdout: Data, stderr: String) {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
@@ -115,6 +115,7 @@ final class CommandRunner {
                 process.currentDirectoryURL = directory
                 var env = ProcessInfo.processInfo.environment
                 env["PATH"] = ["/opt/homebrew/bin", "/usr/local/bin", env["PATH"] ?? "/usr/bin:/bin"].joined(separator: ":")
+                for (key, value) in environment { env[key] = value }
                 process.environment = env
                 let out = Pipe()
                 let err = Pipe()

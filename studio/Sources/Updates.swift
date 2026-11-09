@@ -1,0 +1,299 @@
+import AppKit
+import CryptoKit
+import Foundation
+import Observation
+import Security
+
+/// Where AetherNX stands against the newest versions: the Studio app (GitHub releases), the AetherNX tools checkout
+/// (its Git remote), and nxnative, the engine AetherNX is built on (its commits since AetherNX's last sync).
+@MainActor
+@Observable
+final class UpdateCenter {
+    struct AppRelease: Equatable {
+        var version: String
+        var notes: String
+        var page: URL
+        var zip: URL?
+        var sums: URL?
+    }
+
+    struct Tools: Equatable {
+        var behind: Int
+        var ahead: Int
+        var hasLocalChanges: Bool
+        var branch: String
+        var tracking: String
+        var isTracking: Bool
+        var newestCommit: String
+        var newestSubject: String?
+        var newestVersion: String?
+        /// A fast-forward pull applies: the folder follows its remote branch and has no changes of its own.
+        var canUpdate: Bool { isTracking && ahead == 0 && !hasLocalChanges }
+    }
+
+    struct Upstream: Equatable {
+        var aheadBy: Int
+        var synced: String
+        var syncedDate: String?
+        var page: URL
+        var newestSubject: String?
+        var newestDate: Date?
+    }
+
+    enum Phase: Equatable { case idle, checking, installing(String) }
+
+    private(set) var phase: Phase = .idle
+    private(set) var lastChecked: Date?
+    /// A release newer than this app, else nil.
+    private(set) var appRelease: AppRelease?
+    private(set) var appError: String?
+    private(set) var tools: Tools?
+    private(set) var toolsError: String?
+    private(set) var upstream: Upstream?
+    private(set) var upstreamError: String?
+
+    nonisolated static let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+    nonisolated static let releasesAPI = URL(string: "https://api.github.com/repos/iCosiSenpai/AetherNX/releases/latest")!
+    nonisolated static let commitsAPI = URL(string: "https://api.github.com/repos/iCosiSenpai/AetherNX/commits?per_page=100")!
+    nonisolated static let upstreamRepository = "seedds/nxnative"
+    /// Releases are signed with this Developer ID team; an update must be too.
+    nonisolated static let publisherRequirement = #"identifier "io.github.icosisenpai.aethernx" and anchor apple generic and certificate leaf[subject.OU] = "6KV8L8WQ9D""#
+
+    var toolsUpdateAvailable: Bool { (tools?.behind ?? 0) > 0 }
+    var upstreamChanges: Int { upstream?.aheadBy ?? 0 }
+    /// Something the user can install now.
+    var hasUpdates: Bool { appRelease != nil || toolsUpdateAvailable }
+    var isChecking: Bool { phase == .checking }
+
+    /// What was found, to show the launch notice once per new finding.
+    var findings: String {
+        [appRelease.map { "app \($0.version)" }, toolsUpdateAvailable ? tools.map { "tools \($0.newestCommit)" } : nil,
+         upstreamChanges > 0 ? "nxnative \(upstreamChanges)" : nil].compactMap { $0 }.joined(separator: ", ")
+    }
+
+    /// A build of this app that the publisher signed (a release), not one made on this Mac.
+    let isRelease = UpdateCenter.satisfiesPublisher(Bundle.main.bundleURL)
+
+    // MARK: Checking
+
+    func check(engine: URL?, completion: (@MainActor () -> Void)? = nil) {
+        guard phase == .idle else { return }
+        phase = .checking
+        Task {
+            async let release = Self.latestRelease()
+            async let toolsResult = Self.toolsStatus(engine: engine)
+            async let upstreamResult = Self.upstreamStatus(engine: engine)
+            switch await release {
+            case .success(let r): appRelease = r; appError = nil
+            case .failure(let e): appError = e.message
+            }
+            switch await toolsResult {
+            case .success(let t): tools = t; toolsError = nil
+            case .failure(let e): tools = nil; toolsError = e.message
+            }
+            switch await upstreamResult {
+            case .success(let u): upstream = u; upstreamError = nil
+            case .failure(let e): upstreamError = e.message
+            }
+            lastChecked = .now
+            phase = .idle
+            completion?()
+        }
+    }
+
+    struct CheckError: Error { var message: String }
+
+    private nonisolated static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 20
+        configuration.httpAdditionalHeaders = [
+            "User-Agent": "AetherNXStudio/\(currentVersion) (+https://github.com/iCosiSenpai/AetherNX)",
+            "Accept": "application/vnd.github+json",
+        ]
+        return URLSession(configuration: configuration)
+    }()
+
+    private nonisolated static func json(_ url: URL) async -> Result<Any, CheckError> {
+        guard let (data, response) = try? await session.data(from: url), let http = response as? HTTPURLResponse else {
+            return .failure(CheckError(message: String(localized: "GitHub could not be reached.")))
+        }
+        if http.statusCode == 403 || http.statusCode == 429 {
+            return .failure(CheckError(message: String(localized: "GitHub asks to wait before checking again (too many checks in an hour).")))
+        }
+        guard http.statusCode == 200, let object = try? JSONSerialization.jsonObject(with: data) else {
+            return .failure(CheckError(message: String(localized: "GitHub answered \(http.statusCode).")))
+        }
+        return .success(object)
+    }
+
+    private nonisolated static func latestRelease() async -> Result<AppRelease?, CheckError> {
+        switch await json(releasesAPI) {
+        case .failure(let e): return .failure(e)
+        case .success(let object):
+            guard let release = object as? [String: Any], let tag = release["tag_name"] as? String,
+                  let page = (release["html_url"] as? String).flatMap(URL.init(string:)) else {
+                return .failure(CheckError(message: String(localized: "The release information could not be read.")))
+            }
+            let version = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+            guard isVersion(version, newerThan: currentVersion) else { return .success(nil) }
+            let assets = release["assets"] as? [[String: Any]] ?? []
+            func asset(_ name: String) -> URL? {
+                assets.first { $0["name"] as? String == name }.flatMap { ($0["browser_download_url"] as? String).flatMap(URL.init(string:)) }
+            }
+            return .success(AppRelease(version: version, notes: release["body"] as? String ?? "", page: page,
+                                       zip: asset("AetherNX-\(version).zip"), sums: asset("SHA256SUMS")))
+        }
+    }
+
+    nonisolated static func isVersion(_ a: String, newerThan b: String) -> Bool {
+        let x = a.split(separator: ".").map { Int($0.prefix { $0.isNumber }) ?? 0 }
+        let y = b.split(separator: ".").map { Int($0.prefix { $0.isNumber }) ?? 0 }
+        for i in 0..<max(x.count, y.count) {
+            let l = i < x.count ? x[i] : 0, r = i < y.count ? y[i] : 0
+            if l != r { return l > r }
+        }
+        return false
+    }
+
+    private nonisolated static func git(_ engine: URL, _ arguments: [String]) async -> (ok: Bool, out: String) {
+        let result = await CommandRunner.capture(executable: URL(filePath: "/usr/bin/git"), arguments: ["-C", engine.path] + arguments, directory: engine,
+                                                 environment: ["GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "/usr/bin/false"])
+        return (result.status == 0, String(decoding: result.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private nonisolated static func toolsStatus(engine: URL?) async -> Result<Tools?, CheckError> {
+        guard let engine else { return .success(nil) }
+        guard await git(engine, ["rev-parse", "--is-inside-work-tree"]).ok else {
+            return .failure(CheckError(message: String(localized: "The AetherNX folder is not a Git checkout: download the tools again to get updates.")))
+        }
+        guard await git(engine, ["fetch", "--quiet", "origin"]).ok else {
+            return .failure(CheckError(message: String(localized: "The tools' remote could not be reached.")))
+        }
+        let branch = await git(engine, ["rev-parse", "--abbrev-ref", "HEAD"]).out
+        let upstreamRef = await git(engine, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+        var tracking = upstreamRef.ok ? upstreamRef.out : ""
+        if tracking.isEmpty {
+            // A branch of its own: compare with the remote's default branch
+            let head = await git(engine, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+            tracking = head.ok && !head.out.isEmpty ? head.out : "origin/main"
+        }
+        let counts = await git(engine, ["rev-list", "--left-right", "--count", "HEAD...\(tracking)"]).out.split(whereSeparator: \.isWhitespace).compactMap { Int($0) }
+        guard counts.count == 2 else { return .failure(CheckError(message: String(localized: "The tools' history could not be compared with \(tracking).")) ) }
+        let changes = await git(engine, ["status", "--porcelain", "--untracked-files=no"]).out
+        let newest = await git(engine, ["rev-parse", "--short", tracking]).out
+        let subject = await git(engine, ["log", "-1", "--format=%s", tracking]).out
+        let version = await git(engine, ["show", "\(tracking):VERSION"])
+        return .success(Tools(behind: counts[1], ahead: counts[0], hasLocalChanges: !changes.isEmpty, branch: branch, tracking: tracking,
+                              isTracking: upstreamRef.ok, newestCommit: newest, newestSubject: subject.isEmpty ? nil : subject,
+                              newestVersion: version.ok ? version.out : nil))
+    }
+
+    /// The nxnative commit of AetherNX's last sync: the subject "Sync with seedds/nxnative up to <commit> (<date>)" in the
+    /// tools' history, else in the AetherNX repository's recent commits (a shallow download keeps no history).
+    private nonisolated static func lastSync(engine: URL?) async -> (commit: String, date: String?)? {
+        func parse(_ subject: String) -> (String, String?)? {
+            guard let match = subject.firstMatch(of: #/up to ([0-9a-f]{7,40})(?: \((\d{4}-\d{2}-\d{2})\))?/#) else { return nil }
+            return (String(match.1), match.2.map(String.init))
+        }
+        if let engine {
+            let local = await git(engine, ["log", "-1", "--format=%s", "--grep=^Sync with seedds/nxnative up to "])
+            if local.ok, let found = parse(local.out) { return found }
+        }
+        guard case .success(let object) = await json(commitsAPI), let commits = object as? [[String: Any]] else { return nil }
+        for commit in commits {
+            guard let message = (commit["commit"] as? [String: Any])?["message"] as? String,
+                  message.hasPrefix("Sync with seedds/nxnative up to "), let found = parse(message) else { continue }
+            return found
+        }
+        return nil
+    }
+
+    private nonisolated static func upstreamStatus(engine: URL?) async -> Result<Upstream?, CheckError> {
+        guard let sync = await lastSync(engine: engine) else {
+            return .failure(CheckError(message: String(localized: "The nxnative version of AetherNX's engine could not be found.")))
+        }
+        guard let compare = URL(string: "https://api.github.com/repos/\(upstreamRepository)/compare/\(sync.commit)...main") else { return .success(nil) }
+        switch await json(compare) {
+        case .failure(let e): return .failure(e)
+        case .success(let object):
+            guard let info = object as? [String: Any], let ahead = info["ahead_by"] as? Int else {
+                return .failure(CheckError(message: String(localized: "nxnative's changes could not be read.")))
+            }
+            let page = (info["html_url"] as? String).flatMap(URL.init(string:)) ?? URL(string: "https://github.com/\(upstreamRepository)/commits/main")!
+            var result = Upstream(aheadBy: ahead, synced: sync.commit, syncedDate: sync.date, page: page)
+            if ahead > 0, let newest = URL(string: "https://api.github.com/repos/\(upstreamRepository)/commits?per_page=1"),
+               case .success(let list) = await json(newest), let first = (list as? [[String: Any]])?.first,
+               let commit = first["commit"] as? [String: Any] {
+                result.newestSubject = (commit["message"] as? String)?.split(separator: "\n").first.map(String.init)
+                if let date = (commit["committer"] as? [String: Any])?["date"] as? String { result.newestDate = ISO8601DateFormatter().date(from: date) }
+            }
+            return .success(result)
+        }
+    }
+
+    // MARK: Installing the app
+
+    /// Downloads the release, checks its checksum and its signature, puts it in place of this app and opens it.
+    /// A build made on this Mac (not signed by the publisher) opens the release page instead.
+    func installApp() {
+        guard let release = appRelease else { return }
+        guard isRelease, let zip = release.zip, let sums = release.sums else {
+            NSWorkspace.shared.open(release.page)
+            return
+        }
+        let current = Bundle.main.bundleURL
+        phase = .installing(String(localized: "Downloading AetherNX \(release.version)…"))
+        Task {
+            do {
+                let folder = try FileManager.default.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: current, create: true)
+                defer { try? FileManager.default.removeItem(at: folder) }
+                let (archive, archiveResponse) = try await Self.session.data(from: zip)
+                let (list, listResponse) = try await Self.session.data(from: sums)
+                guard (archiveResponse as? HTTPURLResponse)?.statusCode == 200, (listResponse as? HTTPURLResponse)?.statusCode == 200 else {
+                    throw CheckError(message: String(localized: "The download did not complete."))
+                }
+                phase = .installing(String(localized: "Checking the download…"))
+                let digest = SHA256.hash(data: archive).map { String(format: "%02x", $0) }.joined()
+                let listed = String(decoding: list, as: UTF8.self).split(whereSeparator: \.isNewline)
+                    .first { $0.hasSuffix(" " + zip.lastPathComponent) }?.split(separator: " ").first.map(String.init)
+                guard listed?.lowercased() == digest else { throw CheckError(message: String(localized: "The download does not match the release's checksum.")) }
+                let zipFile = folder.appending(path: zip.lastPathComponent)
+                try archive.write(to: zipFile)
+                let unpacked = folder.appending(path: "unpacked")
+                let ditto = await CommandRunner.capture(executable: URL(filePath: "/usr/bin/ditto"), arguments: ["-x", "-k", zipFile.path, unpacked.path], directory: nil)
+                let app = unpacked.appending(path: "AetherNX.app")
+                guard ditto.status == 0, FileManager.default.fileExists(atPath: app.path) else { throw CheckError(message: String(localized: "The download could not be unpacked.")) }
+                guard Self.satisfiesPublisher(app),
+                      Bundle(url: app)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == release.version else {
+                    throw CheckError(message: String(localized: "The downloaded app is not signed by AetherNX's publisher, or is another version: it was not installed."))
+                }
+                phase = .installing(String(localized: "Installing…"))
+                _ = try FileManager.default.replaceItemAt(current, withItemAt: app)
+                Self.relaunch(current)
+            } catch {
+                phase = .idle
+                appError = (error as? CheckError)?.message ?? error.localizedDescription
+            }
+        }
+    }
+
+    /// Whether the code at `url` is signed by the publisher, nested code included (codesign --verify --deep --strict -R).
+    nonisolated static func satisfiesPublisher(_ url: URL) -> Bool {
+        var code: SecStaticCode?
+        var requirement: SecRequirement?
+        guard SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess, let code,
+              SecRequirementCreateWithString(publisherRequirement as CFString, [], &requirement) == errSecSuccess, let requirement else { return false }
+        let flags = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSCheckNestedCode | kSecCSStrictValidate)
+        return SecStaticCodeCheckValidity(code, flags, requirement) == errSecSuccess
+    }
+
+    /// Opens the app again once this process has ended.
+    private static func relaunch(_ app: URL) {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let waiter = Process()
+        waiter.executableURL = URL(filePath: "/bin/sh")
+        waiter.arguments = ["-c", "while /bin/kill -0 \(pid) 2>/dev/null; do /bin/sleep 0.3; done; /usr/bin/open \"$0\"", app.path]
+        try? waiter.run()
+        NSApp.terminate(nil)
+    }
+}
