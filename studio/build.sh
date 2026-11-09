@@ -19,7 +19,7 @@ sed -e "s/@VERSION@/$version/" -e "s/@BUILD@/$build_number/" "$studio/Info.plist
 cp "$root/assets/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
 cp -R "$studio/Resources/." "$app/Contents/Resources/"
 
-echo "Compiling AetherNX Studio $version…"
+echo "Compiling AetherNX Studio ${version}..."
 xcrun swiftc \
   -O -parse-as-library -swift-version 5 \
   -target arm64-apple-macos26.0 \
