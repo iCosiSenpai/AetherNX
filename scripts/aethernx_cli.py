@@ -448,7 +448,7 @@ def doctor():
     check('Python', 'capstone 5', cap == 5, cap_version, f'{pip} "capstone>=5,<6"')
     check('Python', 'zstd', importable('compression.zstd') or importable('backports.zstd'), '', f'{pip} backports.zstd')
     check('Python', 'nsz (for .nsz / .xcz packages)', importable('nsz') or shutil.which('nsz'), '', f'{pip} nsz', required=False)
-    check('Python', 'zbic (for games built with system 22.0.0 or later)', importable('zbic'), '', f'{pip} zbic', required=False)
+    check('Python', 'zbic (for games built with system 22.0.0 or later; the build needs it for every game)', importable('zbic'), '', f'{pip} zbic')
 
     code, out = run_out(['xcodebuild', '-version'])
     xcode = out.splitlines()[0] if code == 0 and out else ''

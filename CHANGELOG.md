@@ -10,6 +10,7 @@
 - Before a first build, a **space check** that says what is missing; space held by local Time Machine snapshots can be freed from the dialog.
 - **Play time** and last played for each game, Console Mode ordered by last played, a **Switch 2** tag, the free space in the sidebar, and a **notification** when a build ends in the background.
 - A dump folder builds without `prod.keys`.
+- The setup check counts `zbic` as required: every build needs it (Switch 2 and system 22 games are compressed with it), so a Python without it no longer passes the check and then stops the build.
 - **Update checks** at launch, in the AetherNX menu (Check for Updates…) and in a new **menu bar item**: the app's newest release, installed in place after its checksum and Developer ID signature are checked; the tools' new commits, with Update; and nxnative's changes since AetherNX's last sync, with a link. A toolbar button appears while an update is ready.
 
 ## 0.1.0
