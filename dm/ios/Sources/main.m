@@ -80,19 +80,18 @@ static NSString *romfs_locate(void) {
     return nil;
 }
 
-// Add-on content (DLC): build_ipa.sh puts the DLC extracted from the player's NSPs at <App>/aoc (<index>.img or <index>/); Documents/aoc comes first, for DLC added after the app was
-// built (copied there with the Files app or scripts/push_aoc.sh): no rebuild for a new DLC. A game update changes the game's code, which is built into the app, so it needs a new build
+// Add-on content (DLC): each DLC's RomFS image at <dir>/<index>.img (or a legacy <index>/ folder). Like the game files, Documents/aoc comes before <App>/aoc.
+// A DM_AOC_DIR that is already set (env.txt, the launch environment) wins. The host mounts and counts the DLC from DM_AOC_DIR (hle_fs.c, hle_misc.c)
 static void aoc_locate(void) {
     if (getenv("DM_AOC_DIR")) return;
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
     for (NSString *d in @[[doc stringByAppendingPathComponent:@"aoc"], [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"aoc"]]) {
         BOOL dir = NO;
-        if ([fm fileExistsAtPath:d isDirectory:&dir] && dir) {
-            setenv("DM_AOC_DIR", d.fileSystemRepresentation, 1);
-            fprintf(stderr, "boot: DLC from %s\n", d.fileSystemRepresentation);
-            return;
-        }
+        if (![fm fileExistsAtPath:d isDirectory:&dir] || !dir) continue;
+        setenv("DM_AOC_DIR", d.fileSystemRepresentation, 0);
+        fprintf(stderr, "boot: DLC from %s\n", d.fileSystemRepresentation);
+        return;
     }
 }
 
@@ -185,7 +184,7 @@ static int boot_env(void) {
     setenv("DM_NVN_SHMAP", [dm stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation, 0);
     setenv("DM_MSL_DIR", [res stringByAppendingPathComponent:@"msl"].fileSystemRepresentation, 0);
     setenv("DM_FONT_DIR", [dm stringByAppendingPathComponent:@"font"].fileSystemRepresentation, 0);   // Shared-font stand-ins (standard.ttf / nintendo_ext.ttf): iOS lacks the macOS font path
-    aoc_locate();
+    aoc_locate();   // add-on content: Documents/aoc, else <App>/aoc; an empty Documents/aoc explicitly selects no DLC
     NSString *pso = [res stringByAppendingPathComponent:@"pso"];   // the pipeline archive made offline (build_ipa.sh, dm/gfx/tools/pso_offline.py): the shader pairs' bases, which the device then does not build
     if ([fm fileExistsAtPath:pso]) setenv("DM_PSO_BUNDLE", pso.fileSystemRepresentation, 0);
     chdir(doc.fileSystemRepresentation);

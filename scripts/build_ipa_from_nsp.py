@@ -40,11 +40,7 @@ import pack_dump   # a folder of a game's files instead of NSPs
 
 # ---- Settings ----
 NSP_DIR = ''                            # folder holding the NSPs (empty = ask at run time)
-_DEFAULT_KEYS = next((str(p) for p in (
-    Path('~/.switch/prod.keys'),
-    Path.home() / '.switch/prod.keys',
-) if p.is_file()), '')
-PROD_KEYS = _DEFAULT_KEYS               # path of prod.keys (empty = ask at run time)
+PROD_KEYS = ''                          # path of prod.keys (empty = ~/.switch/prod.keys when it exists, else ask at run time)
 PACKAGE = ''                            # version packed into the IPA (empty = the newest in the folder; Mario 'v327680' i.e. 1.2.1, or 'v0')
 TITLE_ID = ''                           # the game to pack when the folder holds several, e.g. a cartridge dump with two games: '0100FD8022DAA000' (empty = the folder's one game)
 WORK_DIR = ''                           # the game's build folder (empty = <title ID>_build in the NSP folder); the extracted files, shader cache and temporary files live there, and the IPA (or app) goes beside it unless OUT_IPA names it
@@ -516,12 +512,16 @@ def version_of(path):
     return int(m.group(1)) if m else None
 
 
+def default_keys():   # the usual place of prod.keys for Switch tools (hactool, nsz): ~/.switch/prod.keys, when it is there
+    p = Path.home() / '.switch' / 'prod.keys'
+    return str(p) if p.is_file() else ''
+
+
 COMPRESSED = {'.nsz': '.nsp', '.xcz': '.xci'}   # nsz's compressed NSP / XCI and what nsz -D makes of them
-_SKIP_SCAN_DIRS = {'nsp', 'extract', 'aoc', 'tmp', 'ipa', 'work', 'logs', 'shader', 'pso', 'font', 'app', 'xcode', 'xcode-derived-data', 'decomp_workspace', 'recomp_workspace', '.git'}
+SKIP_SCAN_DIRS = {'nsp', 'extract', 'aoc', 'tmp', 'ipa', 'work', 'logs', 'shader', 'pso', 'font', 'app', 'xcode', 'xcode-derived-data', 'decomp_workspace', 'recomp_workspace', '.git'}
 
 
-def _iter_package_files(nsp_dir):
-    """Discover package files (.nsp, .xci, .nsz, .xcz) in nsp_dir and any user subfolders (e.g. DLC / Update folders), skipping build/output directories."""
+def package_files(nsp_dir):   # the game packages in the folder and in its own subfolders (a "DLC" or "Update" folder, three levels at most), not in build or output folders
     out = []
     def walk(d, depth=0):
         try: entries = sorted(d.iterdir(), key=lambda p: p.name)
@@ -529,7 +529,7 @@ def _iter_package_files(nsp_dir):
         for p in entries:
             if p.name.startswith('.'): continue
             if p.is_dir() and not p.is_symlink():
-                if depth < 3 and p.name not in _SKIP_SCAN_DIRS and not p.name.endswith(('_build', '_survey', '.app', '.xcworkspace', '.xcodeproj', '.partial')):
+                if depth < 3 and p.name not in SKIP_SCAN_DIRS and not p.name.endswith(('_build', '_survey', '.app', '.xcworkspace', '.xcodeproj', '.partial')):
                     walk(p, depth + 1)
             elif p.suffix.lower() in ('.nsp', '.xci', '.nsz', '.xcz'):
                 out.append(p)
@@ -551,7 +551,7 @@ def scan_nsps(nsp_dir, from_package=None, contents_of=None, want=None):
         if low == 0: f['base'] = p
         elif low == 0x800: f['updates'].append((version, p))
         else: f['dlc'].append((tid, version, p))
-    for p in _iter_package_files(nsp_dir):   # a base game may be a cartridge dump (.xci: Monster Hunter Rise); nx_extract reads its secure partition; user subfolders (e.g. DLCs) are included
+    for p in package_files(nsp_dir):   # a base game may be a cartridge dump (.xci: Monster Hunter Rise); nx_extract reads its secure partition; user subfolders (e.g. DLCs) are included
         if p.name.startswith('._'): continue   # an AppleDouble file: on an exFAT / FAT drive macOS keeps a file's extended attributes (a download's quarantine flag) in `._<name>`, one beside each game file; is_package would skip it too, with a line for each
         if p.stat().st_size == 0:   # an empty file left by an incomplete download (the Zelda BotW folder holds a 0-byte DLC NSP next to the complete (1).nsp)
             say(f'skipping an empty file: {p.name}'); continue
@@ -2136,7 +2136,7 @@ def shader_regressions(py, repo, lib_dir, chain, logs):
     msg = f'{len(lines) - 1} shaders that translated in {prev.group(1) if prev else "the previous build"} fail in b-{chain}: a change to the translation chain broke them'
     PROG.say('\n'.join(lines[1:11]) + (f'\n... {len(lines) - 11} more in {log}' if len(lines) > 11 else ''))
     if ALLOW_SHADER_REGRESSIONS: say(f'[RED] {msg}; going on (ALLOW_SHADER_REGRESSIONS)'); return
-    raise BuildError(f'{msg} (list: {log}). Please report it at https://github.com/iCosiSenpai/HorizonNative/issues with that list; '
+    raise BuildError(f'{msg} (list: {log}). Please report it at https://github.com/iCosiSenpai/AetherNX/issues with that list; '
                      'ALLOW_SHADER_REGRESSIONS = True (--allow-shader-regressions) packs the app without those shaders')
 
 
@@ -2510,7 +2510,7 @@ def main(args=None):
     nsp_dir = Path(os.path.expanduser(args.nsp_dir or NSP_DIR or ask('NSP folder: ', 'the NSP folder'))).resolve()
     if not nsp_dir.is_dir(): raise BuildError(f'not a folder: {nsp_dir}')
     dump = dump_folder(nsp_dir)   # its files are not encrypted, so it needs no keys
-    keys = None if dump else Path(os.path.expanduser(args.keys or PROD_KEYS or ask('path of prod.keys: ', 'prod.keys (-k)'))).resolve()
+    keys = None if dump else Path(os.path.expanduser(args.keys or PROD_KEYS or default_keys() or ask('path of prod.keys: ', 'prod.keys (-k)'))).resolve()
     if keys and not keys.is_file(): raise BuildError(f'no such file: {keys}')
     sys.path.insert(0, str(repo / 'dm/games')); import game as gamemod   # game profiles
     global pg; import profile_guess as pg   # dm/games: a provisional profile's keys from the game files and from the heap check

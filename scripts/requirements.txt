@@ -1,0 +1,9 @@
+# Python packages the build needs (./aethernx setup installs them in .venv).
+lz4
+capstone>=5,<6
+fonttools
+backports.zstd; python_version < "3.14"
+# .nsz / .xcz packages
+nsz
+# Games built with system 22.0.0 or later (ZBIC-compressed code)
+zbic

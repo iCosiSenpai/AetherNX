@@ -1,159 +1,29 @@
-#!/usr/bin/env bash
-# =============================================================================
-# AetherNX — Universal Switch Decomp, Recomp & Native Apple Silicon Engine
-# Copyright (c) 2026 Alessio Cosi (iCosiSenpai). Licensed under GPL-3.0 / MIT.
-# =============================================================================
-set -euo pipefail
+#!/bin/bash
+# AetherNX command-line tool. Run ./aethernx help for the commands.
+# Uses $AETHERNX_PYTHON, else the project's .venv (made by ./aethernx setup), else python3 on PATH.
+set -eu
 
-AETHERNX_ROOT="$(cd "$(dirname "$0")" && pwd)"
-DEFAULT_KEYS="~/.switch/prod.keys"
+self="$0"
+while [ -L "$self" ]; do
+  link="$(readlink "$self")"
+  case "$link" in
+    /*) self="$link" ;;
+    *) self="$(dirname "$self")/$link" ;;
+  esac
+done
+root="$(cd "$(dirname "$self")" && pwd -P)"
 
-# Prefer the preconfigured nxnative-env Python 3.12+ with capstone, lz4, fonttools, nsz, zbic
-if [ -x "python3" ]; then
-  PYTHON_BIN="python3"
+if [ -n "${AETHERNX_PYTHON:-}" ]; then
+  python="$AETHERNX_PYTHON"
+elif [ -x "$root/.venv/bin/python3" ]; then
+  python="$root/.venv/bin/python3"
 else
-  PYTHON_BIN="$(command -v python3)"
+  python="$(command -v python3 || true)"
 fi
 
-has_keys_flag() {
-  for arg in "$@"; do
-    case "$arg" in
-      -k|--keys|--keys=*) return 0 ;;
-    esac
-  done
-  return 1
-}
+if [ -z "$python" ]; then
+  echo "aethernx: Python 3 was not found. Install it (brew install python), then run ./aethernx setup" >&2
+  exit 1
+fi
 
-usage() {
-  cat <<EOF
-╔══════════════════════════════════════════════════════════════════════════╗
-║  AetherNX — Universal Switch Decomp, Recomp & Native Porting Engine      ║
-║  Targets: macOS · iOS · iPadOS · tvOS (Apple Silicon ARM64 + Metal)      ║
-╚══════════════════════════════════════════════════════════════════════════╝
-
-Usage:
-  ./aethernx <command> [arguments]
-
-Commands:
-  studio                      Launch the native AetherNX Studio macOS app (AetherNX.app)
-  scan [--json] [dirs...]     Scan game folders for Base Game, Updates, DLCs & build status
-  unpack <file_or_dir> [...]  Unpack .zip/.rar/.7z/.tar.* archives & optionally decompress .nsz/.xcz
-  build-mac <game_dir> [...]  Build a native Apple Silicon macOS .app (Base + Update + DLCs)
-  build-ios <game_dir> [...]  Build an unsigned iOS / iPadOS .ipa (Zero-JIT, All-in-One)
-  build-ios-slim <game_dir>   Build a Slim (<250 MB) Zero-JIT .ipa for Free Apple ID / AltStore / SideStore
-  prepare-xcode <game_dir>    Generate an Xcode project & workspace for iOS/iPadOS signing
-  decomp-init <game_dir>      Initialize Decomp & Static Recomp workspace (functions, symbols, C++)
-  lift <game_dir> [...]       Run static AArch64-to-C11 recompilation lifter (nxrt)
-  skills                      List all 15 integrated AI Decomp / Recomp / Porting skills
-  doctor [--json]             Run full repository, toolchain, and syntax audit
-  help                        Show this help screen
-EOF
-}
-
-cmd="${1:-help}"
-shift || true
-
-case "$cmd" in
-  studio)
-    if [ -d "$AETHERNX_ROOT/AetherNX.app" ]; then
-      open "$AETHERNX_ROOT/AetherNX.app"
-    else
-      echo "Building AetherNX.app..."
-      bash "$AETHERNX_ROOT/studio/build_studio.sh"
-      open "$AETHERNX_ROOT/AetherNX.app"
-    fi
-    ;;
-  scan)
-    exec "$PYTHON_BIN" "$AETHERNX_ROOT/scripts/aethernx_decomp.py" scan "$@"
-    ;;
-  unpack)
-    if [ $# -lt 1 ]; then
-      echo "Usage: ./aethernx unpack <archive_or_dir> [--out <dir>] [--decompress-nsz] [--delete-archive]" >&2
-      exit 1
-    fi
-    exec "$PYTHON_BIN" "$AETHERNX_ROOT/scripts/aethernx_decomp.py" unpack "$@"
-    ;;
-  build-mac)
-    if [ $# -lt 1 ]; then
-      echo "Usage: ./aethernx build-mac <game_dir> [extra build_ipa_from_nsp.py flags]" >&2
-      exit 1
-    fi
-    GAME_DIR="$1"
-    shift
-    KEYS_ARGS=()
-    if ! has_keys_flag "$@" && [ -f "$DEFAULT_KEYS" ]; then
-      KEYS_ARGS=(-k "$DEFAULT_KEYS")
-    fi
-    exec "$PYTHON_BIN" "$AETHERNX_ROOT/scripts/build_ipa_from_nsp.py" "$GAME_DIR" "${KEYS_ARGS[@]}" --platform mac-app "$@"
-    ;;
-  build-ios)
-    if [ $# -lt 1 ]; then
-      echo "Usage: ./aethernx build-ios <game_dir> [extra build_ipa_from_nsp.py flags]" >&2
-      exit 1
-    fi
-    GAME_DIR="$1"
-    shift
-    KEYS_ARGS=()
-    if ! has_keys_flag "$@" && [ -f "$DEFAULT_KEYS" ]; then
-      KEYS_ARGS=(-k "$DEFAULT_KEYS")
-    fi
-    exec "$PYTHON_BIN" "$AETHERNX_ROOT/scripts/build_ipa_from_nsp.py" "$GAME_DIR" "${KEYS_ARGS[@]}" --platform ios "$@"
-    ;;
-  build-ios-slim)
-    if [ $# -lt 1 ]; then
-      echo "Usage: ./aethernx build-ios-slim <game_dir> [extra build_ipa_from_nsp.py flags]" >&2
-      exit 1
-    fi
-    GAME_DIR="$1"
-    shift
-    KEYS_ARGS=()
-    if ! has_keys_flag "$@" && [ -f "$DEFAULT_KEYS" ]; then
-      KEYS_ARGS=(-k "$DEFAULT_KEYS")
-    fi
-    exec "$PYTHON_BIN" "$AETHERNX_ROOT/scripts/build_ipa_from_nsp.py" "$GAME_DIR" "${KEYS_ARGS[@]}" --platform ios --romfs separate --keep-extracted "$@"
-    ;;
-  prepare-xcode)
-    if [ $# -lt 1 ]; then
-      echo "Usage: ./aethernx prepare-xcode <game_dir> [extra flags]" >&2
-      exit 1
-    fi
-    GAME_DIR="$1"
-    shift
-    KEYS_ARGS=()
-    if ! has_keys_flag "$@" && [ -f "$DEFAULT_KEYS" ]; then
-      KEYS_ARGS=(-k "$DEFAULT_KEYS")
-    fi
-    exec "$PYTHON_BIN" "$AETHERNX_ROOT/scripts/build_ipa_from_nsp.py" "$GAME_DIR" "${KEYS_ARGS[@]}" --prepare-xcode --keep-extracted "$@"
-    ;;
-  decomp-init)
-    if [ $# -lt 1 ]; then
-      echo "Usage: ./aethernx decomp-init <game_dir> [--json]" >&2
-      exit 1
-    fi
-    exec "$PYTHON_BIN" "$AETHERNX_ROOT/scripts/aethernx_decomp.py" decomp-init "$@"
-    ;;
-  lift|recomp-lift)
-    if [ $# -lt 1 ]; then
-      echo "Usage: ./aethernx lift <game_dir> [--module main|rtld] [--limit N]" >&2
-      exit 1
-    fi
-    if [ -d "$1" ]; then
-      exec "$PYTHON_BIN" "$AETHERNX_ROOT/scripts/aethernx_decomp.py" recomp-lift "$@"
-    else
-      PYTHONPATH="$AETHERNX_ROOT/recomp/nxrt/tools" \
-        exec "$PYTHON_BIN" "$AETHERNX_ROOT/recomp/nxrt/tools/gen.py" "$@"
-    fi
-    ;;
-  skills)
-    echo "Integrated AI Agent Skills in $AETHERNX_ROOT/skills/ (and .claude/skills/):"
-    for s in "$AETHERNX_ROOT/skills"/*; do
-      [ -d "$s" ] && echo "  • $(basename "$s")"
-    done
-    ;;
-  doctor|audit)
-    exec "$PYTHON_BIN" "$AETHERNX_ROOT/scripts/aethernx_decomp.py" doctor "$@"
-    ;;
-  help|-h|--help|*)
-    usage
-    ;;
-esac
+exec "$python" "$root/scripts/aethernx_cli.py" "$@"
