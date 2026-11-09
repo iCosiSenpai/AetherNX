@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+Switch 2 games, and an app that sets itself up and keeps itself up to date.
+
+**Engine**, synced with nxnative up to `7479adf` (2026-11-09), 358 changes:
+
+- **Switch 2 games**: Fire Emblem Fortune's Weave, Splatoon Raiders, Mario Kart World, Ocarina of Time, Hyrule Warriors: Age of Imprisonment and more; NVN2 task and mesh shaders, DLSS on MetalFX, AV1 movies (VideoToolbox, else dav1d).
+- Dump folders without `base/` (an update that holds the whole game, as Fortune's Weave's dumps do), NUP containers, and applications of several programs.
+- The shader translator was rebuilt (chain `c1ab2399d5c7`): **every game's shaders are translated again** at its next build.
+- AetherNX's own features carried over: the in-game menu and picture options, iCloud saves (now with the stricter rule that only the game's start decides between two changed saves), Assassin's Creed's in-place restart and the launcher.
 
 **AetherNX Studio**
 
