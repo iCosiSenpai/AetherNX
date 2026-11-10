@@ -3,6 +3,7 @@ import CryptoKit
 import Foundation
 import Observation
 import Security
+import zlib
 
 /// Where AetherNX stands against the newest versions: the Studio app (GitHub releases), the AetherNX tools checkout
 /// (its Git remote), and nxnative, the engine AetherNX is built on (its commits since AetherNX's last sync).
@@ -155,9 +156,11 @@ final class UpdateCenter {
         return false
     }
 
-    private nonisolated static func git(_ engine: URL, _ arguments: [String]) async -> (ok: Bool, out: String) {
+    private nonisolated static func git(_ engine: URL, _ arguments: [String], timeout: TimeInterval? = nil) async -> (ok: Bool, out: String) {
+        // No password prompt, and a transfer that stalls (a captive portal, a dead proxy) gives up: the check must come back for the buttons it disables to work again
         let result = await CommandRunner.capture(executable: URL(filePath: "/usr/bin/git"), arguments: ["-C", engine.path] + arguments, directory: engine,
-                                                 environment: ["GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "/usr/bin/false"])
+                                                 environment: ["GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "/usr/bin/false", "GIT_HTTP_LOW_SPEED_LIMIT": "1000", "GIT_HTTP_LOW_SPEED_TIME": "20"],
+                                                 timeout: timeout)
         return (result.status == 0, String(decoding: result.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
@@ -166,7 +169,7 @@ final class UpdateCenter {
         guard await git(engine, ["rev-parse", "--is-inside-work-tree"]).ok else {
             return .failure(CheckError(message: String(localized: "The AetherNX folder is not a Git checkout: download the tools again to get updates.")))
         }
-        guard await git(engine, ["fetch", "--quiet", "origin"]).ok else {
+        guard await git(engine, ["fetch", "--quiet", "origin"], timeout: 90).ok else {
             return .failure(CheckError(message: String(localized: "The tools' remote could not be reached.")))
         }
         let branch = await git(engine, ["rev-parse", "--abbrev-ref", "HEAD"]).out
@@ -242,6 +245,13 @@ final class UpdateCenter {
             return
         }
         let current = Bundle.main.bundleURL
+        // Run from the disk image (read-only) or from where macOS keeps a downloaded app apart until it is moved (App Translocation, also read-only): the bundle
+        // cannot be replaced there, so the release page opens instead of a download that would end in a file system error
+        guard FileManager.default.isWritableFile(atPath: current.deletingLastPathComponent().path), !current.path.contains("/AppTranslocation/") else {
+            appError = String(localized: "AetherNX runs from a place it cannot replace itself in (its disk image, or a downloaded copy not yet moved): move it to Applications to update in place.")
+            NSWorkspace.shared.open(release.page)
+            return
+        }
         phase = .installing(String(localized: "Downloading AetherNX \(release.version)…"))
         Task {
             do {
@@ -257,6 +267,9 @@ final class UpdateCenter {
                 let listed = String(decoding: list, as: UTF8.self).split(whereSeparator: \.isNewline)
                     .first { $0.hasSuffix(" " + zip.lastPathComponent) }?.split(separator: " ").first.map(String.init)
                 guard listed?.lowercased() == digest else { throw CheckError(message: String(localized: "The download does not match the release's checksum.")) }
+                // What is unpacked before the signature is checked must stay in this folder: only the app (and ditto's __MACOSX copy of its metadata), no path
+                // that leaves the folder and no link a later entry could be written through (the checksum comes from the same release, so it proves nothing about that)
+                guard Self.isSafeAppArchive(archive) else { throw CheckError(message: String(localized: "The download holds something other than the app: it was not installed.")) }
                 let zipFile = folder.appending(path: zip.lastPathComponent)
                 try archive.write(to: zipFile)
                 let unpacked = folder.appending(path: "unpacked")
@@ -269,6 +282,7 @@ final class UpdateCenter {
                 }
                 phase = .installing(String(localized: "Installing…"))
                 _ = try FileManager.default.replaceItemAt(current, withItemAt: app)
+                try? FileManager.default.removeItem(at: folder)   // now: relaunch ends this process, and the defer above never runs
                 Self.relaunch(current)
             } catch {
                 phase = .idle
@@ -285,6 +299,98 @@ final class UpdateCenter {
               SecRequirementCreateWithString(publisherRequirement as CFString, [], &requirement) == errSecSuccess, let requirement else { return false }
         let flags = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSCheckNestedCode | kSecCSStrictValidate)
         return SecStaticCodeCheckValidity(code, flags, requirement) == errSecSuccess
+    }
+
+    /// Whether every entry of a release archive stays in the folder it is unpacked in: a file or a folder (no link) under
+    /// AetherNX.app/ or ditto's __MACOSX/, with no empty, "." or ".." part, no backslash and no leading "/".
+    nonisolated static func isSafeAppArchive(_ data: Data) -> Bool {
+        guard let entries = zipEntries(data), !entries.isEmpty else { return false }
+        return entries.allSatisfy { entry in
+            let type = entry.mode & 0o170000
+            guard type == 0 || type == 0o100000 || type == 0o040000, !entry.name.contains("\\") else { return false }
+            var parts = entry.name.split(separator: "/", omittingEmptySubsequences: false)
+            if parts.count > 1, parts.last == "" { parts.removeLast() }   // a folder's name ends in "/"
+            guard let first = parts.first, first == "AetherNX.app" || first == "__MACOSX" else { return false }
+            return parts.allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
+        }
+    }
+
+    /// The entries of a ZIP archive as ditto unpacks it, name and Unix mode, or nil when a reader could find anything else.
+    /// ditto walks the local headers in file order, names each entry from its local header and takes its mode from the central
+    /// directory record of the same rank; it also unpacks a local entry the central directory leaves out. So the local headers
+    /// must follow one another from the start of the file to the central directory, each with the name and sizes of its record,
+    /// and each compressed stream must end where its record says. Zip64, encryption and methods other than stored and deflate
+    /// are refused: a release is a ditto archive far under 4 GB.
+    nonisolated static func zipEntries(_ data: Data) -> [(name: String, mode: UInt16)]? {
+        let bytes = [UInt8](data)
+        func u16(_ at: Int) -> Int? { at >= 0 && at + 2 <= bytes.count ? Int(bytes[at]) | Int(bytes[at + 1]) << 8 : nil }
+        func u32(_ at: Int) -> Int? { u16(at).flatMap { low in u16(at + 2).map { low | $0 << 16 } } }
+        // The end record: 22 bytes, then a comment that must reach the end of the file exactly
+        guard bytes.count >= 22,
+              let end = stride(from: bytes.count - 22, through: max(0, bytes.count - 22 - 0xFFFF), by: -1)
+                .first(where: { u32($0) == 0x0605_4b50 && u16($0 + 20) == bytes.count - $0 - 22 }),
+              u16(end + 4) == 0, u16(end + 6) == 0, let count = u16(end + 10), u16(end + 8) == count, count != 0xFFFF,
+              let size = u32(end + 12), let start = u32(end + 16), start + size == end else { return nil }
+        var entries: [(name: String, mode: UInt16)] = []
+        var record = start, local = 0
+        for _ in 0..<count {
+            guard u32(record) == 0x0201_4b50, let flags = u16(record + 8), let method = u16(record + 10),
+                  let packed = u32(record + 20), let unpacked = u32(record + 24), let nameLength = u16(record + 28),
+                  let extraLength = u16(record + 30), let commentLength = u16(record + 32), let attributes = u32(record + 38),
+                  let offset = u32(record + 42), record + 46 + nameLength + extraLength + commentLength <= end,
+                  flags & 1 == 0, method == 0 || method == 8, packed != 0xFFFF_FFFF, unpacked != 0xFFFF_FFFF else { return nil }
+            let name = bytes[(record + 46)..<(record + 46 + nameLength)]
+            guard !name.contains(0), let text = String(bytes: name, encoding: .utf8) else { return nil }
+            // Its local header comes right after the previous entry, with the same name, flags and method
+            guard offset == local, u32(local) == 0x0403_4b50, u16(local + 6) == flags, u16(local + 8) == method,
+                  u16(local + 26) == nameLength, let localExtra = u16(local + 28),
+                  local + 30 + nameLength + localExtra + packed <= start,
+                  bytes[(local + 30)..<(local + 30 + nameLength)] == name else { return nil }
+            let body = local + 30 + nameLength + localExtra
+            if flags & 8 == 0 {
+                guard u32(local + 18) == packed, u32(local + 22) == unpacked else { return nil }
+            }
+            if method == 0 {
+                guard flags & 8 == 0, packed == unpacked else { return nil }   // a stored entry's end is known only from its sizes
+            } else {
+                guard inflates(bytes, from: body, count: packed, to: unpacked) else { return nil }
+            }
+            local = body + packed
+            if flags & 8 != 0 {
+                // The data descriptor, with or without its signature, repeats the record's sizes
+                let sizes = u32(local) == 0x0807_4b50 ? local + 8 : local + 4
+                guard u32(sizes) == packed, u32(sizes + 4) == unpacked else { return nil }
+                local = sizes + 8
+            }
+            entries.append((text, UInt16(attributes >> 16)))
+            record += 46 + nameLength + extraLength + commentLength
+        }
+        guard record == end, local == start else { return nil }
+        return entries
+    }
+
+    /// Whether `count` bytes from `start` are one raw deflate stream that ends on its last byte and inflates to `size` bytes, so
+    /// that a reader finding the end by inflating stops where the central directory says. zlib reports what it did not read;
+    /// the Compression framework does not.
+    nonisolated static func inflates(_ bytes: [UInt8], from start: Int, count: Int, to size: Int) -> Bool {
+        var stream = z_stream()
+        guard inflateInit2_(&stream, -MAX_WBITS, zlibVersion(), Int32(MemoryLayout<z_stream>.size)) == Z_OK else { return false }
+        defer { inflateEnd(&stream) }
+        var scratch = [UInt8](repeating: 0, count: 1 << 16)
+        return bytes.withUnsafeBufferPointer { input in
+            scratch.withUnsafeMutableBufferPointer { output in
+                stream.next_in = UnsafeMutablePointer(mutating: input.baseAddress! + start)
+                stream.avail_in = UInt32(count)
+                while true {
+                    stream.next_out = output.baseAddress
+                    stream.avail_out = UInt32(output.count)
+                    let status = inflate(&stream, Z_NO_FLUSH)
+                    if status == Z_STREAM_END { return stream.avail_in == 0 && stream.total_out == UInt(size) }
+                    // The input ran out before the end, the stream is damaged, or it inflates past the record's size
+                    if status != Z_OK || stream.total_out > UInt(size) { return false }
+                }
+            }
+        }
     }
 
     /// Opens the app again once this process has ended.

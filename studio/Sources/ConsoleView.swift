@@ -9,6 +9,8 @@ struct ConsoleView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var focusedID: Game.ID?
     @FocusState private var hasKeyboardFocus: Bool
+    @AppStorage(Pref.downloadArtwork) private var downloadArtwork = true   // the tiles' lookups follow the setting (ArtworkStore.lookupKey)
+    @AppStorage(Pref.setupCompleted) private var setupCompleted = false
 
     /// Built games first, the most recently played of them first; then the rest by name.
     private var games: [Game] {
@@ -69,7 +71,7 @@ struct ConsoleView: View {
                 HStack(spacing: 28) {
                     ForEach(games) { game in
                         ConsoleTile(game: game, icon: model.artwork.icon(for: game), isFocused: game.id == focused?.id, isBusy: model.jobFor(game)?.isRunning == true)
-                            .task(id: game.titleId) { model.artwork.request(game) }
+                            .task(id: model.artwork.lookupKey(for: game)) { model.artwork.request(game) }
                             .id(game.id)
                             .onTapGesture(count: 2) { focusedID = game.id; handle(.primary) }
                             .onTapGesture { focusedID = game.id }
@@ -262,7 +264,7 @@ private struct ConsoleTile: View {
         .overlay(alignment: .bottom) {
             if game.macApp == nil {
                 Group {
-                    if isBusy { Label("Building", systemImage: "hourglass") } else { Label("Needs a build", systemImage: "hammer.fill") }
+                    if isBusy { Label("Building…", systemImage: "hourglass") } else { Label("Needs a build", systemImage: "hammer.fill") }
                 }
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.white)

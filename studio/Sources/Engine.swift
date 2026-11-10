@@ -59,9 +59,28 @@ final class CommandRunner {
         process.standardOutput = out
         process.standardError = err
         process.standardInput = FileHandle.nullDevice
+        // The exit is reported once both readers have read to the end: both are counted in before the process can end
         let group = DispatchGroup()
+        group.enter(); group.enter()
+        process.terminationHandler = { process in
+            let status = process.terminationStatus
+            group.notify(queue: .main) {
+                MainActor.assumeIsolated {
+                    self.isRunning = false
+                    onExit(status)
+                }
+            }
+        }
+        do {
+            try process.run()
+        } catch {
+            // Nothing started: no reader is left waiting on pipes this process holds open (each failed start used to leave two threads and four descriptors)
+            group.leave(); group.leave()
+            for pipe in [out, err] { try? pipe.fileHandleForReading.close(); try? pipe.fileHandleForWriting.close() }
+            throw error
+        }
+        isRunning = true
         for (pipe, isError) in [(out, false), (err, true)] {
-            group.enter()
             Thread.detachNewThread {
                 let handle = pipe.fileHandleForReading
                 var buffer = Data()
@@ -82,17 +101,6 @@ final class CommandRunner {
                 group.leave()
             }
         }
-        process.terminationHandler = { process in
-            let status = process.terminationStatus
-            group.notify(queue: .main) {
-                MainActor.assumeIsolated {
-                    self.isRunning = false
-                    onExit(status)
-                }
-            }
-        }
-        try process.run()
-        isRunning = true
     }
 
     /// SIGINT first, so the build script stops cleanly; SIGTERM if it is still there after five seconds.
@@ -105,8 +113,10 @@ final class CommandRunner {
         }
     }
 
-    /// Runs to the end and returns stdout and stderr; for short commands such as scan and doctor.
-    nonisolated static func capture(executable: URL, arguments: [String], directory: URL?, environment: [String: String] = [:]) async -> (status: Int32, stdout: Data, stderr: String) {
+    /// Runs to the end and returns stdout and stderr; for short commands such as scan and doctor. With a timeout, a command still running then is ended
+    /// (SIGTERM) and its status is what that makes of it: a network command that stalls must not hold its caller for good.
+    nonisolated static func capture(executable: URL, arguments: [String], directory: URL?, environment: [String: String] = [:],
+                                    timeout: TimeInterval? = nil) async -> (status: Int32, stdout: Data, stderr: String) {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
@@ -128,17 +138,22 @@ final class CommandRunner {
                     continuation.resume(returning: (-1, Data(), error.localizedDescription))
                     return
                 }
-                var errData = Data()
+                if let timeout {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if process.isRunning { process.terminate() } }
+                }
+                // stderr is read on a thread of its own, so that neither pipe fills while the other is read; the box hands its bytes over once that thread is done
+                final class Box: @unchecked Sendable { var data = Data() }
+                let errBox = Box()
                 let errReader = DispatchGroup()
                 errReader.enter()
                 DispatchQueue.global().async {
-                    errData = err.fileHandleForReading.readDataToEndOfFile()
+                    errBox.data = err.fileHandleForReading.readDataToEndOfFile()
                     errReader.leave()
                 }
                 let outData = out.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
-                errReader.wait()
-                continuation.resume(returning: (process.terminationStatus, outData, String(decoding: errData, as: UTF8.self)))
+                errReader.wait()   // orders the write above before this read
+                continuation.resume(returning: (process.terminationStatus, outData, String(decoding: errBox.data, as: UTF8.self)))
             }
         }
     }

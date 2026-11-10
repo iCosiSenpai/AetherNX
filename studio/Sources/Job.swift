@@ -110,7 +110,7 @@ final class Job: Identifiable {
         case "shaders_stale":
             return String(localized: "Shaders changed since the last build: rebuilding them.")
         default:
-            return trimmed
+            return nil   // an event this app does not show (game: what was packed, for a front end that lists it); every message comes as say
         }
     }
 

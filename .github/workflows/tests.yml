@@ -173,6 +173,8 @@ jobs:
           persist-credentials: false
       - name: Build the app (ad-hoc signed)
         run: bash studio/build.sh
+      - name: The app's own logic (synthetic folders and archives)
+        run: python3 -m unittest -v studio/tests/test_studio.py
       - name: The command-line tool starts and answers
         run: |
           ./aethernx version

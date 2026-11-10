@@ -172,6 +172,7 @@ struct GameIcon: View {
     let size: CGFloat
     @Environment(AppModel.self) private var model
     @AppStorage(Pref.downloadArtwork) private var downloadArtwork = true   // redraws when the setting changes
+    @AppStorage(Pref.setupCompleted) private var setupCompleted = false   // and when the Setup Assistant ends: no lookup before (ArtworkStore.request)
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: size * 0.225, style: .continuous)
@@ -194,7 +195,7 @@ struct GameIcon: View {
         .clipShape(shape)
         .overlay(shape.strokeBorder(.separator, lineWidth: 0.5))
         .accessibilityHidden(true)
-        .task(id: game.titleId) { model.artwork.request(game) }
+        .task(id: model.artwork.lookupKey(for: game)) { model.artwork.request(game) }
     }
 }
 

@@ -104,6 +104,12 @@ struct SetupCheckView: View {
                 .listStyle(.inset)
             } else if model.engine == nil {
                 ContentUnavailableView("AetherNX folder not set", systemImage: "shippingbox", description: Text("Choose it in Settings → General."))
+            } else if let error = model.setupError, !model.isCheckingSetup {
+                ContentUnavailableView {
+                    Label("No setup report", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(verbatim: error).textSelection(.enabled)
+                }
             } else {
                 ProgressView("Checking…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

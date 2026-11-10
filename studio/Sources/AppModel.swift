@@ -125,6 +125,8 @@ final class AppModel {
     var showsSetupAssistant = false
     var showsUpdates = false
     private(set) var setupReport: SetupReport?
+    /// Why the last setup check gave no report (no JSON from `doctor`: a Python that cannot run, say), shown where the report would be.
+    private(set) var setupError: String?
     private(set) var isCheckingSetup = false
     var keys = KeysStatus.current()
     var confirmation: Confirmation?
@@ -358,15 +360,12 @@ final class AppModel {
     private func startBuild(_ game: Game, target: BuildTarget) {
         guard canStartJob, let engine else { return }
         let defaults = UserDefaults.standard
-        var args = ["build", game.folder, "--target", target.rawValue, "--progress", "json"]
-        if keys.isUsable { args += ["-k", keys.path] }
-        args.append(defaults.bool(forKey: Pref.keepExtracted) || target == .xcode ? "--keep-extracted" : "--no-keep-extracted")
-        if let language = defaults.string(forKey: Pref.language), !language.isEmpty { args += ["--language", language] }
-        if !defaults.bool(forKey: Pref.pipelineArchive) { args += ["--gpu", "none"] }
-        if target == .ios || target == .iosSlim { args.append(defaults.bool(forKey: Pref.showFPS) ? "--show-fps" : "--no-show-fps") }
-        if target == .mac, let identity = defaults.string(forKey: Pref.macSigningIdentity), !identity.isEmpty { args += ["--mac-sign", identity] }
-        if let extra = defaults.string(forKey: Pref.extraArguments), !extra.isEmpty {
-            args += extra.split(separator: " ").map(String.init)
+        guard let args = Self.buildArguments(folder: game.folder, target: target, keys: keys.isUsable ? keys.path : nil,
+                                             keepExtracted: defaults.bool(forKey: Pref.keepExtracted), language: defaults.string(forKey: Pref.language),
+                                             pipelineArchive: defaults.bool(forKey: Pref.pipelineArchive), showFPS: defaults.bool(forKey: Pref.showFPS),
+                                             macSigningIdentity: defaults.string(forKey: Pref.macSigningIdentity), extra: defaults.string(forKey: Pref.extraArguments) ?? "") else {
+            errorMessage = String(localized: "The extra build options in Settings → Building have a quote that is not closed.")
+            return
         }
         let job = Job(title: target.jobTitle, gameID: game.id, target: target)
         if defaults.bool(forKey: Pref.notifyBuilds) { Notifier.requestPermission() }
@@ -633,8 +632,11 @@ final class AppModel {
             let result = await CommandRunner.capture(executable: engine.appending(path: "aethernx"), arguments: ["doctor", "--json"], directory: engine)
             isCheckingSetup = false
             setupReport = try? JSONDecoder.snakeCase.decode(SetupReport.self, from: result.stdout)
-            if setupReport == nil {
-                errorMessage = String(localized: "The setup check did not run: \(result.stderr.suffix(300))")
+            if setupReport == nil {   // shown in the setup check and the Setup Assistant themselves: an alert would come up behind their sheet
+                let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                setupError = String(localized: "The setup check did not run: \(detail.isEmpty ? String(localized: "Exit code \(result.status)") : String(detail.suffix(300)))")
+            } else {
+                setupError = nil
             }
         }
     }
@@ -645,6 +647,51 @@ extension JSONDecoder {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         return decoder
+    }
+}
+
+extension AppModel {
+    /// `./aethernx build` with the settings of Settings → Building, for one target; nil when the extra options have a quote that is not closed.
+    nonisolated static func buildArguments(folder: String, target: BuildTarget, keys: String?, keepExtracted: Bool, language: String?, pipelineArchive: Bool, showFPS: Bool,
+                                           macSigningIdentity: String?, extra: String) -> [String]? {
+        guard let extraWords = splitArguments(extra) else { return nil }
+        var args = ["build", folder, "--target", target.rawValue, "--progress", "json"]
+        if let keys { args += ["-k", keys] }
+        // Xcode builds from the extracted files, and a build with the game files separate keeps them for the copy to the phone: the build refuses either without them
+        args.append(keepExtracted || target == .xcode || target == .iosSlim ? "--keep-extracted" : "--no-keep-extracted")
+        if let language, !language.isEmpty { args += ["--language", language] }
+        if !pipelineArchive { args += ["--gpu", "none"] }
+        if target == .ios || target == .iosSlim { args.append(showFPS ? "--show-fps" : "--no-show-fps") }
+        if target == .mac, let macSigningIdentity, !macSigningIdentity.isEmpty { args += ["--mac-sign", macSigningIdentity] }
+        return args + extraWords
+    }
+
+    /// The words of the extra build options as a shell would split them, without running one: spaces separate them, quotes keep a value with spaces
+    /// together ('…' takes everything as written, "…" takes \" and \\ as one character), and a backslash outside quotes keeps the next character.
+    /// nil when a quote is not closed.
+    nonisolated static func splitArguments(_ text: String) -> [String]? {
+        var words: [String] = [], word = "", inWord = false
+        var quote: Character?, escaped = false
+        for c in text {
+            if escaped {
+                if quote == "\"" && c != "\"" && c != "\\" { word.append("\\") }   // inside "…", a backslash is kept before any other character
+                word.append(c); escaped = false; inWord = true
+            } else if c == "\\" && quote != "'" {
+                escaped = true
+            } else if let open = quote {
+                if c == open { quote = nil } else { word.append(c) }
+            } else if c == "'" || c == "\"" {
+                quote = c; inWord = true
+            } else if c.isWhitespace {
+                if inWord { words.append(word); word = ""; inWord = false }
+            } else {
+                word.append(c); inWord = true
+            }
+        }
+        if quote != nil { return nil }
+        if escaped { word.append("\\"); inWord = true }
+        if inWord { words.append(word) }
+        return words
     }
 }
 

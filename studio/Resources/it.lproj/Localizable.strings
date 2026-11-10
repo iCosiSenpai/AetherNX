@@ -88,6 +88,7 @@
 "Game Files" = "File del gioco";
 "Game default" = "Predefinita del gioco";
 "Game language" = "Lingua del gioco";
+"Game update" = "Aggiornamento";
 "General" = "Generali";
 "Has a game profile" = "Ha un profilo di gioco";
 "Hide Activity" = "Nascondi attività";
@@ -104,6 +105,7 @@
 "Looking for games…" = "Ricerca giochi…";
 "Mac App" = "App per Mac";
 "Mac app built" = "App per Mac compilata";
+"Made" = "Create";
 "Make" = "Crea";
 "Making function tables" = "Creazione tabelle delle funzioni";
 "Missing" = "Mancante";
@@ -118,6 +120,7 @@
 "No folders yet." = "Ancora nessuna cartella.";
 "No game profile: best-effort build" = "Nessun profilo di gioco: build sperimentale";
 "No keys yet: builds cannot decrypt the games." = "Nessuna chiave: le build non possono decifrare i giochi.";
+"No setup report" = "Nessun esito del controllo";
 "None" = "Nessuno";
 "None. The newest update gives the best results." = "Nessuno. L'aggiornamento più recente dà i risultati migliori.";
 "Not Recognised" = "Non riconosciuti";
@@ -134,7 +137,7 @@
 "Prepare Xcode Project" = "Prepara progetto Xcode";
 "Preparing Xcode project" = "Preparazione progetto Xcode";
 "Put each game in its own folder inside a library folder, with its packages or an archive of them." = "Metti ogni gioco nella sua cartella dentro una cartella della libreria, con i suoi pacchetti o un loro archivio.";
-"Ready" = "Pronte";
+"Ready" = "Pronto";
 "Rebuild" = "Ricompila";
 "Release Notes" = "Note di rilascio";
 "Remove %@" = "Rimuovi %@";
@@ -174,6 +177,7 @@
 "The library scan stopped with exit code %d." = "La scansione della libreria si è fermata con il codice di uscita %d.";
 "The main module translated to C by nxrt's static recompiler. Needs the unicorn package." = "Il modulo main tradotto in C dal ricompilatore statico di nxrt. Richiede il pacchetto unicorn.";
 "The next build translates every shader again, which can take a long time." = "La prossima build tradurrà di nuovo tutti gli shader, e può volerci parecchio.";
+"The extra build options in Settings → Building have a quote that is not closed." = "Nelle opzioni di build aggiuntive in Impostazioni → Compilazione c'è una virgoletta non chiusa.";
 "The setup check did not run: %@" = "Il controllo della configurazione non è partito: %@";
 "This does not look like prod.keys: it has no header_key." = "Non sembra un prod.keys: manca header_key.";
 "This game has a profile in the engine: settings, patches and shaders made for it." = "Questo gioco ha un profilo nel motore: impostazioni, patch e shader fatti apposta.";
@@ -182,7 +186,7 @@
 "Unpack" = "Estrai";
 "Unpack Archive…" = "Estrai archivio…";
 "Unpacking %@" = "Estrazione di %@";
-"Update" = "Aggiornamento";
+"Update" = "Aggiorna";
 "Updating AetherNX" = "Aggiornamento di AetherNX";
 "Use Folder" = "Usa cartella";
 "Use ~/.switch/prod.keys" = "Usa ~/.switch/prod.keys";
@@ -205,7 +209,7 @@
 "Back" = "Indietro";
 "Battery %lld percent" = "Batteria al %lld per cento";
 "Build again" = "Ricompila";
-"Building" = "In compilazione";
+"Building…" = "In compilazione…";
 "Connect a controller, or use the arrow keys" = "Collega un controller, o usa i tasti freccia";
 "Console Mode" = "Modalità Console";
 "Controller" = "Controller";
@@ -369,6 +373,8 @@
 "The download does not match the release's checksum." = "Il download non corrisponde al checksum della release.";
 "The download could not be unpacked." = "Non è stato possibile estrarre il download.";
 "The downloaded app is not signed by AetherNX's publisher, or is another version: it was not installed." = "L'app scaricata non è firmata dall'autore di AetherNX, oppure è un'altra versione: non è stata installata.";
+"The download holds something other than the app: it was not installed." = "Il download contiene altro oltre all'app: non è stato installato.";
+"AetherNX runs from a place it cannot replace itself in (its disk image, or a downloaded copy not yet moved): move it to Applications to update in place." = "AetherNX è aperto da una posizione in cui non può sostituirsi (la sua immagine disco, o una copia scaricata non ancora spostata): spostalo in Applicazioni per aggiornarlo sul posto.";
 "Installing…" = "Installazione…";
 "Update Available" = "Aggiornamento disponibile";
 "An update of AetherNX or its tools is ready" = "È pronto un aggiornamento di AetherNX o dei suoi strumenti";

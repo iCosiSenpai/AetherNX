@@ -350,9 +350,9 @@ private struct FilesSection: View {
                 }
                 Divider()
                 if let update = game.latestUpdate {
-                    FileRow(title: "Update", value: game.updates.count > 1 ? String(localized: "v\(update.version), newest of \(game.updates.count)") : "v\(update.version)", size: update.size)
+                    FileRow(title: "Game update", value: game.updates.count > 1 ? String(localized: "v\(update.version), newest of \(game.updates.count)") : "v\(update.version)", size: update.size)
                 } else {
-                    FileRow(title: "Update", value: String(localized: "None. The newest update gives the best results."), size: nil)
+                    FileRow(title: "Game update", value: String(localized: "None. The newest update gives the best results."), size: nil)
                 }
                 Divider()
                 if game.dlc.isEmpty {
@@ -500,7 +500,7 @@ private struct DeveloperSection: View {
                         .foregroundStyle(.secondary)
                         .padding(.vertical, 8)
                     Divider()
-                    toolRow(title: "Function tables", status: game.decompDir != nil ? String(localized: "Ready") : String(localized: "Not made yet"),
+                    toolRow(title: "Function tables", status: game.decompDir != nil ? String(localized: "Made") : String(localized: "Not made yet"),
                             detail: "Functions and symbols of every module, with a C++ project that has the SDK headers.",
                             action: "Make", folder: game.decompDir) { model.generateFunctionTables(game) }
                     Divider()

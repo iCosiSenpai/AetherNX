@@ -209,6 +209,9 @@ private struct ToolsStep: View {
                                 .disabled(!model.canStartJob)
                         }
                     }
+                } else if let error = model.setupError, !model.isCheckingSetup {
+                    Label { Text(verbatim: error).textSelection(.enabled) } icon: { Image(systemName: "exclamationmark.triangle.fill") }
+                        .foregroundStyle(.orange)
                 }
             }
         }

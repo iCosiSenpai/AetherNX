@@ -21,9 +21,13 @@ struct OnlineArt: Codable, Equatable {
 @Observable
 final class ArtworkStore {
     private(set) var art: [String: OnlineArt] = [:]
+    /// Each Download Again: the views ask for their games again (lookupKey).
+    private(set) var resets = 0
     @ObservationIgnored private var queue: [(titleId: String, name: String)] = []
     @ObservationIgnored private var queued: Set<String> = []
     @ObservationIgnored private var isWorking = false
+    /// Counts the times the store was cleared: a lookup that started before the last clear is dropped.
+    @ObservationIgnored private var generation = 0
     @ObservationIgnored let directory: URL
 
     /// A game no service had is asked again after this long.
@@ -71,9 +75,10 @@ final class ArtworkStore {
 
     // MARK: Fetching
 
-    /// Looks the game up once (again a week after a miss); the views ask for every game they show.
+    /// Looks the game up once (again a week after a miss); the views ask for every game they show. Nothing is asked before the Setup Assistant is
+    /// done (or skipped): its Preferences step is where the player first sees that the title ID or the name goes to nlib.cc and Wikipedia.
     func request(_ game: Game) {
-        guard Self.isEnabled, game.isBuildable, let id = game.titleId, !queued.contains(id) else { return }
+        guard Self.isEnabled, Self.setupIsDone, game.isBuildable, let id = game.titleId, !queued.contains(id) else { return }
         if let entry = art[id], entry.source != nil || Date().timeIntervalSince(entry.fetched) < Self.retryAfter { return }
         queued.insert(id)
         queue.append((id, game.name))
@@ -81,9 +86,16 @@ final class ArtworkStore {
         isWorking = true
         Task {
             while !queue.isEmpty {
-                let next = queue.removeFirst()
+                guard Self.isEnabled else {   // turned off meanwhile: the games still waiting are not asked for, and are again when it is back on
+                    for waiting in queue { queued.remove(waiting.titleId) }
+                    queue.removeAll()
+                    break
+                }
+                let next = queue.removeFirst(), generation = self.generation
                 let folder = directory.appending(path: next.titleId)
-                if let entry = await Self.fetch(titleId: next.titleId, name: next.name, into: folder) {
+                let entry = await Self.fetch(titleId: next.titleId, name: next.name, into: folder)
+                guard generation == self.generation else { continue }   // Download Again cleared the store during this fetch: its pictures went with it, and it is asked again
+                if let entry {
                     if let data = try? JSONEncoder().encode(entry) { try? data.write(to: folder.appending(path: "art.json")) }
                     IconCache.forget(prefix: folder.path)
                     art[next.titleId] = entry
@@ -94,11 +106,18 @@ final class ArtworkStore {
     }
 
     func clear() {
+        generation += 1; resets += 1
         try? FileManager.default.removeItem(at: directory)
         IconCache.forget(prefix: directory.path)
         art = [:]
         queued = []
+        queue.removeAll()
     }
+
+    static var setupIsDone: Bool { UserDefaults.standard.bool(forKey: Pref.setupCompleted) }
+
+    /// What a view's lookup task is keyed by: the game, and whatever lets a lookup through that did not before (the setup done, the setting on, the store cleared).
+    func lookupKey(for game: Game) -> String { "\(game.titleId ?? game.id)|\(resets)|\(Self.setupIsDone)|\(Self.isEnabled)" }
 
     /// nil when the services could not be reached: nothing is recorded and the game is asked again next time.
     nonisolated static func fetch(titleId: String, name: String, into folder: URL) async -> OnlineArt? {
