@@ -1,0 +1,14 @@
+# Dependabot raises the actions the workflows pin to commit SHAs (tests.yml: a tag can be moved, a SHA cannot): one pull request a week with every new SHA, and its tag
+# in the comment beside it. The Python pins in .github/requirements stay by hand: a new ruff or pyright goes with `lint_python.py --rebaseline` in the same change
+# (lint.txt), and the fuzz, coverage and tools pins move with the tests that use them.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+    commit-message:
+      prefix: CI
