@@ -225,7 +225,7 @@
 "The base game, updates and DLC, or the archive or dump they came in." = "Il gioco base, gli aggiornamenti e i DLC, oppure l'archivio o il dump da cui provengono.";
 "Extracted game files and the shader cache. The next build starts from scratch." = "I file estratti del gioco e la cache degli shader. La prossima build riparte da zero.";
 "The Mac app and the IPAs built from the game." = "L'app per Mac e gli IPA creati dal gioco.";
-"Your progress on this Mac, and the shader pipelines the game made while you played." = "I tuoi progressi su questo Mac e le pipeline degli shader create dal gioco mentre giocavi.";
+"Everything AetherNX keeps for the game on this Mac: your progress, the shader pipelines it made while you played, its env.txt and DLC added after the build." = "Tutto ciò che AetherNX conserva per il gioco su questo Mac: i tuoi progressi, le pipeline degli shader create mentre giocavi, il suo env.txt e i DLC aggiunti dopo la build.";
 "The saves the game shares through iCloud: removed from every device." = "I salvataggi che il gioco condivide tramite iCloud: vengono rimossi da tutti i dispositivi.";
 "The game's log, its caches and the choices made in its launcher." = "Il log del gioco, le sue cache e le scelte fatte nel suo launcher.";
 "Danger Zone" = "Zona pericolosa";
@@ -242,6 +242,8 @@
 "Delete Permanently" = "Elimina definitivamente";
 "Delete %@ permanently?" = "Eliminare definitivamente %@?";
 "This cannot be undone." = "Non si può annullare.";
+"and %lld more" = "e altri %lld";
+"%@ is open: quit it before removing it." = "%@ è aperto: chiudilo prima di rimuoverlo.";
 "Welcome" = "Benvenuto";
 "Tools" = "Strumenti";
 "Preferences" = "Preferenze";

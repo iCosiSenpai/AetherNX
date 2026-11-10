@@ -23,7 +23,7 @@ struct RemovalPlan: Equatable {
             case .gameFiles: "The base game, updates and DLC, or the archive or dump they came in."
             case .buildFolder: "Extracted game files and the shader cache. The next build starts from scratch."
             case .apps: "The Mac app and the IPAs built from the game."
-            case .saves: "Your progress on this Mac, and the shader pipelines the game made while you played."
+            case .saves: "Everything AetherNX keeps for the game on this Mac: your progress, the shader pipelines it made while you played, its env.txt and DLC added after the build."
             case .iCloudSaves: "The saves the game shares through iCloud: removed from every device."
             case .logsAndSettings: "The game's log, its caches and the choices made in its launcher."
             }
@@ -59,9 +59,12 @@ struct RemovalPlan: Equatable {
     func item(_ kind: Kind) -> Item? { items.first { $0.kind == kind } }
     var total: Int64 { items.reduce(0) { $0 + $1.size } }
 
-    nonisolated static func make(for game: Game) -> RemovalPlan {
+    /// What removing the game takes. `libraryFolders`: a game whose folder is a library folder itself (its packages at the top of it) shares that folder with
+    /// other things, so only what is the game's own goes: its packages, and the apps that name its title ID; no archive or IPA merely lying there.
+    nonisolated static func make(for game: Game, libraryFolders: [String]) -> RemovalPlan {
         let fm = FileManager.default
         let folder = URL(filePath: game.folder)
+        let isLibraryFolder = libraryFolders.contains { canonical($0) == canonical(game.folder) }
         func existing(_ paths: [String]) -> [String] {
             var seen = Set<String>()
             return paths.filter { fm.fileExists(atPath: $0) && seen.insert(URL(filePath: $0).standardizedFileURL.path).inserted }
@@ -72,8 +75,9 @@ struct RemovalPlan: Equatable {
             return Item(kind: kind, paths: found, size: found.reduce(0) { $0 + Storage.size(of: $1) }, domains: domains)
         }
 
-        // Game files: the packages, or a dump's version folders, or the archive with all its parts
-        var files: [String] = game.archives.flatMap { archiveParts($0.path) }
+        // Game files: the packages, or a dump's version folders, or the archive with all its parts. Archives in a game's own folder are the ones
+        // it came in; at the top of a library folder they may be anything
+        var files: [String] = game.kind == .archives || !isLibraryFolder ? game.archives.flatMap { archiveParts($0.path) } : []
         switch game.kind {
         case .packages:
             if let base = game.base { files.append(base.path) }
@@ -92,18 +96,23 @@ struct RemovalPlan: Equatable {
             builds += [folder.appending(path: "\(id)_survey").path, folder.appending(path: "\(id)-work").path]
         }
 
-        var apps: [String] = []
-        for app in game.macApps { apps += [app, app + ".key"] }
-        for ipa in game.ipas { apps += [ipa, ipa + ".idx"] }
-
-        var domains: [String] = []
-        for app in game.macApps {
-            if let id = Bundle(path: app)?.bundleIdentifier { domains.append(id) }
+        // Built apps: only bundles whose Info.plist names this game's title ID (DMTitleID, written by dm/mac/pack_app.py). Another app in the folder
+        // is not removed, and neither are its settings
+        let builtApps = game.macApps.compactMap { app -> (path: String, bundleID: String?)? in
+            guard let info = NSDictionary(contentsOf: URL(filePath: app).appending(path: "Contents/Info.plist")),
+                  let id = game.titleId, (info["DMTitleID"] as? String)?.uppercased() == id.uppercased() else { return nil }
+            return (app, info["CFBundleIdentifier"] as? String)
         }
+        var apps: [String] = []
+        for app in builtApps { apps += [app.path, app.path + ".key"] }
+        if !isLibraryFolder { for ipa in game.ipas { apps += [ipa, ipa + ".idx"] } }
+
+        var domains: [String] = builtApps.compactMap(\.bundleID)
         if let id = game.titleId { domains.append("io.github.icosisenpai.horizonnative.\(id.lowercased())") }
         domains = Array(NSOrderedSet(array: domains)) as? [String] ?? domains
         let home = fm.homeDirectoryForCurrentUser
         var logs: [String] = [game.logFile].compactMap { $0 }
+        if let log = game.logFile, log.hasSuffix(".log") { logs.append(String(log.dropLast(4)) + ".prev.log") }   // the run before the last (dm/mac/launcher.c)
         for domain in domains {
             logs.append(home.appending(path: "Library/Preferences/\(domain).plist").path)
             logs.append(home.appending(path: "Library/Saved Application State/\(domain).savedState").path)
@@ -127,6 +136,9 @@ struct RemovalPlan: Equatable {
         ].compactMap { $0 }
         return RemovalPlan(items: items, gameFolder: game.folder)
     }
+
+    /// A path with its links resolved, to compare folders named in different ways (`/tmp` and `/private/tmp`).
+    nonisolated static func canonical(_ path: String) -> String { URL(filePath: path).resolvingSymlinksInPath().standardizedFileURL.path }
 
     /// An archive and the rest of its volumes: Game.part1.rar → Game.part2.rar…, Game.rar → Game.r00…, Game.7z.001 → Game.7z.002…
     nonisolated static func archiveParts(_ path: String) -> [String] {
@@ -242,6 +254,7 @@ struct RemovalSheet: View {
         return isEverything ? plan.items : plan.items.filter { request.kinds.contains($0.kind) }
     }
     private var selectedSize: Int64 { shown.filter { chosen.contains($0.kind) }.reduce(0) { $0 + $1.size } }
+    private var isRunning: Bool { model.playLog.isRunning(request.game) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -267,6 +280,7 @@ struct RemovalSheet: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(item.kind.title)
                                     Text(item.kind.detail).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                                    RemovedPaths(paths: item.paths)
                                 }
                                 Spacer(minLength: 8)
                                 Text(item.size.fileSize).monospacedDigit().foregroundStyle(.secondary)
@@ -281,6 +295,12 @@ struct RemovalSheet: View {
                 .padding(.horizontal, 12)
                 .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
+            if isRunning {
+                // Its app reads the extracted files and writes the saves while it runs
+                Label("\(request.game.name) is open: quit it before removing it.", systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.red)
+            }
             HStack {
                 Text("\(selectedSize.fileSize) selected")
                     .foregroundStyle(.secondary)
@@ -289,11 +309,11 @@ struct RemovalSheet: View {
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Move to Trash") { run(permanently: false) }
-                    .disabled(chosen.isEmpty || plan == nil)
+                    .disabled(chosen.isEmpty || plan == nil || isRunning)
                 Button("Delete Permanently", role: .destructive) { confirmsPermanent = true }
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
-                    .disabled(chosen.isEmpty || plan == nil)
+                    .disabled(chosen.isEmpty || plan == nil || isRunning)
             }
         }
         .padding(22)
@@ -316,5 +336,29 @@ struct RemovalSheet: View {
         let removesGame = isEverything && chosen.contains(.gameFiles)
         model.remove(items, of: request.game, permanently: permanently, forgetsGame: removesGame)
         dismiss()
+    }
+}
+
+/// The files and folders an item of the sheet removes: the first two, then how many more (the help tag lists them all), so what goes is seen before it goes.
+private struct RemovedPaths: View {
+    let paths: [String]
+    private static let shown = 2
+
+    var body: some View {
+        if !paths.isEmpty {
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(paths.prefix(Self.shown), id: \.self) { path in
+                    Text(verbatim: (path as NSString).abbreviatingWithTildeInPath)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                if paths.count > Self.shown {
+                    Text("and \(paths.count - Self.shown) more")
+                }
+            }
+            .font(.caption.monospaced())
+            .foregroundStyle(.secondary)
+            .padding(.top, 2)
+        }
     }
 }

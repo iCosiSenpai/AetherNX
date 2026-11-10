@@ -537,8 +537,9 @@ final class AppModel {
     func measure(_ game: Game) {
         guard removalPlans[game.id] == nil, !measuring.contains(game.id) else { return }
         measuring.insert(game.id)
+        let folders = libraryFolders
         Task {
-            let plan = await Task.detached(priority: .utility) { RemovalPlan.make(for: game) }.value
+            let plan = await Task.detached(priority: .utility) { RemovalPlan.make(for: game, libraryFolders: folders) }.value
             measuring.remove(game.id)
             removalPlans[game.id] = plan
         }
@@ -548,6 +549,10 @@ final class AppModel {
     /// nothing else is left in it, and a library folder that was only this game leaves the library.
     func remove(_ items: [RemovalPlan.Item], of game: Game, permanently: Bool, forgetsGame: Bool) {
         guard removingGameID == nil, jobFor(game)?.isRunning != true else { return }
+        guard !playLog.isRunning(game) else {   // its app runs from the extracted files and writes the saves
+            errorMessage = String(localized: "\(game.name) is open: quit it before removing it.")
+            return
+        }
         removingGameID = game.id
         let paths = items.flatMap(\.paths)
         let domains = items.flatMap(\.domains)
@@ -596,11 +601,15 @@ final class AppModel {
         }
     }
 
-    /// A folder that is not the home folder, a top-level folder or a volume.
+    /// A folder that is not the home folder, a top-level folder, a volume, or one of the home folder's own (Downloads, Documents…) or a folder holding one.
     nonisolated static func isSafeToRemove(_ path: String) -> Bool {
-        let url = URL(filePath: path).standardizedFileURL
-        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
-        return url.pathComponents.count > 3 && url != home && !home.path.hasPrefix(url.path + "/")
+        let fm = FileManager.default
+        let target = URL(filePath: path).resolvingSymlinksInPath().standardizedFileURL
+        let kept: [FileManager.SearchPathDirectory] = [.desktopDirectory, .documentDirectory, .downloadsDirectory, .moviesDirectory, .musicDirectory, .picturesDirectory,
+                                                      .libraryDirectory, .applicationDirectory, .sharedPublicDirectory]
+        // Compared as paths: these URLs end in "/" and a URL made from a path does not, so as URLs they are never equal
+        let own = ([fm.homeDirectoryForCurrentUser] + kept.compactMap { fm.urls(for: $0, in: .userDomainMask).first }).map { $0.resolvingSymlinksInPath().standardizedFileURL.path }
+        return target.pathComponents.count > 3 && !own.contains { $0 == target.path || $0.hasPrefix(target.path + "/") }
     }
 
     /// Whether a folder holds nothing but empty folders and Finder's own files.

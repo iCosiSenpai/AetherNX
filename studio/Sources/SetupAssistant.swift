@@ -253,7 +253,8 @@ private struct LibraryStep: View {
 
     private var suggestions: [URL] {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        return ["Games", "Documents/Games", "Downloads"].map { home.appending(path: $0) }
+        // Folders kept for games only: a game's packages at the top of a shared folder (Downloads) would make the whole folder that game's
+        return ["Games", "Documents/Games"].map { home.appending(path: $0) }
             .filter { FileManager.default.fileExists(atPath: $0.path) && !model.libraryFolders.contains($0.standardizedFileURL.path) }
     }
 
