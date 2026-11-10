@@ -238,6 +238,14 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Found on:** static analysis reported in [issue #313](https://github.com/seedds/nxnative/issues/313#issuecomment-6543080671); reproduced without game files.
 - **Check:** `t_save_sync_metadata` injects open, write, close and rename failures into the production writer, including simultaneous write/close failures and cleanup changing `errno`. It checks descriptor closure, preservation of existing metadata, diagnostics and a successful replacement. No cloud service or gameplay validation is claimed.
 
+### A cloud-save pull stopped between its moves left no marker
+
+- **Symptom:** after the game is force-quit, or the Mac or phone shuts down, while it brings the cloud's save in, the next start syncs a save that is half this device's and half the cloud's: the mount compares it as a changed save, and the Mac launcher's send after the game can upload it.
+- **Cause:** `pull` (`dm/host/save_sync.c`) moves this device's two save folders to a backup and the cloud's into their place, in four renames. `<save>.sync-stuck`, which stops syncing until the player restores the save, was written only when putting the moves back failed (`pull` −2), so a stop between two renames left a mixed save and nothing that said so. `set_stuck` also skipped closing its stream when `fprintf` failed, and did not wait for the disk.
+- **Fix:** `pull` writes `<save>.sync-stuck` before its first move, naming the backup (`none` when this device had no save), synced with its folder (`fsync`), and removes it once the save is whole again, either side's: after the last move, or after a failed move was put back. A marker that cannot be written stops the pull before anything moves. Whatever ends the process between the moves leaves the marker, and the mount, the sender and the Mac launcher sync nothing until the player has put the save back and deleted it ([Cloud saves](../settings.md#cloud-saves)).
+- **Found on:** the audit of 2026-11-10, from the code; no cloud service was used.
+- **Check:** `t_save_sync_faults` (17) ends the process at each of the four moves: the marker is already there, the next start and the Mac launcher's send sync nothing, and the backup it names with the folders still in place is this device's whole save. (2), (3), (5) and (6): a pull that ends whole either way, or stops before moving, leaves no marker; (4) and (15): one that could not be put back keeps it.
+
 ## Add-on content
 
 ### Add-on content from `DM_AOC_DIR`

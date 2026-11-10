@@ -16,6 +16,8 @@
 //   (14) the sync state belongs to one cloud file: another folder chosen gets the save even if it did not change; a state file from before the cloud line still counts
 //   (15) after a pull that could not be put back, nothing is synced (the host's next mount, the Mac launcher's send) until <save>.sync-stuck is deleted
 //   (16) a send whose upload fails keeps no extra cloud backup and prunes none (the damaged cloud file, the one cloud save a send keeps and replaces by itself)
+//   (17) a pull stopped between its moves (the app ended at each of the four): <save>.sync-stuck is already on disk, names the backup holding what moved, and the next start
+//        syncs nothing; a pull that ends whole, either way, leaves no such file ((2), (3), (5), (6))
 #include <dirent.h>
 #include <errno.h>
 #include <stdatomic.h>
@@ -27,12 +29,14 @@
 #include <sys/xattr.h>
 #include <unistd.h>
 
-static int hook_on, hook_calls, hook_fail_at[4], hook_nfail;   // moves (rename, renamex_np) counted while hook_on; the hook_fail_at-th ones fail with ENOSPC
+static int hook_on, hook_calls, hook_fail_at[4], hook_nfail, hook_end_at;   // moves (rename, renamex_np) counted while hook_on; the hook_fail_at-th ones fail with ENOSPC,
+                                                                            // and at the hook_end_at-th one the process ends before it moves (exit status 9)
 static char deny_dir[4096], eio_dir[4096], erange_file[4096], deny_setxattr_in[4096];
 static DIR *eio_handle; static int eio_reads;
 static int hook_move_fails(const char *a) {
     if (!hook_on || strstr(a, ".part")) return 0;   // a fetch's own file going to its place is not one of the pull's moves
     hook_calls++;
+    if (hook_end_at == hook_calls) _exit(9);
     for (int i = 0; i < hook_nfail; i++) if (hook_fail_at[i] == hook_calls) { errno = ENOSPC; return 1; }
     return 0;
 }
@@ -85,7 +89,7 @@ static int same(const char *p, const char *s) {
     return k == strlen(s) && !memcmp(b, s, k);
 }
 static int exists(const char *p) { return !access(p, F_OK); }
-static void hooks_off(void) { hook_on = hook_calls = hook_nfail = 0; deny_dir[0] = eio_dir[0] = erange_file[0] = deny_setxattr_in[0] = 0; }
+static void hooks_off(void) { hook_on = hook_calls = hook_nfail = hook_end_at = 0; deny_dir[0] = eio_dir[0] = erange_file[0] = deny_setxattr_in[0] = 0; }
 static void fail_moves(int a, int b) { hooks_off(); hook_on = 1; hook_fail_at[hook_nfail++] = a; if (b) hook_fail_at[hook_nfail++] = b; }
 static int count_dirs(const char *dir, const char *suffix) {
     int n = 0; DIR *d = opendir(dir); struct dirent *e; size_t sl = strlen(suffix);
@@ -126,6 +130,18 @@ static int cloud_value(const char *bundle, const char *value) {   // the cloud f
 }
 static int unchanged(const char *p, const struct stat *was) { struct stat st; return !stat(p, &st) && st.st_ino == was->st_ino && st.st_size == was->st_size && st.st_mtimespec.tv_sec == was->st_mtimespec.tv_sec && st.st_mtimespec.tv_nsec == was->st_mtimespec.tv_nsec; }
 static int local_intact(const fixture *f, int device) { return same(f->prog, "LOCAL") && (!device || same(f->isl, "LOCAL_ISLAND")); }
+static int marked(const fixture *f) { char p[1400]; snprintf(p, sizeof p, "%s.sync-stuck", f->save); return exists(p); }
+// What the player does (docs/settings.md, Cloud saves): each folder the backup named in <save>.sync-stuck holds goes back to its place. The backup's path goes to `named`
+static void restore_from_marker(const fixture *f, char *named, size_t n) {
+    char p[1400], from[PATH_MAX + 16]; snprintf(p, sizeof p, "%s.sync-stuck", f->save); named[0] = 0;
+    FILE *sf = fopen(p, "r");
+    if (sf) { if (fgets(named, (int)n, sf)) named[strcspn(named, "\n")] = 0; fclose(sf); }
+    const char *place[2] = {f->save, f->dev};
+    for (int i = 0; i < 2 && *named && strcmp(named, "none"); i++) {
+        snprintf(from, sizeof from, "%s/%s", named, FOLDERS[i]);
+        if (exists(from)) { rm_tree(place[i]); rename(from, place[i]); }
+    }
+}
 
 int main(void) {
     const char *sp = getenv("TMPDIR"); snprintf(root, sizeof root, "%s/t_save_sync_faults.XXXXXX", sp ? sp : "/private/tmp");
@@ -158,6 +174,7 @@ int main(void) {
         snprintf(p, sizeof p, "%s/save/progress", kept); snprintf(q, sizeof q, "%s/save_device/island", kept);
         CHECK(*kept && same(p, "LOCAL") && same(q, "LOCAL_ISLAND"), "this device's is in the backup (%s)", kept);
         snprintf(p, sizeof p, "%s.sync-tmp/in", f.save); CHECK(!exists(p), "nothing is left beside the save");
+        CHECK(!marked(&f), "and no %s.sync-stuck: the pull ended whole", f.save);
         snprintf(q, sizeof q, "%s-backups", f.save); snprintf(p, sizeof p, "%s/2001-01-01 00.00.00 local", q);
         CHECK(count_dirs(q, " local") == KEEP_BACKUPS && !exists(p), "the oldest backup went once the pull went through (%d stay)", count_dirs(q, " local"));
     }
@@ -172,7 +189,7 @@ int main(void) {
         int r = pull(f.save, f.bundle, &m, kept, sizeof kept);
         hooks_off();
         snprintf(p, sizeof p, "%s.sync-tmp/in", f.save);
-        CHECK(r == -1 && local_intact(&f, 1) && !*kept && !exists(p), "move %d of 4 fails: -1, this device's save as it was, nothing beside it (%d)", at, r);
+        CHECK(r == -1 && local_intact(&f, 1) && !*kept && !exists(p) && !marked(&f), "move %d of 4 fails: -1, this device's save as it was, nothing beside it, no .sync-stuck (%d)", at, r);
         CHECK(count_dirs(q, " local") == KEEP_BACKUPS, "and no backup was made or pruned (%d)", count_dirs(q, " local"));
     }
 
@@ -185,6 +202,8 @@ int main(void) {
         CHECK(r == -2 && *kept && same(p, "LOCAL") && same(f.isl, "LOCAL_ISLAND"), "-2: this device's save folder is in the backup, its device folder in place (%d)", r);
         snprintf(p, sizeof p, "%s.sync-tmp", f.save);
         CHECK(!exists(p) || count_dirs(p, "") == 0, "nothing of this device's is left in <save>.sync-tmp");
+        char named[PATH_MAX]; snprintf(q, sizeof q, "%s", kept); restore_from_marker(&f, named, sizeof named);
+        CHECK(marked(&f) && !strcmp(named, q), "%s.sync-stuck stays and names that backup (%s)", f.save, named);
     }
 
     printf("(5) an empty folder in the way\n");
@@ -193,8 +212,8 @@ int main(void) {
         fail_moves(2, 0);   // swap of the save folder, then the device folder's move in fails
         int r = pull(f.save, f.bundle, &m, kept, sizeof kept);
         hooks_off();
-        CHECK(r == -1 && same(p, "finder") && !exists(f.prog) && !exists(f.dev) && !*kept, "the swap is put back: .DS_Store in place, no cloud file, no backup (%d)", r);
-        CHECK(pull(f.save, f.bundle, &m, kept, sizeof kept) == 0 && same(f.prog, "REMOTE") && !*kept, "without the failure the cloud's comes in, with no backup of an empty folder");
+        CHECK(r == -1 && same(p, "finder") && !exists(f.prog) && !exists(f.dev) && !*kept && !marked(&f), "the swap is put back: .DS_Store in place, no cloud file, no backup, no .sync-stuck (%d)", r);
+        CHECK(pull(f.save, f.bundle, &m, kept, sizeof kept) == 0 && same(f.prog, "REMOTE") && !*kept && !marked(&f), "without the failure the cloud's comes in, with no backup of an empty folder");
     }
 
     printf("(6) a folder that cannot be read stops the pull\n");
@@ -203,7 +222,7 @@ int main(void) {
         int r = pull(f.save, f.bundle, &m, kept, sizeof kept), moved = hook_calls;
         hooks_off();
         snprintf(q, sizeof q, "%s-backups", f.save);
-        CHECK(r == -1 && !moved && local_intact(&f, 1) && !exists(q), "-1 before any move, and no backup folder (%d, %d moves)", r, moved);
+        CHECK(r == -1 && !moved && local_intact(&f, 1) && !exists(q) && !marked(&f), "-1 before any move, and no backup folder or .sync-stuck (%d, %d moves)", r, moved);
     }
 
     printf("(7) the first mount, with a pull that fails\n");
@@ -341,14 +360,7 @@ int main(void) {
         if (!c) { setenv("DM_SAVE_SYNC", f.cloud, 1); save_sync_mount(f.save, "0100abc"); _exit(atomic_load(&g_on) ? 6 : 0); }
         waitpid(c, &st, 0);
         CHECK(WIFEXITED(st) && !WEXITSTATUS(st), "the next start stays off too");
-        {   // what the player does (docs/settings.md, Cloud saves): put this device's save back from the backup the file names, then delete the file
-            char kept_dir[PATH_MAX] = "", from[PATH_MAX + 16]; FILE *sf = fopen(p, "r");
-            if (sf) { if (fgets(kept_dir, sizeof kept_dir, sf)) kept_dir[strcspn(kept_dir, "\n")] = 0; fclose(sf); }
-            const char *place[2] = {f.save, f.dev};
-            for (int i = 0; i < 2 && *kept_dir; i++) {
-                snprintf(from, sizeof from, "%s/%s", kept_dir, FOLDERS[i]);
-                if (exists(from)) { rm_tree(place[i]); rename(from, place[i]); }
-            }
+        {   char kept_dir[PATH_MAX]; restore_from_marker(&f, kept_dir, sizeof kept_dir);
             CHECK(*kept_dir && local_intact(&f, 1), "this device's save is whole in the backup the file names (%s)", kept_dir);
         }
         unlink(p);
@@ -373,6 +385,27 @@ int main(void) {
         CHECK(count_dirs(q, " cloud") == KEEP_BACKUPS && exists(p), "no backup of the unchanged cloud file is kept, and the oldest one stays (%d)", count_dirs(q, " cloud"));
         CHECK(send_save(f.save, "0100ABC", f.cfile) == 1 && cloud_value(f.cfile, "LOCAL") && count_dirs(q, " cloud") == KEEP_BACKUPS && !exists(p),
               "once the folder takes it, it is sent, the damaged file is kept and only then the oldest backup goes");
+    }
+
+    printf("(17) a pull stopped between its moves\n");
+    for (int at = 1; at <= 4; at++) {
+        char name[32], named[PATH_MAX]; snprintf(name, sizeof name, "pull_ended%d", at);
+        fixture f; make_fixture(&f, name, 1);
+        ss_meta mine; ss_scan(f.save, &mine); write_base(f.save, f.cfile, mine.hash);   // only the cloud's changed: a start would pull
+        fflush(stdout); pid_t c = fork();
+        if (!c) { hooks_off(); hook_on = 1; hook_end_at = at; pull(f.save, f.bundle, &m, kept, sizeof kept); _exit(0); }
+        int st; waitpid(c, &st, 0);
+        CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 9 && marked(&f), "the app ends at move %d of 4: %s.sync-stuck is already there", at, f.save);
+        c = fork();
+        if (!c) { setenv("DM_SAVE_SYNC", f.cloud, 1); save_sync_mount(f.save, "0100abc"); _exit(atomic_load(&g_on) ? 6 : 0); }
+        waitpid(c, &st, 0);
+        struct stat before; stat(f.cfile, &before);
+        setenv("DM_SAVE_SYNC", f.cloud, 1);
+        int sent = save_sync_after_exit(f.save, "0100abc");
+        unsetenv("DM_SAVE_SYNC");
+        CHECK(WIFEXITED(st) && !WEXITSTATUS(st) && !sent && unchanged(f.cfile, &before), "the next start syncs nothing, and the Mac launcher's send sends nothing");
+        restore_from_marker(&f, named, sizeof named);
+        CHECK(*named && strcmp(named, "none") && local_intact(&f, 1), "from the backup it names (%s) and the folders in place, this device's save is whole again", named);
     }
 
     printf("== save sync faults: %d checks, %d failed ==\n", checks, fails);

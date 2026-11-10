@@ -453,9 +453,12 @@ static int pull_undo(const pull_move *mv, int n) {   // last first; 0 when every
 // The cloud's save replaces this one. It is unpacked beside it first, and both folders here are looked at before anything moves (one that cannot be read stops the pull).
 // Then, folder by folder, this device's goes to the backup and the cloud's takes its place; a move that fails puts back every move before it, so the save is wholly this
 // device's or wholly the cloud's, never half of each. This device's save never passes through <save>.sync-tmp (which the caller and the next start remove): it goes straight
-// from its place into the backup, also if the app stops half way.
+// from its place into the backup, also if the app stops half way. <save>.sync-stuck is on disk before the first move and goes once the save is whole again, either side's:
+// a stop between the moves (the app killed, the Mac shut down) leaves it, and the next start syncs nothing until the player has put the save back (stuck).
 // 0: the cloud's is in; kept: this device's backup ("" when it had none). -1: failed, this device's save is as it was.
-// -2: failed, and a move could not be put back: this device's save is in `kept` (never deleted), and its place may hold the cloud's or nothing
+// -2: failed, and a move could not be put back: this device's save is in `kept` (never deleted), and its place may hold the cloud's or nothing; <save>.sync-stuck stays
+static int set_stuck(const char *save, const char *kept);
+static void unstick(const char *save);
 static int pull(const char *save, const char *bundle, ss_meta *r, char *kept, size_t kn) {
     char tmp[PATH_MAX], here[2][PATH_MAX], incoming[2][PATH_MAX]; int fresh[2], had[2];
     snprintf(tmp, sizeof tmp, "%s.sync-tmp/in", save);
@@ -467,6 +470,7 @@ static int pull(const char *save, const char *bundle, ss_meta *r, char *kept, si
         if ((had[i] = has_entries(here[i])) < 0) { int e = errno; SRED("%s cannot be read (errno=%d)", here[i], e); rm_tree(tmp); errno = e; return -1; }
     }
     if ((had[0] || had[1]) && backup_dir(save, "local", kept, kn)) { int e = errno; kept[0] = 0; rm_tree(tmp); errno = e; return -1; }
+    if (set_stuck(save, kept)) { int e = errno; if (*kept) { rmdir(kept); kept[0] = 0; } rm_tree(tmp); errno = e; return -1; }   // nothing has moved
     pull_move mv[4]; int n = 0, failed = 0;
     for (int i = 0; i < 2 && !failed; i++) {
         char old[PATH_MAX]; snprintf(old, sizeof old, "%s/%s", kept, FOLDERS[i]);
@@ -478,30 +482,39 @@ static int pull(const char *save, const char *bundle, ss_meta *r, char *kept, si
     }
     if (failed) {
         int e = errno, stuck = pull_undo(mv, n);
-        if (!stuck && *kept) { rmdir(kept); kept[0] = 0; }   // the backup made for this pull is empty again
+        if (!stuck) { unstick(save); if (*kept) { rmdir(kept); kept[0] = 0; } }   // this device's save is back, and the backup made for this pull is empty again
         rm_tree(tmp); errno = e;
         return stuck ? -2 : -1;
     }
+    unstick(save);
     rm_tree(tmp);
     if (*kept) prune_backups(save, "local", kept);
     return 0;
 }
 
-// <save>.sync-stuck: a pull failed and could not be put back (pull -2), so the save in place is neither side's whole save. While the file is there nothing is synced, by the
-// host or by the Mac launcher after it: a send would put that mixed save into the cloud. It names the backup holding this device's save; the player restores the save and
-// deletes the file (docs/settings.md, Cloud saves)
+// <save>.sync-stuck: a pull that did not end whole, either way (pull): stopped between its moves, or failed and could not be put back (pull -2). The save in place may be
+// neither side's whole save, so while the file is there nothing is synced, by the host or by the Mac launcher after it: a send would put a mixed save into the cloud. Its
+// first line names the backup holding what of this device's save the pull had moved; the player restores the save and deletes the file (docs/settings.md, Cloud saves)
 static int stuck(const char *save, char *why, size_t n) {
     char p[PATH_MAX]; snprintf(p, sizeof p, "%s.sync-stuck", save);
     FILE *f = fopen(p, "r"); if (!f) return 0;
     if (why && n) { why[0] = 0; if (fgets(why, (int)n, f)) why[strcspn(why, "\n")] = 0; }
     fclose(f); return 1;
 }
-static void set_stuck(const char *save, const char *kept) {
-    char p[PATH_MAX]; snprintf(p, sizeof p, "%s.sync-stuck", save);
+// On disk before it returns, its name in the folder too: the moves after it must not reach the disk without it. 0, or -1 (and no file)
+static int set_stuck(const char *save, const char *kept) {
+    char p[PATH_MAX], dir[PATH_MAX]; snprintf(p, sizeof p, "%s.sync-stuck", save);
     FILE *f = fopen(p, "w");
-    if (!f || fprintf(f, "%s\n# save sync (dm/host/save_sync.h): a pull from the cloud failed and could not be undone; this device's save is in the folder above. Restore it, then delete this file to sync again\n", kept) < 0 || fclose(f))
-        SRED("cannot write %s (errno=%d)", p, errno);
+    int bad = !f || fprintf(f, "%s\n# save sync (dm/host/save_sync.h): a pull from the cloud did not end, or failed and could not be undone; the folder above holds what of this device's save it had "
+                               "moved (none: this device had no save), the rest is in its place. Put that back, then delete this file to sync again\n", *kept ? kept : "none") < 0
+              || fflush(f) || fsync(fileno(f));
+    if (f && fclose(f)) bad = 1;
+    snprintf(dir, sizeof dir, "%s", p); char *slash = strrchr(dir, '/');
+    if (!bad && slash) { *slash = 0; int d = open(*dir ? dir : "/", O_RDONLY); if (d < 0 || fsync(d)) bad = 1; if (d >= 0) close(d); }
+    if (bad) { int e = errno; SRED("cannot write %s (errno=%d): the cloud's save is not brought in", p, e); unlink(p); errno = e; return -1; }
+    return 0;
 }
+static void unstick(const char *save) { char p[PATH_MAX]; snprintf(p, sizeof p, "%s.sync-stuck", save); unlink(p); }
 
 // What this device committed goes to the cloud, unless the cloud already has it. It replaces only what it was compared against: no save, the save last synced
 // (<save>.sync), or a damaged file (kept first). A cloud save that changed since this device's last sync (another device sent it, or this device never synced) is
@@ -510,7 +523,7 @@ static void set_stuck(const char *save, const char *kept) {
 static int send_save(const char *save, const char *title, const char *cloud) {
     char tmp[PATH_MAX], snap[PATH_MAX], packed[PATH_MAX], theirs[PATH_MAX], base[SS_HASH + 1], dir[PATH_MAX], kept[PATH_MAX], t[32];
     ss_meta mine, other; int ok = 0, got, made_backup = 0;
-    if (stuck(save, kept, sizeof kept)) { SRED("not sent: an earlier pull could not be undone (this device's save is kept in %s); delete %s.sync-stuck once the save is restored", kept, save); return 0; }
+    if (stuck(save, kept, sizeof kept)) { SRED("not sent: an earlier pull did not end whole (the backup of this device's save: %s); delete %s.sync-stuck once the save is restored", kept, save); return 0; }
     snprintf(tmp, sizeof tmp, "%s.sync-tmp/out", save); snprintf(snap, sizeof snap, "%s/s", tmp);
     snprintf(packed, sizeof packed, "%s/save.dmsync", tmp); snprintf(theirs, sizeof theirs, "%s/cloud.dmsync", tmp);
     if (rm_tree(tmp) || mkdirs(tmp)) { SRED("cannot make %s (errno=%d)", tmp, errno); goto done; }
@@ -589,7 +602,7 @@ static void mount_once(const char *save, const char *title) {
     char cloud[PATH_MAX], tmp[PATH_MAX], theirs[PATH_MAX], base[SS_HASH + 1], kept[PATH_MAX], t[32], t2[32], chosen[SS_HASH + 1];
     ss_meta mine, other; memset(&other, 0, sizeof other); kept[0] = 0;
     if (!cloud_file(title, cloud, sizeof cloud)) return;
-    if (stuck(save, kept, sizeof kept)) { SRED("off: an earlier pull could not be undone (this device's save is kept in %s); delete %s.sync-stuck once the save is restored", kept, save); return; }
+    if (stuck(save, kept, sizeof kept)) { SRED("off: an earlier pull did not end whole (the backup of this device's save: %s); delete %s.sync-stuck once the save is restored", kept, save); return; }
     SLOG("on: %s", cloud);
     snprintf(tmp, sizeof tmp, "%s.sync-tmp", save); snprintf(theirs, sizeof theirs, "%s/in.dmsync", tmp);
     if (rm_tree(tmp) || mkdirs(tmp)) { SRED("cannot make %s (errno=%d): off", tmp, errno); return; }   // rm_tree: what an earlier session left
@@ -614,9 +627,9 @@ static void mount_once(const char *save, const char *title) {
         switch (pull(save, theirs, &other, kept, sizeof kept)) {
         case 0: break;
         case -1: SRED("bringing the cloud's save in failed (errno=%d): playing on with this device's", errno); failed = 1; break;
-        default:   // nothing more is moved this session: what is here now is neither side's whole save
+        default:   // nothing more is moved this session: what is here now is neither side's whole save, and pull left <save>.sync-stuck
             SRED("bringing the cloud's save in failed (errno=%d) and could not be undone: this device's save is kept in %s; sync stays off until %s.sync-stuck is deleted", errno, kept, save);
-            set_stuck(save, kept); rm_tree(tmp); return;
+            rm_tree(tmp); return;
         }
         if (failed) break;
         write_base(save, cloud, other.hash);

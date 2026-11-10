@@ -13,8 +13,9 @@
 // Every save this replaces, here or in the cloud, is kept first in <DM_SAVE>-backups/<date> <side>; the newest 10 of each side stay (pruned only once the backup is whole and,
 // when the send replaces the save, once the replacement went through).
 // A save folder that cannot be read is an error, never "no save": the mount turns sync off and a send sends nothing. A pull moves this device's folders to the backup and the
-// cloud's in, putting back every move when one fails; this device's save never passes through <DM_SAVE>.sync-tmp. When putting back fails too, <DM_SAVE>.sync-stuck names the backup
-// holding this device's save, and nothing is synced until it is deleted. A fetch downloads to a file of its own, so one abandoned at
+// cloud's in, putting back every move when one fails; this device's save never passes through <DM_SAVE>.sync-tmp. <DM_SAVE>.sync-stuck is on disk before the first move and
+// goes once the save is whole again: after a stop between the moves, or a failure that could not be put back, it names the backup holding this device's save, and nothing is
+// synced until it is deleted. A fetch downloads to a file of its own, so one abandoned at
 // its time limit never removes a later fetch's file (dm/host/tests/t_save_sync_faults.c).
 #pragma once
 #include <stdint.h>
