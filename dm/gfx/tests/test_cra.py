@@ -109,6 +109,30 @@ class Members(unittest.TestCase):
         with self.assertRaises(cra.Error): cra.narc_members(b'SARC' + bytes(32))
         with self.assertRaises(cra.Error): cra.narc_members(narc([b'abc'])[:40])
 
+    def test_a_damaged_narc_names_its_layout(self):   # each was a struct.error or a bare cra.Error the shader split did not take (the nightly fuzz job)
+        whole = narc([b'abc', b'def']); fat = whole.index(b'BTAF')
+        with self.assertRaisesRegex(cra.Error, r'^x: a NARC header cut at 8 of 16 bytes$'): cra.narc_members(whole[:8], 'x')
+        with self.assertRaisesRegex(cra.Error, r'^x: no BTAF or GMIF$'): cra.narc_members(b'NARC\xfe\xff\0\0' + struct.pack('<IHH', 16, 16, 0), 'x')
+        many = bytearray(whole); struct.pack_into('<I', many, fat + 8, 1000)   # more members than its table holds
+        with self.assertRaisesRegex(cra.Error, r'^x: a BTAF of 1000 members past the end$'): cra.narc_members(bytes(many), 'x')
+        last = b'GMIF' + struct.pack('<I', 8) + b'BTAF' + struct.pack('<I', 8)   # the file ends before the BTAF's count
+        with self.assertRaisesRegex(cra.Error, r'^x: the BTAF header past the end$'):
+            cra.narc_members(b'NARC\xfe\xff\0\0' + struct.pack('<IHH', 16 + len(last), 16, 2) + last, 'x')
+
+    def test_a_member_that_does_not_unpack_names_its_layout(self):
+        text = b'BNSH\0\0\0\0 shaders shaders shaders shaders ' * 40
+        lz4d = b'\x94\0\0\0' + struct.pack('<I', len(text)) + lz4.block.compress(text, store_size=False)
+        with self.assertRaisesRegex(cra.Error, r'^an LZ4 member: '): cra.undo(lz4d[:-5])
+        with self.assertRaisesRegex(cra.Error, r'^an LZ4 member of 4 bytes that would expand to 4294967295$'): cra.undo(b'\x94\0\0\0\xff\xff\xff\xff' + bytes(4))   # never allocated
+        z = cra.zstd_mod().compress(text)
+        with self.assertRaisesRegex(cra.Error, r'^a zstd member: '): cra.undo(b'Z\0\0\0' + struct.pack('<I', len(text)) + z[:-4])
+        with self.assertRaisesRegex(cra.Error, r'^an MMMM header cut at 6 of 12 bytes$'): cra.undo(b'MMMM\0\0')
+        with self.assertRaisesRegex(cra.Error, r'^an MMMM table of 9 chunks past the end$'): cra.undo(b'MMMM' + struct.pack('<II', 0, 9))
+        with self.assertRaisesRegex(cra.Error, r'^MMMM chunk 0 past the end$'): cra.undo(b'MMMM' + struct.pack('<III', 0, 1, 64) + bytes(4))
+        with self.assertRaisesRegex(cra.Error, r'^an LZ stream cut inside a token$'): cra.undo(b'\x60\0\0\0\x01')   # a flag byte whose first item is a match, and no match bytes
+        with self.assertRaisesRegex(cra.Error, r'^an LZ stream cut inside a token$'): cra.undo(b'\x60\0\0\0\xc0a\x41')   # a literal, then a match cut after its first byte
+        self.assertEqual(cra.undo(lz4d), text)   # whole members unpack as before
+
     def test_kinds(self):
         text = b'BNSH\0\0\0\0 shaders shaders shaders shaders ' * 40
         lz4d = b'\x94\0\0\0' + struct.pack('<I', len(text)) + lz4.block.compress(text, store_size=False)

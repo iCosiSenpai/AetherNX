@@ -100,6 +100,19 @@ class LooseNarc(unittest.TestCase):
         (_, keys, pairs, extra), log = self.scan(archive([member(0x10, b'BNTX' + bytes(64)), b'']))
         self.assertEqual((keys, pairs, extra, log), ({}, set(), {}, ''))
 
+    def test_a_damaged_archive_is_a_red_line_naming_its_layout(self):   # not a struct.error, an IndexError or a decoder's own error (the nightly fuzz job)
+        name = 'model/court.narc'
+        cut_lz = b'\x60\0\0\0\x01'   # a match with no match bytes
+        huge_lz4 = b'\x94\0\0\0\xff\xff\xff\xff' + bytes(4)   # more than an LZ4 block of 4 bytes expands to: never allocated
+        for case, data, why in (('cut header', b'NARC\xfe\xff\0\0', f'/{name}: a NARC header cut at 8 of 16 bytes'),
+                                ('no sections', b'NARC\xfe\xff\0\0' + struct.pack('<IHH', 16, 16, 0), f'/{name}: no BTAF or GMIF'),
+                                ('cut LZ member', archive([fz.bnsh(), cut_lz]), f'/{name}/1: an LZ stream cut inside a token'),
+                                ('huge LZ4 member', archive([huge_lz4]), f'/{name}/0: an LZ4 member of 4 bytes that would expand to 4294967295')):
+            with self.subTest(case):
+                (rel, keys, pairs, extra), log = self.scan(data, name)
+                self.assertEqual((rel, keys, pairs, extra), (name, {}, set(), ('unreadable', why, 1)))
+                self.assertEqual(log, f'[RED] {why} (its shaders are left out)\n')
+
     def test_cli_matches_a_plain_archive(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); rom = root / 'RomFS'; rom.mkdir()
