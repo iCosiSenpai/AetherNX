@@ -128,6 +128,13 @@
 - **Fix:** `file_identity` leaves `st_dev` out, as the IPA and app packers' stamps already did. Inode, size, modification and change times still catch an image replaced or written over. An old stamp still misses the fast check, so the [NUP packer verifies the existing image](#an-old-nup-cache-stamp-makes-the-build-unpack-again) before repacking.
 - **Found on:** Ocarina of Time (Switch 2, `0400486024DEC000`, packed from a NUP; PR #1299); the stamps of Star Fox and Mario Kart World show the same two numbers. `dm/tools/tests/test_romfs_image.py` remounts an image under another device number.
 
+### Packing a RomFS image shows no progress, and each stopped pack leaves an image-sized file
+
+- **Symptom:** the unpack line of a dump or NUP build stays at 0 % while `RomFS.img` is written; a build stopped while packing leaves a `RomFS.img.<random>.part` as large as the image beside it, one more for each stopped build.
+- **Cause:** the audit fixes of 2026-10-30 made `romfs_image.py` write the image to a new file with a random name (`tempfile.mkstemp`) instead of opening `<image>.part` with truncation, which followed a link left at that name. The NSP script's progress line measures `<image>.part` (`extract_dump` and `extract_nup` in `scripts/build_ipa_from_nsp.py`), and nothing removed a random name a stopped run left.
+- **Fix:** `staging` removes whatever has the name `<image>.part` (a file a stopped run left, or a link, which is removed and not followed) and creates it new with `O_CREAT | O_EXCL | O_NOFOLLOW`, trying again when the name is made again in between. The progress line reads that file again, and a stopped build leaves at most one per image, which the next build replaces.
+- **Found on:** the audit of 2026-11-10, from the code (no game was packed for it). `dm/tools/tests/test_romfs_image.py`: the image is written as `<image>.part`, a link at that name is removed with its target kept, a stopped run's file is replaced, and the file gets the mode a new file gets.
+
 ### An old NUP cache stamp makes the build unpack again
 
 - **Symptom:** the next build spends minutes unpacking a NUP after a packer update even though its complete `RomFS.img` is still present.

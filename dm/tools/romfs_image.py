@@ -12,10 +12,9 @@
 #           binary search per path component; directories are numbered breadth-first.
 # The index comes last, so a copy cut off partway has no valid index (the header points past the end of the file) and the host refuses it.
 # Names are the guest names: a host name chosen on a case collision (.dm-case-N) is replaced by the one in its xattr, as hle_fs.c's guest_name does.
-# Usage: romfs_image.py [--reuse] <RomFS folder> <out image>   (written to a new <out>.<random>.part beside it, renamed at the end)
+# Usage: romfs_image.py [--reuse] <RomFS folder> <out image>   (written to <out>.part beside it, created new, renamed at the end)
 # --reuse checks the source tree's names and file metadata, the packer's version and the image's identity before keeping a previous image.
 import argparse, hashlib, json, os, struct, subprocess
-import tempfile
 from pathlib import Path
 
 MAGIC = b'DMROMFS1'
@@ -70,10 +69,18 @@ def source_digest(src, ents):
     return h.hexdigest()
 
 
-def staging(dst):   # a new file beside dst, created exclusively (never a link or a file already there), with the mode an ordinary new file gets: (fd, path)
-    fd, path = tempfile.mkstemp(prefix=os.path.basename(dst) + '.', suffix='.part', dir=os.path.dirname(os.path.abspath(dst)))
-    mask = os.umask(0); os.umask(mask); os.fchmod(fd, 0o666 & ~mask)
-    return fd, path
+def staging(dst):
+    """<dst>.part, created new and exclusively, with the mode an ordinary new file gets (the umask applies): (fd, path). Whatever already has that name (the part file of a run
+    that was killed, or a link someone put there) is removed first, never opened: a link is not followed and the file it points at is not emptied, as it was when a predictable
+    name was opened with truncation. The one fixed name is what the NSP script's progress line measures (extract_dump, extract_nup), and a run killed while writing leaves at
+    most one such file per image, which the next run replaces (random names left one more each time, as large as the image)"""
+    path = dst + '.part'
+    for _ in range(3):
+        try: os.unlink(path)
+        except FileNotFoundError: pass
+        try: return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o666), path
+        except FileExistsError: continue   # made again between the unlink and the open: removed again
+    raise FileExistsError(f'{path} is made again each time it is removed: another program is writing there')
 
 
 def reusable(dst, digest):   # whether dst is the image the stamp beside it says was made from inputs with this digest
@@ -92,10 +99,10 @@ def layout(ents, end):
 
 
 def write(ents, dst, copy):
-    """ents (entries(): [name, source, is dir, a, b], breadth-first) → a new staging file beside dst, whose path it returns (removed again when writing fails); copy(source, out)
+    """ents (entries(): [name, source, is dir, a, b], breadth-first) → the staging file <dst>.part, whose path it returns (removed again when writing fails); copy(source, out)
     writes one file's bytes to out and returns how many. Fills in each file's a and b.
-    The staging file is created new and exclusively (staging): a predictable <dst>.part opened with truncation followed a link someone left there and emptied the file it
-    pointed at before anything was read"""
+    The staging file is created new and exclusively (staging): opening a <dst>.part that was there with truncation followed a link someone left at that name and emptied
+    the file it pointed at before anything was read"""
     fd, part = staging(dst)
     try:
         with os.fdopen(fd, 'wb') as out:

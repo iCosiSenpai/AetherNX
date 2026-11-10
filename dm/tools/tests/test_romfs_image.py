@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import shlex
+import stat
 import struct
 import subprocess
 import tempfile
@@ -64,9 +65,31 @@ class Images(unittest.TestCase):
         for make in (lambda p: p.symlink_to(private), lambda p: p.symlink_to(self.root, target_is_directory=True), os.mkfifo):
             make(self.src / 'data/x')
             with self.assertRaisesRegex(ValueError, 'link or special file'): image.pack(self.src, self.dst)
-            self.assertFalse(self.dst.exists()); self.assertEqual(list(self.root.glob('romfs.img.*.part')), [])
+            self.assertFalse(self.dst.exists()); self.assertFalse(Path(str(self.dst) + '.part').exists())
             (self.src / 'data/x').unlink()
         image.pack(self.src, self.dst); self.assertEqual(self.content('data/a'), b'ok')
+
+    def test_staging_file_is_made_new_beside_the_image(self):
+        # <image>.part is the one name the NSP script's progress line measures (extract_dump, extract_nup): a link someone put there is removed, never followed, and
+        # the part file a killed run left is replaced, so killed runs do not add up to one image-sized file each
+        victim = self.root / 'victim'; victim.write_bytes(b'keep me')
+        part = Path(str(self.dst) + '.part'); part.symlink_to(victim)
+        (self.src / 'a').write_bytes(b'data')
+        image.pack(self.src, self.dst)
+        self.assertEqual(victim.read_bytes(), b'keep me'); self.assertEqual(self.content('a'), b'data'); self.assertFalse(part.exists())
+        part.write_bytes(b'\0' * 4096)   # what a run killed while writing leaves
+        seen = []
+        def copy(src, out):   # the image being written is <image>.part, the file the progress line reads
+            st, ps = os.fstat(out.fileno()), os.lstat(part)
+            seen.append(stat.S_ISREG(ps.st_mode) and (ps.st_dev, ps.st_ino) == (st.st_dev, st.st_ino))
+            return image.copy_file(src, out)
+        ents = image.entries(str(self.src))
+        published = image.write(ents, str(self.dst), copy)
+        self.assertEqual((published, seen), (str(part), [True]))
+        self.assertEqual(sorted(p.name for p in self.root.iterdir() if p.name.startswith(self.dst.name)), sorted([self.dst.name, part.name, self.dst.name + '.inputs.json']))
+        mask = os.umask(0); os.umask(mask)
+        self.assertEqual(part.stat().st_mode & 0o777, 0o666 & ~mask)   # the mode an ordinary new file gets
+        os.unlink(published)
 
     def test_format_mismatches_name_zs_files_that_are_not_zstd(self):
         tex = self.src / 'Tex'; tex.mkdir()
