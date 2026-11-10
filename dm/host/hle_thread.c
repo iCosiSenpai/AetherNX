@@ -425,8 +425,12 @@ void dm_thread_terminate_on_gate_stack(void) {
 }
 int dm_thread_killed(void) { thr_t *t = pthread_getspecific(g_keythr); return t && atomic_load(&t->kill); }
 int dm_thread_is_guest(void) { return pthread_getspecific(g_keythr) != NULL; }
+// From dm_threads_kill_all to RESET (G): a thread CreateThread links in that time is marked as it is linked. Its creator may have been past its SVC entry when the others
+// were marked, and nothing would start the new thread, so it would wait in thread_main through the restart, uncounted, and never end
+static int g_killing;
 void dm_threads_kill_all(void) {
     pthread_mutex_lock(&G);
+    g_killing = 1;
     for (thr_t *t = g_all; t; t = t->all) if (!t->exited) { atomic_store(&t->kill, 1); pthread_cond_broadcast(&t->cv); pthread_cond_broadcast(&t->pcv); }
     pthread_mutex_unlock(&G);
 }
@@ -453,10 +457,12 @@ int dm_threads_kill_wait(uint64_t timeout_ns) {
         usleep(1000);
     }
 }
-// RESET: every thread object goes, and so do the handle table, the wait list and the SystemEvent bindings (the events lived in the old program's memory). A thread that has not
-// ended (dm_threads_kill_wait timed out) keeps its object, closed and out of the tables: it frees it when it ends. Thread IDs keep counting, as a new process's would on Horizon
+// RESET: every thread object goes, and so do the handle table, the wait list and the SystemEvent bindings (the events lived in the old program's memory). Every thread has ended
+// by now (dm_program_restart_run stops the process otherwise); one still running would keep its object, closed and out of the tables, and free it when it ends. Thread IDs keep
+// counting, as a new process's would on Horizon
 static void thr_restart_reset(void) {
     pthread_mutex_lock(&G);
+    g_killing = 0;
     for (thr_t *t = g_all, *nx; t; t = nx) {
         nx = t->all;
         if (!t->exited) { t->closed = 1; t->pins = 0; t->sync_refs = 0; t->all = NULL; continue; }
@@ -1136,8 +1142,10 @@ static int svc_thread_impl(int num, uint64_t *regs) {
         pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);   // Host resources are reclaimed on exit (the guest waits through the handle, no join)
         pthread_t pt; if (pthread_create(&pt, &a, thread_main, t)) die("pthread_create");
         pthread_attr_destroy(&a);
-        // pthread_create writes its output without G; publish that value and the registry link together.
-        pthread_mutex_lock(&G); t->pt = pt; t->all = g_all; g_all = t; pthread_mutex_unlock(&G);
+        // pthread_create writes its output without G; publish that value and the registry link together. A program restart under way marks it here (g_killing)
+        pthread_mutex_lock(&G); t->pt = pt; t->all = g_all; g_all = t;
+        if (g_killing) { atomic_store(&t->kill, 1); pthread_cond_broadcast(&t->cv); }
+        pthread_mutex_unlock(&G);
         if (g_flag.thr) LOG("CreateThread h=%#x entry=%#llx arg=%#llx sp=%#llx prio=%d core=%d", t->handle, t->entry, t->arg, t->stack_top, t->prio, t->core);
         regs[0] = 0; regs[1] = t->handle; return 1;
     }

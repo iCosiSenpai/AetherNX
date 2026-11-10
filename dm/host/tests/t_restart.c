@@ -4,13 +4,15 @@
 // notification queue (PopNotificationMessage). The main thread waits in the kernel too and comes back through the restart loop (dm_main_restart_jump), runs the restart, and
 // checks: every other thread ended before RELEASE, the hooks ran by stage and order, the thread table is empty, the launch parameter pops once and then reports none, the
 // previous program index is 0, and a new program (main thread, a thread that runs and exits) starts on fresh tables. A second restart asks for program 1, which is not packed:
-// program 0 starts again without the parameter. A parameter too large is refused
+// program 0 starts again without the parameter. What cannot restart stops the process with a FATAL line, each in a child process: a parameter too large, a parameter that is
+// not there, and a thread busy in host code that never ends. A thread created while a restart is under way (after every thread was marked) is marked too, and ends unstarted
 #include "../dm.h"
 #include <assert.h>
 #include <setjmp.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include "../hle_thread.c"
 #include "../hle_restart.c"
@@ -103,10 +105,70 @@ DM_RESTART_HOOK(DM_RESTART_RESET, 30, t_reset_after_threads);
 static _Atomic int g_ran;
 static void short_lived(uint64_t a) { atomic_store(&g_ran, (int)a); }
 
+// ---- what cannot restart: each case runs in a child, forked while this process has one thread, its stderr read back ----
+static int run_child(void (*fn)(void), char *err, size_t n) {   // the child's wait status
+    int pfd[2]; assert(!pipe(pfd));
+    fflush(stdout); fflush(stderr);
+    pid_t pid = fork(); assert(pid >= 0);
+    if (!pid) { close(pfd[0]); dup2(pfd[1], 2); close(pfd[1]); alarm(20); fn(); _exit(0); }
+    close(pfd[1]);
+    size_t got = 0; char sink[4096];
+    for (;;) {
+        size_t room = n - 1 - got; ssize_t k = read(pfd[0], room ? err + got : sink, room ? room : sizeof sink);
+        if (k <= 0) break;
+        if (room) got += (size_t)k;
+    }
+    err[got] = 0; close(pfd[0]);
+    int st = 0; assert(waitpid(pid, &st, 0) == pid);
+    return st;
+}
+static void expect_stop(void (*fn)(void), const char *line) {   // the child ends on SIGABRT after logging "FATAL <line>"
+    static char err[1 << 16]; char want[256]; snprintf(want, sizeof want, "FATAL %s", line);
+    int st = run_child(fn, err, sizeof err);
+    if (!(WIFSIGNALED(st) && WTERMSIG(st) == SIGABRT && strstr(err, want))) { fprintf(stderr, "%s[RED] t_restart: expected SIGABRT after \"%s\", got status %#x\n", err, want, st); abort(); }
+}
+static void child_large_param(void) { svc_thread_main_init(); dm_program_execute(0, g_param, LAUNCH_PARAM_MAX + 1); }
+static void child_missing_param(void) { svc_thread_main_init(); dm_program_execute(0, NULL, 4); }
+static void stuck_in_host(uint64_t a) { (void)a; atomic_fetch_add(&g_ready, 1); for (;;) atomic_signal_fence(memory_order_seq_cst); }   // no SVC, and no guest code for the pause signal to leave
+static void child_stuck_thread(void) {
+    g_restart_wait_ns = 100000000ull;
+    svc_thread_main_init();
+    if (!setjmp(g_jb)) {
+        g_ev = new_event();
+        new_thread(stuck_in_host, 0, 1);
+        while (atomic_load(&g_ready) < 1) usleep(1000);
+        new_thread(requester, 0, 1);
+        wait_forever(g_ev);
+        _exit(3);   // the restart did not end this thread
+    }
+    dm_program_restart_run();   // stops the process: the reset cannot run under a thread
+    _exit(4);
+}
+// CreateThread from a thread with no guest thread object, after every thread was marked: what a creator past its SVC entry does while a restart begins
+static void *host_create(void *h) { uint64_t r[32] = {0, (uint64_t)short_lived, 9, 0, 44, 0}; svc(0x08, r); *(uint32_t *)h = r[0] ? 0 : (uint32_t)r[1]; return NULL; }
+static void child_create_during_restart(void) {
+    svc_thread_main_init();
+    dm_threads_kill_all();   // this thread makes no SVC from here on: it is marked too
+    pthread_t pt; uint32_t h = 0; assert(!pthread_create(&pt, NULL, host_create, &h)); pthread_join(pt, NULL);
+    int ended = 0;
+    for (int i = 0; i < 2000 && h && !ended; i++) {
+        pthread_mutex_lock(&G);
+        for (thr_t *t = g_all; t; t = t->all) if (t->handle == h) ended = t->exited && atomic_load(&t->kill);
+        pthread_mutex_unlock(&G);
+        if (!ended) usleep(1000);
+    }
+    _exit(h && ended && dm_threads_kill_wait(1000000000ull) == 0 && atomic_load(&g_ran) != 9 ? 0 : 5);
+}
+
 int main(void) {
     signal(SIGALRM, timeout); alarm(30);
     unsetenv("DM_OE_SCRIPT"); setenv("DM_PREEMPT", "0", 1);
     for (unsigned i = 0; i < sizeof g_param; i++) g_param[i] = (uint8_t)(i * 7 + 1);
+    expect_stop(child_large_param, "[RED] oe::ExecuteProgram(0, 65537 bytes of parameters)");
+    expect_stop(child_missing_param, "[RED] oe::ExecuteProgram(0, 4 bytes of parameters)");
+    expect_stop(child_stuck_thread, "[RED] restart: 1 guest thread(s) did not end within 0.1 s");
+    { char err[1 << 12]; int st = run_child(child_create_during_restart, err, sizeof err);
+      if (!(WIFEXITED(st) && !WEXITSTATUS(st))) { fprintf(stderr, "%s[RED] t_restart: a thread created during a restart did not end unstarted (status %#x)\n", err, st); abort(); } }
     svc_thread_main_init();
     { size_t n = 1; uint8_t b[8]; assert(!dm_launch_param_pop(&n, b, sizeof b) && n == 0); assert(h_oe_PrevProgram() == -1); }   // first boot: none, launched from HOME
     if (!setjmp(g_jb)) {
@@ -149,14 +211,11 @@ int main(void) {
     assert(h_oe_PopLaunchParam(&n, got, sizeof got) == 0 && n == 0);
     assert(h_oe_PrevProgram() == 0 && dm_restart_count() == 2);
     assert(svc_thread_main_init() == 0x1001);
-    // a refused request returns and leaves everything as it is
-    dm_program_execute(0, g_param, LAUNCH_PARAM_MAX + 1);
-    assert(!g_req.pending && dm_restart_count() == 2);
-    assert(h_oe_PopLaunchParam(&n, got, sizeof got) == 0);
     puts("restart: threads ended in a kernel wait, a sleep, a native wait, before starting"
 #ifndef NO_SIGNAL_REDIRECT
          " and in guest code (signal redirect)"
 #endif
-         "; hooks by stage and order; launch parameter popped once; a new program on fresh tables; program 1 restarts program 0 without the parameter; large parameters refused");
+         "; hooks by stage and order; launch parameter popped once; a new program on fresh tables; program 1 restarts program 0 without the parameter; a parameter too large"
+         " or missing and a thread that does not end stop the process; a thread created during a restart ends unstarted");
     return 0;
 }

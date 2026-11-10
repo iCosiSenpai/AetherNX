@@ -118,7 +118,7 @@ HLE_FORCE("_ZN2nn6applet23GetAppletResourceUserIdEv", "applet resource user ID; 
 // this process (hle_restart.c); else DM_LAUNCH_PARAM=<file>, written by oe::ExecuteProgram of the process before on the way here (below), in the first run only; else what
 // the profile's launch_param describes, for a program of a multi-program application run by itself: Super Mario 3D All-Stars' games quit without the launcher's language and two volumes
 // (fields: lang8, the language code GetDesiredLanguage gives; f32:<value>; u32:<value>; hex:<bytes>). Handed over once, as a popped parameter
-int dm_launch_param_pop(size_t *out, void *buf, size_t n); int dm_program_previous_index(void); void dm_program_execute(int index, const void *param, size_t n);
+int dm_launch_param_pop(size_t *out, void *buf, size_t n); int dm_program_previous_index(void); __attribute__((noreturn)) void dm_program_execute(int index, const void *param, size_t n);
 static uint64_t h_oe_GetLang(void);
 HLE_FORCE("_ZN2nn2oe21TryPopLaunchParameterEPmPvm", "launch parameter: what the program that started this one handed over (in this process: hle_restart.c), else the profile's launch_param; once a run", unsigned, h_oe_PopLaunchParam, size_t *out, uint8_t *buf, size_t n) {
     static _Atomic unsigned popped;   // 1 + the restart count of the run that took a parameter
@@ -226,7 +226,7 @@ void dm_oe_execute(int index, const void *param, size_t n) {
     char hex[3 * 32 + 1] = ""; for (size_t i = 0; i < n && i < 32; i++) snprintf(hex + 3 * i, 4, " %02x", ((const uint8_t *)param)[i]);
     static prog_plan P; static char *tsv; int have = 0;
     int cur = (int)(DM_GAME_PROGRAM_ID & 0xf), guest = dm_thread_is_guest();   // the DM_CTL thread is no guest thread: it cannot end the program in place
-    if (index == cur && guest) { dm_program_execute(index, param, n); return; }   // returns only when the parameter is refused (hle_restart.c)
+    if (index == cur && guest) dm_program_execute(index, param, n);   // does not return: the program restarts, or the process stops (hle_restart.c)
 #if !TARGET_OS_IPHONE
     const char *pf = getenv("DM_PROGRAMS");
     if (pf && *pf) {
@@ -260,7 +260,7 @@ void dm_oe_execute(int index, const void *param, size_t n) {
     }
     if (!have && guest) {
         LOG("[RED] oe::ExecuteProgram(%d, %zu bytes of parameters:%s): program %d cannot start here; this program starts again without the parameter, back to its start", index, n, hex, index);
-        dm_program_execute(cur, NULL, 0);   // does not return without a parameter
+        dm_program_execute(cur, NULL, 0);   // does not return
     }
     if (!have) LOG("[RED] oe::ExecuteProgram(%d, %zu bytes of parameters:%s): the host has only this program; it ends", index, n, hex);
     dm_host_shutdown_then("oe::ExecuteProgram", have ? prog_exec : NULL, &P);

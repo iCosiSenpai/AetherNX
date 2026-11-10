@@ -748,6 +748,16 @@ int dm_fs_clone_committed(const char *dir, const char *to) {
     pthread_mutex_unlock(&g_lock);
     errno = e; return r;
 }
+// Replaces save mount i's work directory with a clone of its committed version: the clone is made beside it first (<dir>.re), then swapped in atomically, then the swapped-out
+// tree goes. 0, or the errno of the step that failed, with the work directory left as it was. Caller holds the path and mount locks and the transaction's write lock
+static int reclone_work(int i) {
+    char re[1100]; snprintf(re, sizeof re, "%s.re", g_mnt[i].dir); int rerr = 0;
+    if (!access(re, F_OK)) { errno = 0; if (rm_tree(re)) return errno ? errno : EIO; }   // what an earlier failure left there
+    if (dm_fs_test_fail("reclone") || clonefile(g_mnt[i].commit, re, 0)) rerr = errno ? errno : EIO;
+    else if (renamex_np(re, g_mnt[i].dir, RENAME_SWAP)) rerr = errno ? errno : EIO;
+    rm_tree(re);                                                        // the swapped-out work directory, or what a failed step left
+    return rerr;
+}
 // Both Commit overloads share this transaction engine. Caller holds the path
 // and mount locks; front-end failure notification is delivered after unlocking.
 static Result commit_mount_locked(int i, int *notify_error) {
@@ -773,11 +783,7 @@ static Result commit_mount_locked(int i, int *notify_error) {
         for (int k = 0; k < 65536; k++) nopen += atomic_load(&g_ftxn[k]) == token;   // these handles point into the deleted old working directory after re-cloning
         // First clone the committed version into a sibling temporary directory; once that succeeds, atomically swap it with the tainted work directory and delete the swapped-out one. If any step fails, do not exit: the work directory stays and the "tainted" mark is put back
         // (the next commit is refused again and recloning is retried); the committed version is unchanged (before, the work directory was deleted first and then recloned, and a failed clone called die, so with a full disk the process exited and the work directory was gone)
-        char re[1100]; snprintf(re, sizeof re, "%s.re", g_mnt[i].dir); int rerr = 0;
-        if (!access(re, F_OK) && rm_tree(re)) rerr = errno ? errno : EIO;
-        else if (dm_fs_test_fail("reclone") || clonefile(g_mnt[i].commit, re, 0)) { rerr = errno ? errno : EIO; rm_tree(re); }
-        else if (renamex_np(re, g_mnt[i].dir, RENAME_SWAP)) { rerr = errno ? errno : EIO; rm_tree(re); }
-        else rm_tree(re);                                               // the swapped-out tainted work directory
+        int rerr = reclone_work(i);
         // Handles still open on the old tree now write to unlinked files: a write through one would succeed and the next commit would keep the recloned (old) data.
         // Such writes are refused and refuse that commit (stale_handle), until the handle is closed and the file opened again in the new tree
         if (!rerr && nopen) for (int k = 0; k < 65536; k++) if (atomic_load(&g_ftxn[k]) == token) atomic_store(&g_fstale[k], 1);
@@ -998,25 +1004,30 @@ HLE_FORCE("_ZN2nn2fs15CreateDirectoryEPKc", "fsp-srv → mkdir(2)", Result, h_fs
     return RES_OK; }
 // Recursive deletes never follow a link: each folder is opened from its parent with O_NOFOLLOW, so a link (put in a save or temporary folder from outside, or swapped in
 // for a folder after it was listed) is removed itself and the folder it points at is untouched. rm_fd_contents empties the folder fd names and closes fd.
+// Removes what is in the folder open as fd, and closes it. 0, or -1 with errno from the first step that failed (a later step's success must not leave it undefined)
 static int rm_fd_contents(int fd) {
-    DIR *d = fdopendir(fd); if (!d) { close(fd); return -1; }
-    int dfd = dirfd(d); if (dfd < 0) { closedir(d); return -1; }   // dirfd may fail: never hand -1 to openat / unlinkat
-    struct dirent *e; int rc = 0;
+    DIR *d = fdopendir(fd); if (!d) { int e = errno; close(fd); errno = e; return -1; }
+    int dfd = dirfd(d); if (dfd < 0) { int e = errno; closedir(d); errno = e; return -1; }   // dirfd may fail: never hand -1 to openat / unlinkat
+    struct dirent *e; int rc = 0, err = 0;
     while ((e = readdir(d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
         int sub = e->d_type == DT_DIR || e->d_type == DT_UNKNOWN ? openat(dfd, e->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC) : -1;
-        if (sub >= 0) rc |= rm_fd_contents(sub) | unlinkat(dfd, e->d_name, AT_REMOVEDIR);
-        else rc |= unlinkat(dfd, e->d_name, 0);
+        if (sub >= 0) {
+            if (rm_fd_contents(sub)) { rc = -1; if (!err) err = errno; }
+            if (unlinkat(dfd, e->d_name, AT_REMOVEDIR)) { rc = -1; if (!err) err = errno; }
+        } else if (unlinkat(dfd, e->d_name, 0)) { rc = -1; if (!err) err = errno; }
     }
     closedir(d);
+    if (rc) errno = err ? err : EIO;
     return rc;
 }
-// Deletes p and what is in it. A p that is itself a link (a save.work or save.new left beside a save, a writable mount's root) loses only the link
+// Deletes p and what is in it. A p that is itself a link (a save.work or save.new left beside a save, a writable mount's root) loses only the link. 0, or -1 with errno
 static int rm_tree(const char *p) {
     struct stat st;
     if (!lstat(p, &st) && S_ISLNK(st.st_mode)) { LOG("[RED] fs: %s is a link: removing the link, not the folder it points at", p); return unlink(p); }
     int fd = open(p, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC); if (fd < 0) return -1;
-    return rm_fd_contents(fd) | rmdir(p);
+    if (rm_fd_contents(fd)) { int e = errno; rmdir(p); errno = e; return -1; }   // the step that failed, not rmdir's "not empty" after it
+    return rmdir(p);
 }
 HLE_FORCE("_ZN2nn2fs26DeleteDirectoryRecursivelyEPKc", "fsp-srv → recursive delete (only inside writable mounts)", Result, h_fs_DeleteDirRec, const char *path) { dm_thread_service_request();
     HP(path); RW(); return rm_tree(hp) ? err_res("rmtree", hp) : RES_OK;
@@ -1216,8 +1227,9 @@ HLE_FORCE("_ZN2nn2fs6detail18IsEnabledAccessLogEj", "fsp-srv; access log always 
 HLE_FORCE("_ZN2nn2fs6detail18IsEnabledAccessLogEv", "fsp-srv; access log always off (returns bool)", unsigned, h_fs_AccessLog, void) { return 0; }
 
 // Program restart (hle_restart.c), RELEASE: the files and directories the old program left open are closed, as its process's end would. The mounts stay: the RomFS image, the saves
-// and the add-on content are the same for the next program, and a mount of a name already mounted is a no-op (mount_ex). A save's work directory keeps what the old program wrote and
-// did not commit (on Horizon the end of the process drops it)
+// and the add-on content are the same for the next program, and a mount of a name already mounted is a no-op (mount_ex). Each save's work directory goes back to its committed
+// version, as at the end of a process on Horizon: what the old program wrote and did not commit ends with it. A save whose clone fails keeps its work directory, tainted: the next
+// program's first commit is refused and clones again (commit_mount_locked), so the old program's uncommitted writes never reach the committed version
 static void fs_restart_release(void) {
     int nf = 0, nd = 0;
     for (int fd = 0; fd < 65536; fd++) if (g_fmode[fd]) {
@@ -1229,5 +1241,21 @@ static void fs_restart_release(void) {
         dir_free(h); nd++;
     }
     if (nf || nd) LOG("restart: closed %d file(s) and %d directory handle(s) the program left open", nf, nd);
+    pthread_once(&g_txn_lock_once, txn_locks_init);
+    PATH_LOCK(); pthread_mutex_lock(&g_lock);
+    for (int i = 0; i < g_nmnt; i++) {
+        if (g_mnt[i].txn_root != i) continue;
+        pthread_rwlock_wrlock(&g_txn_lock[i]);
+        int perr = atomic_exchange(&g_mnt[i].poison, 0), rerr = reclone_work(i);
+        if (rerr) {
+            save_poison_txn(i, perr ? perr : rerr);
+            LOG("[RED] restart: the save work directory %s could not go back to its committed version errno=%d: it stays tainted, and the next commit is refused and clones again", g_mnt[i].dir, rerr);
+        } else {
+            atomic_store(&g_mnt[i].first_write_ns, 0);
+            LOG("restart: the save work directory %s is its committed version again (what the old program did not commit ends with it)", g_mnt[i].dir);
+        }
+        pthread_rwlock_unlock(&g_txn_lock[i]);
+    }
+    pthread_mutex_unlock(&g_lock);
 }
 DM_RESTART_HOOK(DM_RESTART_RELEASE, 50, fs_restart_release);

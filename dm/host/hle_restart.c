@@ -3,10 +3,13 @@
 // calling ExecuteProgram(0, <100 bytes>) and waiting to be ended. An iOS app cannot start itself again, and the Mac and iOS share this host, so the restart happens in place:
 //   1. dm_program_execute (on the calling guest thread): copy the parameter, mark every guest thread for ending (hle_thread.c dm_threads_kill_all), run the STOP hooks, end the caller.
 //   2. A marked thread ends at its next SVC entry or exit, inside a kernel wait, or, while it runs guest code, through the pause signal, which sends it to its gate stack to exit.
-//      The main guest thread does not exit: it jumps back to main.c's restart loop (dm_main_restart_jump), which calls dm_program_restart_run.
+//      A thread created while the restart is under way is marked as it is made. The main guest thread does not exit: it jumps back to main.c's restart loop
+//      (dm_main_restart_jump), which calls dm_program_restart_run.
 //   3. dm_program_restart_run (on the main guest thread, outside guest code): wait for every other thread to end, run the RELEASE hooks (guest memory still holds the old program),
 //      then the RESET hooks (guest memory remapped, the modules' data restored and relocated, the per-program tables cleared), then publish the launch parameter. main.c enters
 //      the program again from its start: nnosInitialize, the SDK's startup, the modules' constructors, nnMain.
+// What cannot restart stops the process (die: crash.c's report names every thread): a thread that has not ended after 10 s (busy in host code that never comes back to an SVC),
+// whose code and memory the reset would remap under it, and a launch parameter larger than the host keeps, which the requested program needs and the game waits on.
 // hle_oe.c's ExecuteProgram restarts in place a program that starts itself again, and this program, without the parameter, when the requested one cannot start here: the game
 // comes back to its start. Returning to the game instead, as before, left it waiting to be ended, its picture frozen and its music going on (the Ezio Collection's Brotherhood is
 // program 1).
@@ -15,7 +18,8 @@
 #include <mach-o/ldsyms.h>
 #include <stdatomic.h>
 
-#define LAUNCH_PARAM_MAX (64u << 10)   // a parameter larger than this is refused (Assassin's Creed The Ezio Collection passes 100 bytes)
+#define LAUNCH_PARAM_MAX (64u << 10)   // the largest launch parameter kept (Assassin's Creed The Ezio Collection passes 100 bytes)
+static uint64_t g_restart_wait_ns = 10ull * 1000000000ull;                             // how long the other guest threads have to end (t_restart waits less)
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static struct { int pending, index; uint8_t *param; size_t n; } g_req;                 // the restart under way (g_mu)
 static struct { int set; uint8_t *param; size_t n; } g_lp;                             // the launch parameter the running program has not popped yet (g_mu)
@@ -63,12 +67,11 @@ void dm_threads_kill_all(void);                 // hle_thread.c
 int dm_threads_kill_wait(uint64_t timeout_ns);  // hle_thread.c: guest threads still running when the time is up
 __attribute__((noreturn)) void dm_thread_terminate_on_gate_stack(void);   // hle_thread.c
 
-// nn::oe::ExecuteProgram on a guest thread. Returns only when the request is refused (a parameter too large); otherwise the calling thread ends
-void dm_program_execute(int index, const void *param, size_t n) {
-    if (n > LAUNCH_PARAM_MAX || (n && !param)) {
-        LOG("[RED] oe::ExecuteProgram(%d, %zu bytes of parameters): a launch parameter of more than %u bytes is not kept; the game carries on", index, n, LAUNCH_PARAM_MAX);
-        return;
-    }
+// nn::oe::ExecuteProgram on a guest thread: the calling thread ends, and the program restarts. A launch parameter larger than LAUNCH_PARAM_MAX, or one that is not there,
+// stops the process (see the file comment)
+__attribute__((noreturn)) void dm_program_execute(int index, const void *param, size_t n) {
+    if (n > LAUNCH_PARAM_MAX || (n && !param))
+        die("[RED] oe::ExecuteProgram(%d, %zu bytes of parameters): the host keeps a launch parameter of up to %u bytes, and the game waits to be ended: the process stops here", index, n, LAUNCH_PARAM_MAX);
     uint8_t *copy = n ? malloc(n) : NULL;
     if (n && !copy) die("restart: launch parameter allocation failed");
     if (n) memcpy(copy, param, n);   // guest memory: copied before any thread ends
@@ -86,8 +89,8 @@ void dm_program_execute(int index, const void *param, size_t n) {
 // On the main guest thread, back in main.c's restart loop: see the file comment
 void dm_program_restart_run(void) {
     uint64_t t0 = now_ns();
-    int left = dm_threads_kill_wait(10ull * 1000000000ull);
-    if (left) LOG("[RED] restart: %d guest thread(s) did not end within 10 s; they end at their next SVC, and the restart goes on", left);
+    int left = dm_threads_kill_wait(g_restart_wait_ns);
+    if (left) die("[RED] restart: %d guest thread(s) did not end within %.1f s (named above): the program's memory cannot be reset under them, so the process stops here", left, g_restart_wait_ns / 1e9);
     uint64_t t1 = now_ns();
     dm_restart_run_stage(DM_RESTART_RELEASE);
     dm_restart_run_stage(DM_RESTART_RESET);

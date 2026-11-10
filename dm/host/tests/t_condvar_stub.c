@@ -27,5 +27,5 @@ __attribute__((weak)) uint64_t guest_gate_top_self(void) { return 0; }
 __attribute__((weak)) void dm_main_restart_jump(void) { abort(); }
 __attribute__((weak)) int dm_launch_param_pop(size_t *out, void *buf, size_t n) { (void)buf; (void)n; if (out) *out = 0; return 0; }
 __attribute__((weak)) int dm_program_previous_index(void) { return -1; }
-__attribute__((weak)) void dm_program_execute(int index, const void *param, size_t n) { (void)index; (void)param; (void)n; }
+__attribute__((weak)) void dm_program_execute(int index, const void *param, size_t n) { (void)index; (void)param; (void)n; abort(); }   // noreturn in hle_oe.c
 __attribute__((weak)) unsigned dm_restart_count(void) { return 0; }

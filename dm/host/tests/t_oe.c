@@ -10,7 +10,7 @@ void dm_thread_native_wait(int entering) { (void)entering; } // queue-only test,
 // the program restart (hle_restart.c, hle_thread.c): no launch parameter, no restart, no thread ever ending (t_restart covers them)
 int dm_launch_param_pop(size_t *out, void *buf, size_t n) { (void)buf; (void)n; if (out) *out = 0; return 0; }
 int dm_program_previous_index(void) { return -1; }
-void dm_program_execute(int index, const void *param, size_t n) { (void)index; (void)param; (void)n; }
+void dm_program_execute(int index, const void *param, size_t n) { (void)index; (void)param; (void)n; abort(); }   // declared noreturn: this test never restarts
 int dm_thread_killed(void) { return 0; }
 void dm_thread_terminate_self(void) { abort(); }
 unsigned dm_restart_count(void) { return 0; }

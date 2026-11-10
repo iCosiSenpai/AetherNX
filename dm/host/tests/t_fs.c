@@ -7,7 +7,9 @@
 //      the next transaction commits normally, and the final save = the content of the next transaction;
 //   (5) remounting discards uncommitted content;
 //   (8) a save folder that cannot clone (ENOTSUP: HFS+, exFAT) mounts read-only and tells the front end; recursive deletes unlink symlinks and never empty their targets;
-//   (9) a save whose names hold backslashes (a host from before backslash paths) moves to today's names at mount, a taken name kept as it is.
+//   (9) a save whose names hold backslashes (a host from before backslash paths) moves to today's names at mount, a taken name kept as it is;
+//   (10) a program restart (hle_restart.c, RELEASE) returns the work directory to the committed version, as the end of a process does; a clone that fails there leaves it
+//        tainted, so the next program's first commit is refused and clones again, and the old program's uncommitted writes never reach the committed version.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -391,6 +393,30 @@ int main(void) {
         CHECK(read_fs("save:/both.bin", got, sizeof got) && !strcmp(got, "new") && read_fs("save:/m/a", got, sizeof got) && !strcmp(got, "ma"), "a second mount changes nothing else");
 #undef OLD
         g_nmnt = 0;
+    }
+
+    printf("⑩ a program restart drops what the old program did not commit\n");
+    {   uint64_t hk; setenv("DM_SAVE", save, 1); g_nmnt = 0;
+        CHECK(h_fs_MountSave("save", NULL) == RES_OK && !g_mnt[0].ro, "the save mounts");
+        CHECK(write_save("save:/a", "unsaved") == RES_OK && h_fs_CreateFile("save:/n", 0) == RES_OK && h_fs_OpenFile(&hk, "save:/a", MODE_WRITE) == RES_OK,
+              "the old program writes a, makes n, keeps a open, and commits none of it");
+        fs_restart_release();
+        snprintf(p, sizeof p, "%s/a", work); CHECK(same(p, "ok6"), "after RELEASE the work directory is the committed version: a = ok6");
+        snprintf(p, sizeof p, "%s/n", work); CHECK(access(p, F_OK) != 0, "and n is gone");
+        snprintf(p, sizeof p, "%s.re", work); CHECK(access(p, F_OK) != 0, "no .re is left");
+        snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "ok6"), "the committed version is unchanged");
+        CHECK(write_save("save:/a", "next") == RES_OK && h_fs_Commit("save") == RES_OK, "the next program writes and commits as usual");
+        snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "next"), "committed a = next");
+        setenv("DM_TEST_FS_FAILAT", "reclone:1", 1);
+        CHECK(write_save("save:/a", "unsaved2") == RES_OK, "the old program writes a again and does not commit");
+        fs_restart_release();   // the clone fails (injected)
+        snprintf(p, sizeof p, "%s/a", work); CHECK(same(p, "unsaved2"), "a clone that fails at RELEASE leaves the work directory as it was");
+        int nf2 = g_nfail;
+        CHECK(h_fs_Commit("save") == RES_FAIL && g_nfail == nf2 + 1, "it stays tainted: the next program's first commit is refused, and the front end is told");
+        snprintf(p, sizeof p, "%s/a", save); CHECK(same(p, "next"), "the old program's write never reaches the committed version (a = next)");
+        snprintf(p, sizeof p, "%s/a", work); CHECK(same(p, "next"), "that commit clones again: the work directory is the committed version");
+        CHECK(write_save("save:/a", "last") == RES_OK && h_fs_Commit("save") == RES_OK, "and the transaction after it commits");
+        unsetenv("DM_TEST_FS_FAILAT"); g_nmnt = 0;
     }
 
     rm_tree(root);
