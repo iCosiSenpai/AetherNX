@@ -18,13 +18,16 @@ import contextlib
 import json
 import os
 import platform
+import plistlib
 import re
+import shlex
 import shutil
 import struct
 import subprocess
 import sys
 import time
 from pathlib import Path
+from xml.parsers.expat import ExpatError
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / 'scripts'), str(ROOT / 'dm' / 'tools'), str(ROOT / 'dm' / 'games')]
@@ -107,6 +110,18 @@ def has_packages_here(folder):   # packages directly in the folder (not in its s
     except OSError: return False
 
 
+def built_apps(folder, tid):
+    """The Mac apps built from the game in folder: app bundles whose Info.plist names its title ID (DMTitleID, which dm/mac/pack_app.py writes). Any other app there (one
+    downloaded into the same folder) is not the game's: Studio would open it with Play and the Danger Zone would remove it and its settings"""
+    out = []
+    for p in sorted(folder.glob('*.app')):
+        try:
+            with open(p / 'Contents' / 'Info.plist', 'rb') as f: info = plistlib.load(f)
+        except (OSError, ValueError, ExpatError): continue   # no Info.plist, or a damaged one (plistlib.InvalidFileException is a ValueError)
+        if isinstance(info, dict) and str(info.get('DMTitleID', '')).upper() == tid: out.append(str(p))
+    return out
+
+
 def package_contents(paths):
     """A keyless stand-in for the packing script's content-meta reader (package_reader, which needs prod.keys and builds nx_extract), enough to list a library: a package's
     title IDs from its tickets' names (an NSP or NSZ lists `<rights ID>.tik`, whose first 16 digits are the title ID), else from a [<title ID>] tag in its file name; its version
@@ -184,7 +199,7 @@ def scan_game(folder):
         'extracted_versions': extracted,
         'display_version': display_version,   # from the newest extraction's control data, once the game was built
         'icon': str(newest / 'icon.jpg') if newest and (newest / 'icon.jpg').is_file() else None,
-        'mac_apps': [str(p) for p in sorted(folder.glob('*.app')) if p.is_dir()],
+        'mac_apps': built_apps(folder, tid),
         'ipas': [str(p) for p in sorted(folder.glob('*.ipa')) if p.is_file()],
         'save_dir': str(HORIZON_SUPPORT / tid),
         'log_file': str(HORIZON_LOGS / f'{tid}.log'),
@@ -195,17 +210,39 @@ def scan_game(folder):
 
 
 def scan_library(roots):
+    """Each library folder's games. A folder that is one game's own (its packages or a dump at its top: a single game's folder added as a library folder) is that game;
+    otherwise each folder in it is a game, and an archive at its top a game still to unpack. A folder that cannot be read, and one game that does not read, is an error
+    beside the others' games, never the end of the scan"""
+    b = builder()
     games, errors, seen = [], [], set()
     for root in roots:
         root = root.expanduser().resolve()
         if not root.is_dir():
             errors.append({'folder': str(root), 'message': 'not a folder'}); continue
-        candidates = [root] if has_packages_here(root) or (root / 'base').is_dir() else sorted(d for d in root.iterdir() if d.is_dir() and not d.name.startswith('.') and not d.name.endswith(('_build', '_survey', '.app')))
-        if candidates != [root]:   # an archive straight in the library folder is a game still to unpack, unless unpack already made its folder
-            games += [{'id': str(a), 'kind': 'archives', 'title_id': None, 'name': re.sub(r'\s*[\[(].*$', '', archive_stem(a)).strip() or a.name, 'folder': str(root),
-                       'profile': False, 'archives': [file_entry(a)], 'notes': ['The game is still in an archive: unpack it first.']}
-                      for a in sorted(root.iterdir()) if a.is_file() and is_archive(a) and not (root / archive_stem(a)).is_dir()]
-        for folder in candidates:
+        try:
+            entries = sorted(root.iterdir())
+            own = has_packages_here(root) or (root / 'base').is_dir() or b.dump_folder(root)
+        except OSError as e:   # one that macOS's privacy settings or its permissions keep from this process
+            errors.append({'folder': str(root), 'message': f'cannot be read ({e.strerror or e})'}); continue
+        subdirs = [d for d in entries if d.is_dir() and not d.name.startswith('.') and not d.name.endswith(('_build', '_survey', '.app'))]
+        if own and root not in seen:
+            seen.add(root)
+            try: g = scan_game(root)
+            except Exception as e:   # CliError, or an unexpected failure: reported, and the game folders in it still listed
+                why = str(e) if isinstance(e, CliError) else f'{type(e).__name__}: {e}'
+                if not subdirs: errors.append({'folder': str(root), 'message': why}); continue
+                # Packages dropped at the top of a library of game folders: the build reads the folder with its subfolders, so it is no one game. It used to take
+                # the whole library down with it (one error, no game listed); the games in its folders are listed as always
+                errors.append({'folder': str(root), 'message': f'{why} (the game folders in it are listed on their own; its top level is no game)'})
+            else:
+                if g: games.append(g); continue
+                # no game at its top after all (a folder named base that is not a dump's): the folders in it are the games
+        elif own: continue   # the same game folder named twice
+        # an archive straight in the library folder is a game still to unpack, unless unpack already made its folder
+        games += [{'id': str(a), 'kind': 'archives', 'title_id': None, 'name': re.sub(r'\s*[\[(].*$', '', archive_stem(a)).strip() or a.name, 'folder': str(root),
+                   'profile': False, 'archives': [file_entry(a)], 'notes': ['The game is still in an archive: unpack it first.']}
+                  for a in entries if a.is_file() and is_archive(a) and not (root / archive_stem(a)).is_dir()]
+        for folder in subdirs:
             if folder in seen: continue
             seen.add(folder)
             try: g = scan_game(folder)
@@ -227,7 +264,7 @@ def cmd_scan(args):
         return 0
     for g in games:
         if g['kind'] == 'archives':
-            print(f"{g['name']}: archived ({len(g['archives'])} archive(s)), run ./aethernx unpack \"{g['folder']}\""); continue
+            print(f"{g['name']}: archived ({len(g['archives'])} archive(s)), run ./aethernx unpack {shlex.quote(g['id'])}"); continue   # the archive itself when it lies at the top of a library folder (unpacking that folder would extract every archive of the library into it)
         upd = f"update v{g['updates'][-1]['version']}" if g['updates'] else 'no update'
         built = 'Mac app built' if g['mac_apps'] else 'not built'
         prof = 'tested profile' if g['profile'] else 'no profile (best effort)'
