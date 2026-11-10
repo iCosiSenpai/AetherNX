@@ -1,0 +1,4 @@
+# What ./aethernx setup --tools adds for the developer tools, pinned: unicorn for lift (vendor/nxrt), numpy for dm/tools/nso_fnmap.py (function-matched
+# cuts of another build). numpy's version is .github/requirements/tools.txt's (dm/tools/tests/test_aethernx_cli.py keeps the two in step).
+unicorn==2.1.4
+numpy==2.5.4

@@ -38,7 +38,7 @@ ARCHIVE_SUFFIXES = ('.zip', '.rar', '.7z', '.tar', '.tar.gz', '.tgz', '.tar.xz',
 TARGETS = {
     'mac': ['--platform', 'mac-app'],
     'ios': ['--platform', 'ios'],
-    'ios-slim': ['--platform', 'ios', '--romfs', 'separate'],
+    'ios-slim': ['--platform', 'ios', '--romfs', 'separate', '--keep-extracted'],   # the image stays for the one-time copy to the phone (the build refuses --romfs separate without it)
     'xcode': ['--prepare-xcode', '--keep-extracted'],
 }
 ALIASES = {'build-mac': 'mac', 'build-ios': 'ios', 'build-ios-slim': 'ios-slim', 'prepare-xcode': 'xcode'}
@@ -276,18 +276,38 @@ def cmd_scan(args):
 
 # ---- unpack ----
 
+TAR_SUFFIXES = ('.tar', '.tar.gz', '.tgz', '.tar.xz', '.txz', '.tar.zst')
+
+
 def extract_archive(arc, dest):
     dest.mkdir(parents=True, exist_ok=True)
     seven, unar = shutil.which('7zz') or shutil.which('7z'), shutil.which('unar')
     low = arc.name.lower()
-    if seven: cmd = [seven, 'x', '-y', f'-o{dest}', str(arc)]
+    # A tar, compressed or not, goes to bsdtar, which reads it whole: 7-Zip takes off one layer only, so Game.tar.gz gave Game.tar and no package
+    if low.endswith(TAR_SUFFIXES): cmd = ['tar', '-xf', str(arc), '-C', str(dest)]
+    elif seven: cmd = [seven, 'x', '-y', f'-o{dest}', str(arc)]
     elif unar and not low.endswith('.zip'): cmd = [unar, '-q', '-f', '-o', str(dest), str(arc)]
     elif low.endswith('.zip'): cmd = ['ditto', '-x', '-k', str(arc), str(dest)]
     else: cmd = ['tar', '-xf', str(arc), '-C', str(dest)]   # bsdtar reads tar, 7z and older RAR archives
-    r = subprocess.run(cmd, capture_output=True, text=True, errors='replace')
+    # No terminal for a password prompt: an encrypted archive fails at once instead of waiting, unseen, for a password (the output is captured)
+    r = subprocess.run(cmd, capture_output=True, text=True, errors='replace', stdin=subprocess.DEVNULL)
     if r.returncode:
-        hint = '' if seven or unar else ' (for RAR 5 archives: brew install sevenzip)'
-        raise CliError(f'could not extract {arc.name}{hint}: {(r.stderr or r.stdout).strip()[-400:]}')
+        text = (r.stderr or r.stdout).strip()
+        hint = '' if seven or unar or low.endswith(TAR_SUFFIXES) else ' (for RAR 5 archives: brew install sevenzip)'
+        if 'password' in text.lower() or 'Break signaled' in text: hint = ' (it is encrypted: extract it with its password, then unpack or add the folder)'   # 7-Zip's answer to a password it could not ask for
+        raise CliError(f'could not extract {arc.name}{hint}: {text[-400:]}')
+
+
+def archive_volumes(arc):
+    """An archive and the rest of its volumes, as Studio's Danger Zone takes them (archiveParts): Game.part1.rar → Game.part2.rar …, Game.rar → Game.r00 …,
+    Game.7z.001 → Game.7z.002 …"""
+    name = arc.name
+    if m := re.fullmatch(r'(.*)\.part\d+\.rar', name, re.I): pattern = re.compile(re.escape(m[1]) + r'\.part\d+\.rar', re.I)
+    elif m := re.fullmatch(r'(.*)\.\d{3}', name): pattern = re.compile(re.escape(m[1]) + r'\.\d{3}')
+    elif m := re.fullmatch(r'(.*)\.rar', name, re.I): pattern = re.compile(re.escape(m[1]) + r'\.r(ar|\d{2})', re.I)
+    else: return [arc]
+    try: return sorted(p for p in arc.parent.iterdir() if p.is_file() and pattern.fullmatch(p.name))
+    except OSError: return [arc]
 
 
 def cmd_unpack(args):
@@ -302,10 +322,18 @@ def cmd_unpack(args):
     for arc in todo:
         print(f'extracting {arc.name} → {dest}', file=sys.stderr)
         extract_archive(arc, dest)
-        if args.delete_archives: arc.unlink()
-    packages = [str(p) for p in builder().package_files(dest)]
-    if args.json: print(json.dumps({'folder': str(dest), 'archives': [str(a) for a in todo], 'packages': packages}, ensure_ascii=False))
-    else: print(f'{len(todo)} archive(s) extracted to {dest}: {len(packages)} game package(s) there')
+    b = builder()
+    packages = [str(p) for p in b.package_files(dest)]
+    try: dumps = [str(d) for d in [dest, *sorted(p for p in dest.iterdir() if p.is_dir())] if b.dump_folder(d)]
+    except OSError: dumps = []
+    # Nothing a build takes came out (an archive of something else, or one an extractor only partly opened): the archives stay, whatever --delete-archives says
+    if not packages and not dumps:
+        raise CliError(f'{len(todo)} archive(s) extracted to {dest}, and no game package (.nsp, .xci, .nsz, .xcz) or dump folder is there' + (': the archives are kept' if args.delete_archives else ''))
+    if args.delete_archives:   # every volume of a multi-part archive, not only its first
+        for arc in todo:
+            for part in archive_volumes(arc): part.unlink(missing_ok=True)
+    if args.json: print(json.dumps({'folder': str(dest), 'archives': [str(a) for a in todo], 'packages': packages, 'dumps': dumps}, ensure_ascii=False))
+    else: print(f'{len(todo)} archive(s) extracted to {dest}: {len(packages)} game package(s) and {len(dumps)} dump folder(s) there')
     return 0
 
 
@@ -447,7 +475,7 @@ def cmd_setup(args):
     if not py.exists():
         print(f'creating {venv}', file=sys.stderr)
         subprocess.run([sys.executable, '-m', 'venv', str(venv)], check=True)
-    pkgs = ['-r', str(ROOT / 'scripts' / 'requirements.txt')] + (['unicorn'] if args.tools else [])
+    pkgs = ['-r', str(ROOT / 'scripts' / 'requirements.txt')] + (['-r', str(ROOT / 'scripts' / 'requirements-tools.txt')] if args.tools else [])   # pinned: the versions the tools are tested with
     r = subprocess.run([str(py), '-m', 'pip', 'install', '--disable-pip-version-check', *pkgs])
     if r.returncode: raise CliError('pip could not install the packages (see above)')
     print(f'Python packages ready in {venv}. Run ./aethernx doctor to check the rest.')
@@ -491,6 +519,11 @@ def doctor():
     xcode = out.splitlines()[0] if code == 0 and out else ''
     check('Xcode', 'Xcode', code == 0, xcode or out[-200:], 'install Xcode 27.2 and select it: sudo xcode-select -s /Applications/Xcode.app')
     check('Xcode', 'Metal toolchain', run_out(['xcrun', '-sdk', 'macosx', 'metal', '--version'])[0] == 0, '', 'xcodebuild -downloadComponent MetalToolchain')
+    # The Metal compiler the shaders were tested with (dmsh_chain.lock): another one stops an NVN game's build before its shader steps, so "ready" must not be said without it.
+    # own_compilers.py's own stop message is the fix: it names the Xcode to install and --allow-other-metal (DM_ALLOW_OTHER_METAL=1 here passes the check, as it passes the build)
+    if code == 0:
+        mcode, mout = run_out([sys.executable, str(ROOT / 'dm' / 'gfx' / 'tools' / 'own_compilers.py'), '--check-metal'], timeout=60)
+        check('Xcode', "Metal compiler of the tested shaders (NVN games)", mcode == 0, '', '' if mcode == 0 else mout[-600:] or 'python3 dm/gfx/tools/own_compilers.py --check-metal failed')
     check('Xcode', 'iOS SDK (iPhone and iPad builds)', run_out(['xcrun', '--sdk', 'iphoneos', '--show-sdk-version'])[0] == 0, '', 'Xcode → Settings → Components → iOS', required=False)
     for tool, fix, req in (('dotnet', 'brew install --cask dotnet-sdk', True), ('zstd', 'brew install zstd', True), ('glslangValidator', 'brew install glslang', True),
                            ('xcodegen', 'brew install xcodegen (iPhone and iPad builds)', False)):
@@ -562,7 +595,7 @@ def main(argv=None):
     p.add_argument('--limit', type=int, default=0, help='at most this many functions (for a quick test)')
     p.add_argument('--json', action='store_true')
     p = sub.add_parser('setup', help='create .venv and install the Python packages', allow_abbrev=False)
-    p.add_argument('--tools', action='store_true', help='also the packages the developer tools need (unicorn)')
+    p.add_argument('--tools', action='store_true', help='also the packages the developer tools need (unicorn, numpy: scripts/requirements-tools.txt)')
     p = sub.add_parser('doctor', help='check the tools and files a build needs', allow_abbrev=False)
     p.add_argument('--json', action='store_true')
     p = sub.add_parser('studio', help='build (once) and open AetherNX Studio', allow_abbrev=False)
