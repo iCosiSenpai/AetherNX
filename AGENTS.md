@@ -9,7 +9,7 @@ The NSO rewriter adapts AArch64 game modules to Apple's process and memory rules
 | Task | Read first |
 |---|---|
 | Build and package an application | [README.md](README.md), [development guide](docs/development.md) |
-| Change the Studio app or the `aethernx` tool | `studio/Sources/`, `scripts/aethernx_cli.py`, [front-end contract](docs/frontends.md); build with `studio/build.sh` |
+| Change the Studio app or the `aethernx` tool | `studio/Sources/`, `scripts/aethernx_cli.py`, `scripts/device_install.py` (sign and install on a device), [front-end contract](docs/frontends.md); build with `studio/build.sh` |
 | Identify reusable engine or UI components | [foundation](docs/foundation.md), [front-end contract](docs/frontends.md) |
 | Crash, hang, `[RED]` line or wrong picture | [symptom index](docs/agents/symptoms.md), then its linked reference and game note |
 | Bring up another title | [bring-up guide](docs/agents/03-bringup.md), [agent guide index](docs/agents/README.md) |
@@ -49,5 +49,6 @@ The NSO rewriter adapts AArch64 game modules to Apple's process and memory rules
 - A new profile needs its note and a games-table row. Add a README gallery entry only after gameplay verification; edit `docs/images/gallery.tsv`, then run `python3 dm/tools/docs_gallery.py`. Keep platform, route and validation limits in the game note.
 - Run checks appropriate to the changed subsystem. Documentation: `python3 -m unittest dm/tools/tests/test_docs.py`. Python changes: the pinned `dm/tools/lint_python.py` ratchet. Packaging and storage changes: their synthetic tests. Translator changes: synthetic translation tests and tool-lock checks.
 - For changes reaching gameplay, use `scripts/regress.py impact` to select relevant locally available games, then `scripts/regress.py check --games <ids>`. Prefer the five most relevant games; use fewer for narrow changes and explain coverage. State when game files or device testing are unavailable.
-- iOS outputs are unsigned IPAs for the user to sideload. Do not sign or install apps on the user's devices. Report what was tested, what remains unverified and any cache rebuild required by a chain change.
+- iOS outputs are unsigned IPAs for the user to sideload, or an app the user installs with `./aethernx install` (Studio's Install), signed with their own Apple team. Do not sign or install apps on the user's devices, register App IDs or devices with their Apple account, or copy files to a device unless the user asks for that run. Report what was tested, what remains unverified and any cache rebuild required by a chain change.
+- For a request with several parts, keep the local, gitignored `plan-context/` folder current (rules in its `README.md`): the user's words and a checklist, `status.md` after each step, decisions with their reasons. It is how the next session, or the same one after a context compaction, picks up the work.
 - Keep this file below 1,500 words and numbered agent guides below 6,000 words. Current game counts belong in the profile index, not these instructions.

@@ -30,3 +30,6 @@ dm/build/
 /AetherNX.app/
 # Local design-tool state
 /.impeccable/
+
+# Local plan and context notes for agents (requests, status, decisions); never committed
+/plan-context/
