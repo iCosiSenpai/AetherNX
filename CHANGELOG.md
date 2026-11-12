@@ -1,6 +1,38 @@
 # Changelog
 
-## Unreleased
+## 1.0.0
+
+A new Studio: one window for everything, a home for your library, mods and cheats, a setup that explains itself, and installs that move only what changed. The engine is the same as in 0.2.0 (nxnative up to `7479adf`): the next nxnative sync comes as an engine update, without a new app.
+
+**One window**
+
+- The sidebar has **Home**, your games, and AetherNX's own pages: **Activity**, **Devices**, **Updates** and **Settings**. Settings is a page of the window (⌘, opens it, as does the gear in the toolbar), not a window of its own; so is the update notice at launch.
+- **Home**: the game you played last, large, with Play; tiles for the engine, your keys, your devices, the cloud and updates, each opening its page; and every game in a grid that takes as many columns as the window has room for, on a laptop or a large display.
+- **A game's page** uses the width: two columns when the window is wide (what the game is and what was built on the left, saves, mods and cheats on the right), a strip of facts (play time, last session, version, size, what it is built for), and buttons that become icons when the window is narrow.
+- **Builds and installs say what they are doing**: "Step 5 of 9", what that step does and why, the step within it, the time left, and the steps already done with their times. When it ends well the card says so for a few seconds and the page goes back to how it was; a failure stays, with what went wrong and **Try Again**.
+
+**Mods and cheats**
+
+- A **Mods** section on each game's page: turn mods on and off, choose which wins when two change the same file, add a mod folder or a .zip, move one to the Trash, or look for mods on GameBanana. No rebuild: they apply at the game's next start. Code mods (exefs) are told apart, since the engine does not run them.
+- A **Cheats** section: the game's Atmosphère cheat files and how many cheats each holds, with **Add**; single cheats are turned on and off from the game's Cheats menu while it runs.
+- Both folders sit next to the game's save. The new cloud choice **iCloud Drive › AetherNX** gives each game a folder with its name, holding its save, its Mods and its Cheats, so every Mac (and, choosing the same folder there, every iPhone or iPad) sees the same ones.
+
+**Saves**
+
+- The cloud folder panel opens at once, as a sheet in the folder in use, instead of listing the whole of iCloud Drive first.
+
+**Setup**
+
+- The Setup Assistant checks what this Mac needs before anything else (Xcode, its command-line tools, Git, Homebrew, Python), says what each piece is for and why, and installs what it can: **Install with Homebrew**, the Metal toolchain, the Python packages, or **Install Everything Missing** in one go. `./aethernx doctor` explains each missing piece too, and also checks Xcode's license, `afcclient` and your signing certificate.
+
+**Faster installs on iPhone and iPad**
+
+- The game files can stay on the device: **Game files: Automatic** keeps them there when the device is on a cable and `afcclient` is installed (`brew install libimobiledevice`), so installing again copies only the app. Fire Emblem Fortune's Weave's install moved 29 GB, 27 of them its data, at every install.
+- The graphics pipelines compile in parallel where the Mac's memory allows (two at a time on 16 GB): Fortune's Weave's took 6 minutes one after the other.
+
+**Updates**
+
+- The Updates page explains the two parts that update apart: the app, from its releases, and the engine, from its repository, in seconds and without a new app. It lists the engine's new changes and says what they mean: a rebuild to get engine fixes, shaders translated again, or nothing to do.
 
 **Install on your iPhone or iPad from the Mac**
 
