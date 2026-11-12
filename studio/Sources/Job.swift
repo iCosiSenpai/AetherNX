@@ -18,6 +18,16 @@ final class Job: Identifiable {
         }
     }
 
+    /// A stage that ended: its name as the build script gives it, how long it took and what it said.
+    struct FinishedStage: Identifiable, Equatable {
+        var id: Int { index }
+        let index: Int
+        let name: String
+        let seconds: Double
+        let ok: Bool
+        let summary: String
+    }
+
     let id = UUID()
     let title: String
     let gameID: Game.ID?
@@ -31,6 +41,12 @@ final class Job: Identifiable {
     private(set) var stageFraction: Double?
     private(set) var eta: Double?
     private(set) var lastMessage = ""
+    /// When the current stage started, for its own timer.
+    private(set) var stageStarted = Date()
+    private(set) var finishedStages: [FinishedStage] = []
+    private(set) var ended: Date?
+    /// Starts the same job again (a build, an install), for the card of one that failed.
+    @ObservationIgnored var retry: (@MainActor () -> Void)?
     var failureMessage: String?
     private var cancelRequested = false
     @ObservationIgnored var runner: CommandRunner?
@@ -87,6 +103,7 @@ final class Job: Identifiable {
             stepName = event["step"] as? String ?? ""
             stageFraction = 0
             eta = nil
+            stageStarted = Date()
             return String(localized: "Step \(stageIndex) of \(stageCount): \(stageName)")
         case "step":
             stepName = event["step"] as? String ?? ""
@@ -99,6 +116,11 @@ final class Job: Identifiable {
             return nil
         case "stage_end":
             stageFraction = 1
+            let name = event["name"] as? String ?? stageName
+            let seconds = (event["elapsed"] as? Double) ?? (event["elapsed"] as? Int).map(Double.init) ?? Date().timeIntervalSince(stageStarted)
+            finishedStages.removeAll { $0.index == (event["k"] as? Int ?? stageIndex) }
+            finishedStages.append(FinishedStage(index: event["k"] as? Int ?? stageIndex, name: name, seconds: seconds, ok: event["ok"] as? Bool ?? true,
+                                                summary: event["summary"] as? String ?? ""))
             if let summary = event["summary"] as? String, !summary.isEmpty { return "  \(event["name"] as? String ?? ""): \(summary)" }
             return nil
         case "say":
@@ -116,6 +138,7 @@ final class Job: Identifiable {
 
     func finish(status: Int32) {
         runner = nil
+        ended = Date()
         if cancelRequested || status == 130 {
             state = .cancelled
         } else if status == 0 {

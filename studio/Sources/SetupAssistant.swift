@@ -170,7 +170,13 @@ private struct ToolsStep: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            StepHeader(title: "The AetherNX tools", detail: "The build scripts and the engine. The app runs every build from their folder.")
+            StepHeader(title: "What this Mac needs", detail: "Builds run on this Mac with Apple's and open-source tools. Each line says what it is for; Install puts in what is missing.")
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(model.prerequisites) { CheckRow(check: $0) }
+            }
+            .onAppear { model.refreshPrerequisites() }
+            Divider()
+            Text("The AetherNX engine").font(.headline)
             StatusRow(ok: model.engine != nil,
                       title: model.engine.map { Text(verbatim: ($0.path as NSString).abbreviatingWithTildeInPath) } ?? Text("Not found on this Mac"),
                       detail: model.engineVersion.map { Text("Version \($0)") }) {
@@ -195,19 +201,33 @@ private struct ToolsStep: View {
                 }
                 if let report = model.setupReport {
                     let missing = report.checks.filter { !$0.ok && $0.required }
+                    let optional = report.checks.filter { !$0.ok && !$0.required && $0.group != "Developer tools" }
                     if missing.isEmpty {
                         Label("Everything a build needs is in place.", systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.green)
                     } else {
                         Label("\(missing.count) things a build needs are missing:", systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 8) {
                             ForEach(missing) { CheckRow(check: $0) }
                         }
-                        if report.checks.contains(where: { $0.group == "Python" && !$0.ok }) {
-                            Button("Install Python Packages") { model.installPythonPackages() }
+                        if missing.contains(where: { !($0.install ?? "").isEmpty }) {
+                            Button("Install Everything Missing") { model.installMissing(report) }
+                                .buttonStyle(.borderedProminent)
                                 .disabled(!model.canStartJob)
                         }
+                    }
+                    if !optional.isEmpty {
+                        Text("Optional").font(.headline).padding(.top, 6)
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(optional) { CheckRow(check: $0) }
+                        }
+                    }
+                    DisclosureGroup("Everything checked (\(report.checks.filter(\.ok).count) in place)") {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(report.checks.filter(\.ok)) { CheckRow(check: $0, showsWhy: false) }
+                        }
+                        .padding(.top, 4)
                     }
                 } else if let error = model.setupError, !model.isCheckingSetup {
                     Label { Text(verbatim: error).textSelection(.enabled) } icon: { Image(systemName: "exclamationmark.triangle.fill") }

@@ -25,6 +25,7 @@ enum Pref {
     static let installDevice = "installDevice"
     static let signingTeam = "signingTeam"
     static let installSeparateFiles = "installSeparateFiles"
+    static let installFiles = "installFiles"
     static let installLaunch = "installLaunch"
     static let ascKeyPath = "ascKeyPath"
     static let ascKeyID = "ascKeyID"
@@ -124,19 +125,36 @@ final class AppModel {
     private(set) var isScanning = false
     @ObservationIgnored private var rescanPending = false
     private(set) var hasScanned = false
-    var selectedGameID: Game.ID?
+    /// The game whose page shows; nil on the other pages. Choosing one opens its page.
+    var selectedGameID: Game.ID? {
+        didSet { if selectedGameID != nil { page = .game } }
+    }
+    /// What the window's detail column shows (Navigation.swift): every page is in this one window.
+    var page: Page = .home
+    var settingsPane: SettingsPane = .general
     private(set) var job: Job?
     private(set) var outcomes: [Game.ID: JobOutcome] = [:]
+    /// The last job of each game that ended well, for the game's page ("Built 12 Nov, 18:42, in 37 min").
+    private(set) var lastSuccess: [Game.ID: JobOutcome] = [:]
+    /// Raised when a game's mods or cheats changed, so their sections read their folders again.
+    var extrasRevision = 0
     private(set) var activity: [LogLine] = []
     private var nextLineID = 0
     var showsActivity = false
     var showsSetupCheck = false
     var showsSetupAssistant = false
-    var showsUpdates = false
+    /// The Updates page, which the launch notice also opens (it was a sheet: now a page of the window).
+    var showsUpdates: Bool {
+        get { page == .updates }
+        set {
+            if newValue { page = .updates } else if page == .updates { page = selectedGameID == nil ? .home : .game }
+        }
+    }
     private(set) var setupReport: SetupReport?
     /// Why the last setup check gave no report (no JSON from `doctor`: a Python that cannot run, say), shown where the report would be.
     private(set) var setupError: String?
     private(set) var isCheckingSetup = false
+    private(set) var prerequisites: [SetupReport.Check] = []
     var keys = KeysStatus.current()
     var confirmation: Confirmation?
     var errorMessage: String?
@@ -178,6 +196,42 @@ final class AppModel {
     }
 
     var canStartJob: Bool { engine != nil && job?.isRunning != true }
+
+    /// The selection of the sidebar, as the page it shows.
+    var sidebarSelection: SidebarItem? {
+        get {
+            switch page {
+            case .home: .home
+            case .game: selectedGameID.map(SidebarItem.game) ?? .home
+            default: .page(page)
+            }
+        }
+        set {
+            switch newValue {
+            case .game(let id): selectedGameID = id
+            case .page(let other):
+                selectedGameID = nil
+                page = other
+            case .home, nil:
+                selectedGameID = nil
+                page = .home
+            }
+        }
+    }
+
+    func showSettings(_ pane: SettingsPane) {
+        settingsPane = pane
+        sidebarSelection = .page(.settings)
+    }
+
+    /// Takes a finished job off the screen: its card goes, and the page is as it was before the job started.
+    func dismissJob() {
+        guard let job, !job.isRunning else { return }
+        if let id = job.gameID { outcomes[id] = nil }
+        self.job = nil
+    }
+
+    func dismissOutcome(_ gameID: Game.ID) { outcomes[gameID] = nil }
 
     func jobFor(_ game: Game) -> Job? {
         guard let job, job.gameID == game.id else { return nil }
@@ -300,8 +354,9 @@ final class AppModel {
                 for game in games { for app in game.macApps { apps[URL(filePath: app).standardizedFileURL.path] = PlayLog.key(for: game) } }
                 playLog.setKnownApps(apps)
                 applyCloudSavesFolder()   // a game built since the last scan takes the library's cloud folder
-                if selectedGameID == nil || !games.contains(where: { $0.id == selectedGameID }) {
-                    selectedGameID = games.first?.id
+                if let id = selectedGameID, !games.contains(where: { $0.id == id }) {   // the game went away: back to the library's home
+                    selectedGameID = nil
+                    if page == .game { page = .home }
                 }
             } catch {
                 scanFailure = String(localized: "Could not read the scan result: \(error.localizedDescription)")
@@ -397,7 +452,8 @@ final class AppModel {
                     : String(localized: "Choose the team that signs the app in Settings → iPhone & iPad.")
                 return
             }
-            install = InstallOptions(device: device.udid, team: team, separateFiles: defaults.bool(forKey: Pref.installSeparateFiles),
+            install = InstallOptions(device: device.udid, team: team,
+                                     files: defaults.string(forKey: Pref.installFiles) ?? (defaults.bool(forKey: Pref.installSeparateFiles) ? "separate" : "auto"),
                                      launch: defaults.bool(forKey: Pref.installLaunch), iCloudContainer: defaults.string(forKey: Pref.iCloudContainer) ?? "")
             deviceName = device.name
             environment = Self.signingEnvironment(keyPath: defaults.string(forKey: Pref.ascKeyPath) ?? "", keyID: defaults.string(forKey: Pref.ascKeyID) ?? "",
@@ -412,6 +468,7 @@ final class AppModel {
             return
         }
         let job = Job(title: target == .device ? String(localized: "Installing on \(deviceName)") : target.jobTitle, gameID: game.id, target: target)
+        job.retry = { [weak self] in self?.build(game, target: target) }
         if defaults.bool(forKey: Pref.notifyBuilds) { Notifier.requestPermission() }
         startJob(job, executable: engine.appending(path: "aethernx"), arguments: args, directory: engine, environment: environment) { [weak self] ok in
             guard let self else { return }
@@ -441,9 +498,19 @@ final class AppModel {
     /// The library's cloud folder reaches every built game that has no choice of its own (CloudSaves.applyLibraryFolder).
     func applyCloudSavesFolder() {
         let folder = UserDefaults.standard.string(forKey: Pref.cloudSavesFolder) ?? ""
-        let domains = games.filter { $0.macApp != nil }.compactMap(CloudSaves.domain(for:))
-        guard !domains.isEmpty else { return }
-        let changed = CloudSaves.applyLibraryFolder(folder, domains: domains)
+        var targets: [String: String] = [:]
+        for game in games where game.macApp != nil {
+            guard let domain = CloudSaves.domain(for: game) else { continue }
+            let target = CloudSaves.libraryTarget(folder, gameName: game.name)
+            if !target.isEmpty {
+                try? FileManager.default.createDirectory(atPath: target, withIntermediateDirectories: true)
+                GameExtras.prepare(folder: target, game: game)
+            }
+            targets[domain] = target
+        }
+        guard !targets.isEmpty else { return }
+        let changed = CloudSaves.applyLibraryFolders(targets)
+        for game in games where game.macApp != nil { refreshExtras(game) }
         if changed > 0 {
             log(folder.isEmpty ? String(localized: "Cloud saves: off for \(changed) game(s) that followed the library's setting.")
                                : String(localized: "Cloud saves: \(changed) game(s) now sync through \(CloudSaves.displayName(folder))."), kind: .info)
@@ -510,7 +577,20 @@ final class AppModel {
                 job.finish(status: status)
                 let ok = job.state == .succeeded
                 if let gameID = job.gameID {
-                    self.outcomes[gameID] = JobOutcome(title: job.title, succeeded: ok, message: job.failureMessage ?? "", date: .now)
+                    // A failure stays on the game's page until it is dismissed; a success or a stop leaves nothing behind
+                    self.outcomes[gameID] = job.state == .failed ? JobOutcome(title: job.title, succeeded: false, message: job.failureMessage ?? "", date: .now) : nil
+                    if ok { self.lastSuccess[gameID] = JobOutcome(title: job.title, succeeded: true, message: job.lastMessage, date: .now) }
+                }
+                switch job.state {
+                case .cancelled: if self.job === job { self.job = nil }
+                case .succeeded:
+                    // The card says "done" for a few seconds, then the page is as it was before the job
+                    Task { @MainActor [weak self, weak job] in
+                        try? await Task.sleep(for: .seconds(6))
+                        guard let self, let job, self.job === job, !job.isRunning else { return }
+                        self.job = nil
+                    }
+                default: break
                 }
                 self.log(job.state.summary(for: job.title), kind: ok ? .info : .error)
                 if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
@@ -540,6 +620,7 @@ final class AppModel {
 
     func play(_ game: Game) {
         guard let app = game.macApp else { return }
+        refreshExtras(game)   // the mods on and the cheats folder, as the game's folder holds them now
         NSWorkspace.shared.openApplication(at: URL(filePath: app), configuration: NSWorkspace.OpenConfiguration()) { _, error in
             if let error {
                 Task { @MainActor in self.errorMessage = error.localizedDescription }
@@ -580,11 +661,12 @@ final class AppModel {
         }
     }
 
-    func confirmMoveToTrash(_ path: String, title: String, message: String) {
+    func confirmMoveToTrash(_ path: String, title: String, message: String, then done: (@MainActor () -> Void)? = nil) {
         confirmation = Confirmation(title: title, message: message, actionTitle: String(localized: "Move to Trash")) { [weak self] in
             NSWorkspace.shared.recycle([URL(filePath: path)]) { _, error in
                 Task { @MainActor in
                     if let error { self?.errorMessage = error.localizedDescription }
+                    done?()
                     self?.rescan()
                 }
             }
@@ -697,6 +779,20 @@ final class AppModel {
 
     // MARK: Setup check
 
+    /// Runs the commands that install missing pieces (Prerequisites.swift), then checks again.
+    func startSetupJob(_ job: Job, script: String) {
+        startJob(job, executable: URL(filePath: "/bin/zsh"), arguments: ["-c", script], directory: engine ?? FileManager.default.homeDirectoryForCurrentUser,
+                 environment: ["HOMEBREW_NO_AUTO_UPDATE": "1", "NONINTERACTIVE": "1", "HOMEBREW_NO_ENV_HINTS": "1"]) { [weak self] _ in
+            self?.runSetupCheck()
+            self?.refreshPrerequisites()
+        }
+    }
+
+    /// What this Mac has of what AetherNX needs before its own check can run (MacPrerequisites).
+    func refreshPrerequisites() {
+        Task { prerequisites = await MacPrerequisites.check() }
+    }
+
     func runSetupCheck() {
         guard let engine, !isCheckingSetup else { return }
         isCheckingSetup = true
@@ -731,7 +827,7 @@ extension AppModel {
         if target == .device {
             // `./aethernx install` builds the game's Xcode project itself, from the extracted files it keeps, then signs and installs it
             guard let install else { return nil }
-            args = ["install", folder, "--progress", "json", "--device", install.device, "--team", install.team, "--files", install.separateFiles ? "separate" : "bundle"]
+            args = ["install", folder, "--progress", "json", "--device", install.device, "--team", install.team, "--files", install.files]
             if install.launch { args.append("--launch") }
             if !install.iCloudContainer.isEmpty { args += ["--icloud-container", install.iCloudContainer] }
             if let keys { args += ["-k", keys] }

@@ -33,10 +33,32 @@ enum CloudSaves {
         home + "/Library/Mobile Documents/com~apple~CloudDocs/HorizonNative Saves"
     }
 
+    /// iCloud Drive › AetherNX: one folder per game, named after it, holding its save (in a folder named by its title ID, where the engine syncs it),
+    /// its Mods and its Cheats. The library's default when chosen: each game then syncs through `AetherNX/<its name>`.
+    static func aetherFolder(home: String = NSHomeDirectory()) -> String {
+        home + "/Library/Mobile Documents/com~apple~CloudDocs/AetherNX"
+    }
+
+    /// A game's folder name in iCloud Drive › AetherNX: its name, without what a file name cannot hold.
+    static func folderName(for name: String) -> String {
+        let cleaned = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: ".")))
+        return cleaned.isEmpty ? "Game" : String(cleaned.prefix(120))
+    }
+
+    /// The folder a game takes from the library's setting: the setting itself, or the game's own folder in it when it is iCloud Drive › AetherNX.
+    static func libraryTarget(_ libraryFolder: String, gameName: String, home: String = NSHomeDirectory()) -> String {
+        guard !libraryFolder.isEmpty else { return "" }
+        let root = (libraryFolder as NSString).standardizingPath
+        return root == aetherFolder(home: home) ? root + "/" + folderName(for: gameName) : libraryFolder
+    }
+
     /// A folder as the Finder names it: iCloud Drive's by their names there, others from the home folder.
     static func displayName(_ folder: String, home: String = NSHomeDirectory()) -> String {
         let path = (folder as NSString).standardizingPath
-        if path == automaticFolder(home: home) { return "iCloud Drive › HorizonNative" }
+        let container = automaticFolder(home: home)
+        if path == container { return "iCloud Drive › HorizonNative" }
+        if path.hasPrefix(container + "/") { return "iCloud Drive › HorizonNative › " + path.dropFirst(container.count + 1).replacingOccurrences(of: "/", with: " › ") }
         let drive = home + "/Library/Mobile Documents/com~apple~CloudDocs"
         if path == drive { return "iCloud Drive" }
         if path.hasPrefix(drive + "/") { return "iCloud Drive › " + path.dropFirst(drive.count + 1).replacingOccurrences(of: "/", with: " › ") }
@@ -77,13 +99,19 @@ enum CloudSaves {
     /// The library's default reaches every game that has no choice of its own. Returns how many games changed.
     @discardableResult
     static func applyLibraryFolder(_ libraryFolder: String, domains: [String]) -> Int {
+        applyLibraryFolders(Dictionary(domains.map { ($0, libraryFolder) }, uniquingKeysWith: { first, _ in first }))
+    }
+
+    /// The same, with the folder each game takes from the library (`libraryTarget`), by preferences domain.
+    @discardableResult
+    static func applyLibraryFolders(_ targets: [String: String]) -> Int {
         var changed = 0
-        for domain in Set(domains) {
+        for (domain, target) in targets {
             switch setting(domain: domain) {
             case .unset:
-                if !libraryFolder.isEmpty { followLibrary(libraryFolder, domain: domain); changed += 1 }
+                if !target.isEmpty { followLibrary(target, domain: domain); changed += 1 }
             case .folder(let path, inherited: true):
-                if path != libraryFolder { followLibrary(libraryFolder, domain: domain); changed += 1 }
+                if path != target { followLibrary(target, domain: domain); changed += 1 }
             case .off, .folder(_, inherited: false):
                 break
             }
@@ -260,6 +288,11 @@ struct SavesSection: View {
             }
             Spacer()
             Menu("Change") {
+                let own = CloudSaves.libraryTarget(CloudSaves.aetherFolder(), gameName: game.name)
+                Button { choose(own, domain: domain) } label: {
+                    Text("iCloud Drive › AetherNX › \(CloudSaves.folderName(for: game.name)) (with Mods and Cheats)")
+                }
+                Divider()
                 if FileManager.default.fileExists(atPath: (CloudSaves.automaticFolder() as NSString).deletingLastPathComponent) {
                     Button { choose(CloudSaves.automaticFolder(), domain: domain) } label: { Text(verbatim: "iCloud Drive › HorizonNative") }
                 }
@@ -269,7 +302,7 @@ struct SavesSection: View {
                 Button("Turn Off for This Game") { choose(nil, domain: domain) }
                     .disabled(setting == .off)
                 Button("Use the Library's Setting") {
-                    CloudSaves.followLibrary(libraryFolder, domain: domain)
+                    CloudSaves.followLibrary(CloudSaves.libraryTarget(libraryFolder, gameName: game.name), domain: domain)
                     revision += 1
                 }
                 .disabled({ if case .folder(_, inherited: true) = setting { true } else { setting == .unset } }())
@@ -308,14 +341,19 @@ struct SavesSection: View {
     }
 
     private func choose(_ folder: String?, domain: String) {
-        if let folder { try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true) }
+        if let folder {
+            try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+            GameExtras.prepare(folder: folder, game: game)
+        }
         CloudSaves.choose(folder, domain: domain)
+        model.refreshExtras(game)
         revision += 1
     }
 
     private func pickFolder(domain: String, from current: String?) {
-        guard let url = CloudSavesPanel.pick(startingAt: current) else { return }
-        choose(url.path, domain: domain)
+        CloudSavesPanel.pick(startingAt: current) { url in
+            if let url { choose(url.path, domain: domain) }
+        }
     }
 
     /// The newest change of any file in a save folder.
@@ -332,18 +370,28 @@ struct SavesSection: View {
 }
 
 enum CloudSavesPanel {
-    /// A folder for cloud saves, opened in iCloud Drive: the one the iPhone app chose, or a new one.
+    /// A folder for cloud saves, as a sheet of the window (the app keeps drawing while it opens), opened in the folder in use, else in
+    /// iCloud Drive › AetherNX. It does not open at the top of iCloud Drive: listing all of it, with what is not downloaded yet, is what made
+    /// the panel take seconds to appear.
     @MainActor
-    static func pick(startingAt current: String?) -> URL? {
+    static func pick(startingAt current: String?, completion: @escaping @MainActor (URL?) -> Void) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.message = String(localized: "Choose the iCloud Drive folder the saves sync through: the same one the iPhone or iPad app uses in its Cloud saves.")
         panel.prompt = String(localized: "Use Folder")
-        let drive = NSHomeDirectory() + "/Library/Mobile Documents/com~apple~CloudDocs"
-        panel.directoryURL = URL(filePath: current ?? drive)
-        return panel.runModal() == .OK ? panel.url : nil
+        let start = current.flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil } ?? {
+            let root = CloudSaves.aetherFolder()
+            try? FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+            return root
+        }()
+        panel.directoryURL = URL(filePath: start)
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            panel.beginSheetModal(for: window) { response in completion(response == .OK ? panel.url : nil) }
+        } else {
+            completion(panel.runModal() == .OK ? panel.url : nil)
+        }
     }
 }
 
@@ -361,18 +409,19 @@ struct CloudSavesSettings: View {
                 if FileManager.default.fileExists(atPath: (CloudSaves.automaticFolder() as NSString).deletingLastPathComponent) || libraryFolder == CloudSaves.automaticFolder() {
                     Text(verbatim: "iCloud Drive › HorizonNative").tag(CloudSaves.automaticFolder())
                 }
+                Text("iCloud Drive › AetherNX (a folder per game, with Mods and Cheats)").tag(CloudSaves.aetherFolder())
                 Text(verbatim: "iCloud Drive › HorizonNative Saves").tag(CloudSaves.driveFolder())
-                if !libraryFolder.isEmpty, libraryFolder != CloudSaves.automaticFolder(), libraryFolder != CloudSaves.driveFolder() {
+                if !libraryFolder.isEmpty, libraryFolder != CloudSaves.automaticFolder(), libraryFolder != CloudSaves.driveFolder(), libraryFolder != CloudSaves.aetherFolder() {
                     Text(verbatim: CloudSaves.displayName(libraryFolder)).tag(libraryFolder)
                 }
             }
             Button("Choose a Folder…") {
-                if let url = CloudSavesPanel.pick(startingAt: libraryFolder.isEmpty ? nil : libraryFolder) { set(url.path) }
+                CloudSavesPanel.pick(startingAt: libraryFolder.isEmpty ? nil : libraryFolder) { url in if let url { set(url.path) } }
             }
         } header: {
             Text("Saves")
         } footer: {
-            Text("The folder every game's Mac app syncs its save through, unless a game has its own choice on its page. HorizonNative is the folder the iPhone and iPad apps you install from this Mac use by themselves when they are signed with an iCloud container; for other apps, choose the same iCloud Drive folder in the app's Cloud saves.")
+            Text("The folder every game's Mac app syncs its save through, unless a game has its own choice on its page. With AetherNX, each game gets a folder named after it, with its save, a Mods folder and a Cheats folder: on the iPhone or iPad, choose that same folder in the app's Cloud saves. HorizonNative is the folder the iPhone and iPad apps use by themselves when they are signed with an iCloud container.")
         }
     }
 

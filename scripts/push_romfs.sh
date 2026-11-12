@@ -26,7 +26,12 @@ else
     python3 -I "$(dirname "$0")/../dm/tools/romfs_image.py" "$@"
 fi
 python3 -I "$(dirname "$0")/../dm/tools/romfs.py" "$img" "${DM_RESOURCE_MARKER:-}"
-echo "identity: $(python3 -I "$(dirname "$0")/../dm/tools/romfs_image.py" --identity "$img")"
+ident=$(python3 -I "$(dirname "$0")/../dm/tools/romfs_image.py" --identity "$img")
+echo "identity: $ident"
+# Documents/romfs.img.id holds the identity of the image after its last complete copy: when it is this image's (and, over AFC, the image on the device has its
+# size), the copy is skipped, so installing the app again (an engine update, a setting) moves only the app. ROMFS_PUSH_FORCE=1 copies all the same.
+have=$(mktemp "${TMPDIR:-/tmp}/romfs-id.XXXXXX"); idfile=$(mktemp "${TMPDIR:-/tmp}/romfs-id.XXXXXX"); trap 'rm -f "$have" "$idfile"' EXIT
+printf '%s' "$ident" > "$idfile"
 # The image goes over AFC (house_arrest, the channel of Finder's file sharing; libimobiledevice's afcclient), which streams it. devicectl's copy has the Mac's CoreDeviceService read
 # the whole file into its own memory: a 26 GB image filled a 16 GB Mac's swap, macOS asked to quit applications and killed the service ("The connection was interrupted";
 # docs/reference/packing.md). AFC writes Documents/romfs.img.part, which main.m never takes, and renames it once the device holds all of it: afcclient exits 0 even when a
@@ -41,6 +46,12 @@ if [ "$via" = afc ]; then
     # afcclient finds a device only by its UDID, over USB (devicectl also takes its own identifier or the device's name, and Wi-Fi): check that it opens the app's
     # Documents before copying, so a wrong ID or a Wi-Fi-only device is named as such instead of ending as an incomplete copy.
     [ "$(remote_type /Documents)" = S_IFDIR ] || { echo "[RED] afcclient cannot open Documents of $id on device $dev: it needs the device's UDID (idevice_id -l lists the connected ones; devicectl's identifier and the device's name do not work), a USB connection, and the app installed. ROMFS_PUSH_VIA=devicectl copies through devicectl instead" >&2; exit 1; }
+    if [ "${ROMFS_PUSH_FORCE:-}" != 1 ] && [ "$(remote_size /Documents/romfs.img)" = "$size" ] && afc get /Documents/romfs.img.id "$have" > /dev/null 2>&1 && [ "$(cat "$have")" = "$ident" ]; then
+        echo "the device already has this image ($((size >> 20)) MB): not copied again"
+        copied=0
+    else
+    copied=1
+    afc rm /Documents/romfs.img.id > /dev/null 2>&1 || true
     echo "copying $((size >> 20)) MB over AFC (about 30 MB/s over USB)"
     afc put -f "$img" /Documents/romfs.img.part
     got=$(remote_size /Documents/romfs.img.part)
@@ -49,13 +60,20 @@ if [ "$via" = afc ]; then
     afc mv /Documents/romfs.img.part /Documents/romfs.img
     got=$(remote_size /Documents/romfs.img)
     [ "$got" = "$size" ] || { echo "[RED] Documents/romfs.img.part was not renamed to romfs.img (romfs.img holds ${got:-nothing} of $size bytes). Run this again" >&2; exit 1; }
+    afc put -f "$idfile" /Documents/romfs.img.id > /dev/null 2>&1 || true
+    fi
 elif [ "$via" = devicectl ]; then
     mem=$(sysctl -n hw.memsize)
     if [ -z "${ROMFS_PUSH_VIA:-}" ] && [ "$size" -gt $((mem / 2)) ]; then
         echo "[RED] the image ($((size >> 20)) MB) is larger than half this Mac's memory ($((mem >> 20)) MB): devicectl copies it through memory and can fill the swap. Install afcclient (brew install libimobiledevice) and run this again, or set ROMFS_PUSH_VIA=devicectl to copy it anyway" >&2
         exit 1
     fi
-    xcrun devicectl device copy to --device "$dev" --domain-type appDataContainer --domain-identifier "$id" --source "$img" --destination Documents/romfs.img -q
+    if [ "${ROMFS_PUSH_FORCE:-}" != 1 ] && xcrun devicectl device copy from --device "$dev" --domain-type appDataContainer --domain-identifier "$id" --source Documents/romfs.img.id --destination "$have" -q > /dev/null 2>&1 && [ "$(cat "$have")" = "$ident" ]; then
+        echo "the device already has this image ($((size >> 20)) MB): not copied again"
+    else
+        xcrun devicectl device copy to --device "$dev" --domain-type appDataContainer --domain-identifier "$id" --source "$img" --destination Documents/romfs.img -q
+        xcrun devicectl device copy to --device "$dev" --domain-type appDataContainer --domain-identifier "$id" --source "$idfile" --destination Documents/romfs.img.id -q || true
+    fi
 else echo "ROMFS_PUSH_VIA is afc or devicectl, not $via" >&2; exit 1; fi
 # Add-on content (DLC): <index>.img files or legacy <index>/ trees. resources.env describes the complete DLC set, so Documents/aoc is replaced, not merged (a merge would keep
 # removed DLC that the host still reports owned). An empty set leaves an empty Documents/aoc, which also takes precedence over bundled DLC at startup. Over AFC only: devicectl's

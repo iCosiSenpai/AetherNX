@@ -226,6 +226,10 @@ struct SetupReport: Decodable {
         var required: Bool
         var detail: String
         var fix: String
+        /// A stable name for the check, what it is for (English) and how a front end installs it: "brew:…", "cask:…", "run:…", "open:…" or empty.
+        var key: String?
+        var why: String?
+        var install: String?
         var id: String { group + "/" + name }
     }
 

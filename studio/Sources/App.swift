@@ -29,11 +29,6 @@ struct AetherNXApp: App {
         .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
 
-        Settings {
-            SettingsView()
-                .environment(model)
-        }
-
         MenuBarExtra(isInserted: $showsMenuBarItem) {
             MenuBarContent()
                 .environment(model)
@@ -79,6 +74,15 @@ struct AppCommands: Commands {
             }
         }
 
+        // Settings is a page of the main window, not a window of its own
+        CommandGroup(replacing: .appSettings) {
+            Button("Settings…") {
+                openWindow(id: "main")
+                model.showSettings(model.settingsPane)
+            }
+            .keyboardShortcut(",")
+        }
+
         CommandGroup(replacing: .newItem) {
             Button("Add Library Folder…") { model.chooseLibraryFolder() }
                 .keyboardShortcut("o")
@@ -116,7 +120,16 @@ struct AppCommands: Commands {
         }
 
         CommandGroup(after: .sidebar) {
-            Button(model.showsActivity ? "Hide Activity" : "Show Activity") { model.showsActivity.toggle() }
+            Button("Home") { model.sidebarSelection = .home }
+                .keyboardShortcut("1")
+            Button("Activity") { model.sidebarSelection = .page(.activity) }
+                .keyboardShortcut("2")
+            Button("Devices") { model.sidebarSelection = .page(.devices) }
+                .keyboardShortcut("3")
+            Button("Updates") { model.sidebarSelection = .page(.updates) }
+                .keyboardShortcut("4")
+            Divider()
+            Button(model.showsActivity ? "Hide Activity Log" : "Show Activity Log") { model.showsActivity.toggle() }
                 .keyboardShortcut("y", modifiers: [.command, .shift])
             Button("Console Mode") { openWindow(id: "console") }
                 .keyboardShortcut("c", modifiers: [.command, .control])

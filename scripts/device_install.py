@@ -12,6 +12,7 @@ calls, the retry under the team's own identifier when the default one belongs to
 import json
 import os
 import plistlib
+import shutil
 import re
 import signal
 import subprocess
@@ -324,13 +325,27 @@ def memory_only_entitlements(folder):
     return path
 
 
+def files_mode(files, dev, afcclient=None):
+    """'auto' as the device allows: the game files kept on the device (separate) when it is on the cable and afcclient can stream them, which makes every
+    later install move only the app (Fire Emblem Fortune's Weave: 2.1 GB instead of 29 GB, push_romfs.sh skips an image the device already has); else in the
+    app (bundle), the one way a large image reaches a device on the network without going through the Mac's memory (devicectl's copy reads it whole)"""
+    if files != 'auto': return files
+    afc = afcclient if afcclient is not None else shutil.which('afcclient')
+    return 'separate' if dev['connection'] == 'cable' and afc else 'bundle'
+
+
 def install(folder, work, *, build_args, keys=None, device=None, team=None, files='bundle', icloud_container='', launch=False, as_json=False,
             api_key=None, api_key_id=None, api_issuer=None, python=sys.executable, environ=None):
     """Build the game in `folder` for the device, sign it, install it and copy its files when they are separate. Returns the exit code"""
     environ = dict(os.environ if environ is None else environ)
     work = Path(work)
-    report = Report(as_json, 3 if files == 'separate' else 2)
     dev = pick_device(list_devices(), device)
+    asked, files = files, files_mode(files, dev)
+    report = Report(as_json, 3 if files == 'separate' else 2)
+    if asked == 'auto':
+        report.say('the game files stay on the device (cable and afcclient): a later install copies only the app' if files == 'separate'
+                   else 'the game files go inside the app' + ('' if dev['connection'] == 'cable' else ' (the device is on the network: a cable and afcclient keep them on the device instead)')
+                   + ('' if shutil.which('afcclient') else ' (brew install libimobiledevice keeps them on the device across installs)'))
     last = remembered(work)
     team = pick_team(team or environ.get('AETHERNX_TEAM') or environ.get('DM_TEAM_ID'), saved=last.get('team'))
     auth = api_key_args(api_key or environ.get('AETHERNX_ASC_KEY'), api_key_id or environ.get('AETHERNX_ASC_KEY_ID'), api_issuer or environ.get('AETHERNX_ASC_ISSUER'))

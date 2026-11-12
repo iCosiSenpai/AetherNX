@@ -124,6 +124,14 @@ class Failures(unittest.TestCase):
         again = di.sign_command('/p', facts, UDID, TEAM, bundle_id='com.example.x', entitlements='', auth=['-authenticationKeyPath', '/k.p8'])
         self.assertIn('PRODUCT_BUNDLE_IDENTIFIER=com.example.x', again); self.assertIn('CODE_SIGN_ENTITLEMENTS=', again); self.assertIn('/k.p8', again)
 
+    def test_auto_keeps_the_files_on_a_cabled_device_with_afcclient(self):
+        cable, network = {'connection': 'cable'}, {'connection': 'network'}
+        self.assertEqual(di.files_mode('auto', cable, afcclient='/opt/homebrew/bin/afcclient'), 'separate')
+        self.assertEqual(di.files_mode('auto', cable, afcclient=''), 'bundle')
+        self.assertEqual(di.files_mode('auto', network, afcclient='/opt/homebrew/bin/afcclient'), 'bundle')
+        self.assertEqual(di.files_mode('bundle', cable, afcclient='/x'), 'bundle')
+        self.assertEqual(di.files_mode('separate', network, afcclient=''), 'separate')
+
     def test_progress_words(self):
         self.assertEqual(di.xcode_step('CompileC /a/b.o /src/b.c normal arm64'), 'compiling')
         self.assertEqual(di.xcode_step('PhaseScriptExecution Copy\\ game\\ resources /x.sh'), 'copying the game files into the app')

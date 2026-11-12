@@ -6,36 +6,128 @@ struct GameDetailView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                GameBanner(game: game)
-                GameHeader(game: game)
-                if let job = model.jobFor(game) {
-                    JobCard(job: job)
-                } else if let outcome = model.outcomes[game.id], !outcome.succeeded {
-                    OutcomeBanner(outcome: outcome)
-                }
-                if game.kind == .archives {
-                    ArchivesSection(game: game)
-                } else {
-                    FilesSection(game: game)
-                    BuildsSection(game: game)
-                    SavesSection(game: game)
-                    DeveloperSection(game: game)
-                }
-                if !game.notes.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(game.notes, id: \.self) { Text($0) }
-                    }
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                }
-                DangerZoneSection(game: game)
-            }
-            .padding(24)
-            .frame(maxWidth: 760, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            GamePageContent(game: game)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 24)
+                .frame(maxWidth: 1480, alignment: .leading)
+                .frame(maxWidth: .infinity)
         }
+        .measuringLayoutWidth()
+    }
+}
+
+/// The page in one column when the window is narrow, in two side by side when it is wide: what the game is and what was built on the left,
+/// what it keeps (saves, mods, cheats) on the right.
+private struct GamePageContent: View {
+    let game: Game
+    @Environment(AppModel.self) private var model
+    @Environment(\.layoutWidth) private var layoutWidth
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            GameBanner(game: game)
+            GameHeader(game: game)
+            GameFacts(game: game)
+            if let job = model.jobFor(game) {
+                JobCard(job: job)
+            } else if let outcome = model.outcomes[game.id], !outcome.succeeded {
+                OutcomeBanner(outcome: outcome, gameID: game.id)
+            }
+            if game.kind == .archives {
+                ArchivesSection(game: game)
+            } else if layoutWidth == .wide {
+                HStack(alignment: .top, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 20) {
+                        FilesSection(game: game)
+                        BuildsSection(game: game)
+                        DeveloperSection(game: game)
+                    }
+                    .frame(maxWidth: .infinity)
+                    VStack(alignment: .leading, spacing: 20) {
+                        SavesSection(game: game)
+                        ModsSection(game: game)
+                        CheatsSection(game: game)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            } else {
+                FilesSection(game: game)
+                BuildsSection(game: game)
+                SavesSection(game: game)
+                ModsSection(game: game)
+                CheatsSection(game: game)
+                DeveloperSection(game: game)
+            }
+            if !game.notes.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(game.notes, id: \.self) { Text($0) }
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            }
+            DangerZoneSection(game: game)
+        }
+    }
+}
+
+/// A strip of small tiles with what there is to know at a glance: play time, the last session, the version, the size, the builds.
+private struct GameFacts: View {
+    let game: Game
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let facts = items
+        if !facts.isEmpty {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 260), spacing: 10)], alignment: .leading, spacing: 10) {
+                ForEach(facts, id: \.label) { fact in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Label(fact.label, systemImage: fact.systemImage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(fact.value)
+                            .font(.callout.weight(.medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .monospacedDigit()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .help(fact.value)
+                }
+            }
+        }
+    }
+
+    private struct Fact { let label: String; let value: String; let systemImage: String }
+
+    private var items: [Fact] {
+        var out: [Fact] = []
+        if let record = model.playLog.record(for: game), record.seconds > 0 {
+            out.append(Fact(label: String(localized: "Play time"), value: Duration.seconds(record.seconds).formatted(.units(allowed: [.hours, .minutes], width: .abbreviated)),
+                            systemImage: "clock"))
+            if let last = record.lastPlayed {
+                out.append(Fact(label: String(localized: "Last played"), value: last.formatted(.relative(presentation: .named)), systemImage: "calendar"))
+            }
+        }
+        if let version = game.displayVersion {
+            out.append(Fact(label: String(localized: "Version"), value: version, systemImage: "number"))
+        }
+        let size = (game.base?.size ?? 0) + (game.latestUpdate?.size ?? 0) + game.dlc.reduce(0) { $0 + $1.size }
+        if size > 0 { out.append(Fact(label: String(localized: "Game files"), value: size.fileSize, systemImage: "shippingbox")) }
+        var built: [String] = []
+        if game.macApp != nil { built.append("Mac") }
+        if game.ipa != nil { built.append("IPA") }
+        if game.deviceInstall != nil { built.append(game.deviceInstall?.deviceName ?? "iPhone") }
+        out.append(Fact(label: String(localized: "Built for"), value: built.isEmpty ? String(localized: "Nothing yet") : built.joined(separator: " · "),
+                        systemImage: "hammer"))
+        if let success = model.lastSuccess[game.id] {
+            out.append(Fact(label: String(localized: "Last job"), value: "\(success.title), \(success.date.formatted(date: .omitted, time: .shortened))",
+                            systemImage: "checkmark.circle"))
+        }
+        return out
     }
 }
 
@@ -270,50 +362,9 @@ private struct MoreMenu: View {
 
 // MARK: - Progress
 
-struct JobCard: View {
-    let job: Job
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(job.title)
-                    .font(.headline)
-                Spacer()
-                if job.isRunning {
-                    Button("Stop") { job.cancel() }
-                        .help("Stop (⌘.)")
-                }
-            }
-            if let fraction = job.fraction {
-                ProgressView(value: fraction)
-            } else {
-                ProgressView()
-                    .progressViewStyle(.linear)
-            }
-            HStack(alignment: .firstTextBaseline) {
-                Text(job.stageLabel.isEmpty ? String(localized: "Starting…") : job.stageLabel)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 12)
-                if let eta = job.eta, eta > 5 {
-                    Text(Duration.seconds(eta).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated, maximumUnitCount: 2)) + " " + String(localized: "left"))
-                        .monospacedDigit()
-                } else {
-                    Text(job.started, style: .timer)
-                        .monospacedDigit()
-                }
-            }
-            .font(.callout)
-            .foregroundStyle(.secondary)
-        }
-        .padding(16)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .accessibilityElement(children: .combine)
-    }
-}
-
 private struct OutcomeBanner: View {
     let outcome: JobOutcome
+    let gameID: Game.ID
     @Environment(AppModel.self) private var model
 
     var body: some View {
@@ -331,7 +382,8 @@ private struct OutcomeBanner: View {
                     .lineLimit(6)
             }
             Spacer(minLength: 8)
-            Button("Show Activity") { model.showsActivity = true }
+            Button("Show Activity") { model.sidebarSelection = .page(.activity) }
+            Button("Close") { model.dismissOutcome(gameID) }
         }
         .padding(16)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -445,7 +497,7 @@ private struct BuildsSection: View {
         GroupBox("Builds") {
             VStack(spacing: 0) {
                 OutputRow(target: .mac, path: game.macApp) {
-                    Button("Play") { model.play(game) }
+                    RowButton("Play", systemImage: "play.fill") { model.play(game) }
                 }
                 Divider()
                 OutputRow(target: .ios, path: game.ipa) {
@@ -478,10 +530,10 @@ private struct DeviceRow: View {
                     .truncationMode(.middle)
             }
             Spacer()
-            SettingsLink { Text("Device…") }
-            Button(game.deviceInstall == nil ? "Install" : "Install Again") { model.build(game, target: .device) }
+            RowButton("Devices", systemImage: "iphone.gen3") { model.sidebarSelection = .page(.devices) }
+            RowButton(game.deviceInstall == nil ? "Install" : "Install Again", systemImage: "arrow.down.app") { model.build(game, target: .device) }
                 .disabled(!model.canStartJob)
-                .help("Builds the game, signs it with your Apple team and installs it on the device chosen in Settings → iPhone & iPad.")
+                .help("Builds the game, signs it with your Apple team and installs it on the device chosen in Devices.")
         }
         .padding(.vertical, 8)
     }
@@ -522,7 +574,7 @@ private struct OutputRow<Extra: View>: View {
             Spacer()
             if let path {
                 extra
-                Button("Show in Finder") { Finder.reveal(path) }
+                RowButton("Show in Finder", systemImage: "folder") { Finder.reveal(path) }
             }
         }
         .padding(.vertical, 8)

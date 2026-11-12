@@ -15,6 +15,8 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 import tracemalloc
 from unittest import mock
@@ -206,7 +208,9 @@ class Build(unittest.TestCase):
 
     def main(self, *extra):
         args = ['--game', '0100000000001000', '--msl', str(self.lib), '--out', str(self.out), '--work', str(self.work), *extra]
-        with mock.patch.object(po.subprocess, 'run', self.fake_run), mock.patch.dict(os.environ, DM_GAMES_DIR=str(self.prof.parent)), contextlib.redirect_stdout(io.StringIO()):
+        # One group of bases at a time unless a test says otherwise: the tests that follow the compiler's calls expect them in order
+        env = {'DM_GAMES_DIR': str(self.prof.parent), 'DM_PSO_BASE_JOBS': os.environ.get('DM_PSO_BASE_JOBS', '1')}
+        with mock.patch.object(po.subprocess, 'run', self.fake_run), mock.patch.dict(os.environ, env), contextlib.redirect_stdout(io.StringIO()):
             return po.main(args)
 
     def test_large_script_memory_and_compatible_archive_key(self):
@@ -446,6 +450,39 @@ class Build(unittest.TestCase):
             self.main('--os-min', '27.0')
             self.assertEqual(observed, before, 'the normal packer must reuse the complete merged archive')
             self.assertIn('bases\t5\n', (self.out/'archive.tsv').read_text())
+
+    def test_groups_of_bases_compile_at_once_and_merge_in_order(self):
+        # DM_PSO_BASE_JOBS groups at a time (base_jobs: as many as memory and cores allow); the archive takes the pieces in the groups' order, not the order they end in
+        bases = [('v_bp', f'vertex{i}', 'f_b', 'main0') for i in range(6)]
+        ended, merged, lock = [], [], threading.Lock()
+        original = self.fake_run
+        def run(cmd, **kw):
+            cmd = [str(c) for c in cmd]
+            if 'metal-pack' in cmd:
+                merged.extend(Path(p).read_bytes() for p in cmd if p.endswith('.mtl4a'))
+                Path(cmd[cmd.index('-o') + 1]).write_bytes(b'|'.join(merged))
+                return subprocess.CompletedProcess(cmd, 0)
+            if 'metal-tt' in cmd and '-o' in cmd:
+                js = next(Path(p) for p in cmd if p.endswith('.mtl4-json'))
+                names = [f['name'] for f in json.loads(js.read_text())['function_descriptors']['library_function_descriptors'] if f['library'] == 'lib:v_bp']
+                time.sleep(0.08 * (3 - int(names[0][-1]) // 2))   # the first group ends last
+                with lock: ended.append(names[0])
+                Path(cmd[cmd.index('-o') + 1]).write_bytes(','.join(names).encode())
+                return subprocess.CompletedProcess(cmd, 0)
+            return original(cmd, **kw)
+        with mock.patch.object(self, 'fake_run', run), mock.patch.object(po, 'plan', return_value=(bases, [], {})), mock.patch.dict(os.environ, DM_PSO_BASE_JOBS='3'):
+            self.main('--batch-size', '2', '--os-min', '27.0')
+        self.assertEqual(ended, ['vertex4', 'vertex2', 'vertex0'], 'the three groups ran at once')
+        self.assertEqual(merged, [b'vertex0,vertex1', b'vertex2,vertex3', b'vertex4,vertex5'])
+
+    def test_base_jobs_follow_memory_cores_and_the_switch(self):
+        with mock.patch.dict(os.environ, DM_PSO_BASE_JOBS='4'): self.assertEqual(po.base_jobs(), 4)
+        with mock.patch.dict(os.environ, DM_PSO_BASE_JOBS=''), mock.patch.object(po.os, 'cpu_count', return_value=10), \
+             mock.patch.object(po.os, 'sysconf', side_effect=lambda k: 4096 if k == 'SC_PAGE_SIZE' else (16 << 30) // 4096):
+            self.assertEqual(po.base_jobs(), 2, '16 GB, 10 cores: two at a time')
+        with mock.patch.dict(os.environ, DM_PSO_BASE_JOBS=''), mock.patch.object(po.os, 'cpu_count', return_value=8), \
+             mock.patch.object(po.os, 'sysconf', side_effect=lambda k: 4096 if k == 'SC_PAGE_SIZE' else (8 << 30) // 4096):
+            self.assertEqual(po.base_jobs(), 1, '8 GB: one at a time, as before')
 
     def test_batch_failure_preserves_completed_work_and_publishes_nothing(self):
         bases = [('v_bp', f'vertex{i}', 'f_b', 'main0') for i in range(5)]

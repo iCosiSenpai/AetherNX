@@ -116,10 +116,10 @@ struct SetupCheckView: View {
             }
             Divider()
             HStack {
-                if let report = model.setupReport, report.checks.contains(where: { $0.group == "Python" && !$0.ok }) {
-                    Button("Install Python Packages") { model.installPythonPackages() }
+                if let report = model.setupReport, report.checks.contains(where: { !$0.ok && $0.required && !($0.install ?? "").isEmpty }) {
+                    Button("Install Everything Missing") { model.installMissing(report) }
                         .disabled(!model.canStartJob)
-                        .help("Runs ./aethernx setup: a Python environment in the AetherNX folder with the packages the build needs")
+                        .help("Installs with Homebrew and the AetherNX tools what the builds need and is missing, then checks again")
                 }
                 Spacer()
                 Button("Check Again") { model.runSetupCheck() }
@@ -142,6 +142,8 @@ struct SetupCheckView: View {
 
 struct CheckRow: View {
     let check: SetupReport.Check
+    var showsWhy = true
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -149,7 +151,21 @@ struct CheckRow: View {
                 .foregroundStyle(check.ok ? AnyShapeStyle(.green) : check.required ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
                 .accessibilityLabel(check.ok ? "Found" : check.required ? "Missing" : "Optional, not found")
             VStack(alignment: .leading, spacing: 3) {
-                Text(check.name)
+                HStack(alignment: .firstTextBaseline) {
+                    Text(check.name)
+                    Spacer(minLength: 8)
+                    if !check.ok, let install = check.install, let title = CheckGuide.actionTitle(install) {
+                        Button(title) { model.installPrerequisite(check) }
+                            .controlSize(.small)
+                            .disabled(model.job?.isRunning == true && !install.hasPrefix("open:"))
+                    }
+                }
+                if showsWhy, !check.ok, let why = CheckGuide.why(check.key) ?? check.why.flatMap({ $0.isEmpty ? nil : $0 }) {
+                    Text(why)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if !check.ok && !check.fix.isEmpty {
                     HStack(spacing: 6) {
                         Text(check.fix)

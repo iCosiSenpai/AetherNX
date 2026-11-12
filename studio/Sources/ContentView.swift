@@ -27,7 +27,6 @@ struct ContentView: View {
         .toolbar { MainToolbar() }
         .sheet(isPresented: $model.showsSetupCheck) { SetupCheckView() }
         .sheet(isPresented: $model.showsSetupAssistant) { SetupAssistantView() }
-        .sheet(isPresented: $model.showsUpdates, onDismiss: { model.dismissUpdateNotice() }) { UpdatesSheet() }
         .sheet(item: $model.removalRequest) { RemovalSheet(request: $0) }
         .alert("Something went wrong", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK", role: .cancel) {}
@@ -42,6 +41,7 @@ struct ContentView: View {
             Text(confirmation.message)
         }
         .animation(.easeOut(duration: 0.2), value: model.showsActivity)
+        .onChange(of: model.page) { old, _ in if old == .updates { model.dismissUpdateNotice() } }
         .onChange(of: model.consoleRequested) { _, requested in
             guard requested else { return }
             model.consoleRequested = false
@@ -50,25 +50,36 @@ struct ContentView: View {
     }
 }
 
-/// The detail column: what to do first when something is missing, else the selected game.
+/// The detail column: the page the sidebar chose. The library's home and a game's page first say what to do when something is missing.
 private struct DetailContainer: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        switch model.page {
+        case .settings: SettingsPage()
+        case .updates: UpdatesPage()
+        case .activity: ActivityPage()
+        case .devices: DevicesPage()
+        case .home, .game: library
+        }
+    }
+
+    @ViewBuilder
+    private var library: some View {
         if model.engine == nil {
             EngineMissingView()
         } else if model.libraryFolders.isEmpty {
             LibraryEmptyView()
-        } else if let game = model.selectedGame {
+        } else if model.page == .game, let game = model.selectedGame {
             GameDetailView(game: game)
                 .id(game.id)
-        } else if model.isScanning || !model.hasScanned {
+        } else if model.games.isEmpty && (model.isScanning || !model.hasScanned) {
             ProgressView("Looking for games…")
                 .controlSize(.small)
         } else if model.games.isEmpty {
             NoGamesFoundView()
         } else {
-            ContentUnavailableView("Select a Game", systemImage: "gamecontroller", description: Text("Choose a game in the sidebar."))
+            HomeView()
         }
     }
 }
@@ -112,7 +123,15 @@ private struct MainToolbar: ToolbarContent {
             } label: {
                 Label("Activity", systemImage: "list.bullet.rectangle")
             }
-            .help("Show or hide the activity log (⇧⌘Y)")
+            .help("Show or hide the activity log under the page (⇧⌘Y)")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                if model.page == .settings { model.sidebarSelection = .home } else { model.showSettings(model.settingsPane) }
+            } label: {
+                Label("Settings", systemImage: "gearshape")
+            }
+            .help("Settings, in this window (⌘,)")
         }
     }
 }
@@ -137,7 +156,7 @@ private struct JobToolbarIndicator: View {
 
     var body: some View {
         Button {
-            if let id = job.gameID { model.selectedGameID = id } else { model.showsActivity = true }
+            if let id = job.gameID { model.selectedGameID = id } else { model.sidebarSelection = .page(.activity) }
         } label: {
             HStack(spacing: 6) {
                 if let fraction = job.fraction {
@@ -209,7 +228,7 @@ private struct NoGamesFoundView: View {
             }
         } actions: {
             Button("Rescan") { model.rescan() }
-            SettingsLink { Text("Library Settings…") }
+            Button("Library Settings…") { model.showSettings(.library) }
         }
     }
 }

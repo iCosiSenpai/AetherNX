@@ -148,6 +148,39 @@ static void cloud_saves_folder(void) {
     if (v) CFRelease(v);
 }
 
+// Mods and cheats a front end chose (AetherNX Studio's Mods and Cheats sections, docs/frontends.md, Mods and cheats): `mods.folders`, an array of RomFS folders
+// in priority order, becomes DM_ROMFS_OVERLAY (the first folder that has a file wins, then the game's own RomFS); `cheats.folder` becomes DM_CHEATS. They are
+// paths, which an env.txt may not set (env_file.h), so they come from the app's own preferences, as cloudSaves.folder does; a value the launch environment or an
+// env file set wins. A folder that is not there is left out, with a [RED] line: a mod on an iCloud Drive folder the Mac has not downloaded yet, say.
+static void mods_and_cheats(void) {
+    CFStringRef domain = CFBundleGetIdentifier(CFBundleGetMainBundle());
+    if (!domain) return;
+    struct stat st; char s[PATH_MAX];
+    CFPropertyListRef mods = getenv("DM_ROMFS_OVERLAY") ? NULL : CFPreferencesCopyAppValue(CFSTR("mods.folders"), domain);
+    if (mods && CFGetTypeID(mods) == CFArrayGetTypeID()) {
+        char *all = NULL; size_t len = 0; int n = 0;
+        for (CFIndex i = 0; i < CFArrayGetCount(mods); i++) {
+            CFTypeRef v = CFArrayGetValueAtIndex(mods, i);
+            if (CFGetTypeID(v) != CFStringGetTypeID() || !CFStringGetCString(v, s, sizeof s, kCFStringEncodingUTF8) || !*s) continue;
+            if (strchr(s, ':')) { fprintf(stderr, "[RED] launcher: mod folder %s left out: DM_ROMFS_OVERLAY separates folders with ':'\n", s); continue; }
+            if (stat(s, &st) || !S_ISDIR(st.st_mode)) { fprintf(stderr, "[RED] launcher: mod folder %s left out: it is not there (not downloaded from iCloud yet?)\n", s); continue; }
+            size_t add = strlen(s) + 1;
+            char *grown = realloc(all, len + add + 1); if (!grown) break;
+            all = grown; if (len) all[len++] = ':';
+            memcpy(all + len, s, add); len += add - 1; n++;
+        }
+        if (n) { setenv("DM_ROMFS_OVERLAY", all, 1); fprintf(stderr, "launcher: %d mod(s) on: %s\n", n, all); }
+        free(all);
+    }
+    if (mods) CFRelease(mods);
+    CFPropertyListRef cheats = getenv("DM_CHEATS") ? NULL : CFPreferencesCopyAppValue(CFSTR("cheats.folder"), domain);
+    if (cheats && CFGetTypeID(cheats) == CFStringGetTypeID() && CFStringGetCString(cheats, s, sizeof s, kCFStringEncodingUTF8) && *s) {
+        if (stat(s, &st) || !S_ISDIR(st.st_mode)) fprintf(stderr, "[RED] launcher: cheats folder %s is not there: the default one is used\n", s);
+        else { setenv("DM_CHEATS", s, 1); fprintf(stderr, "launcher: cheats from %s\n", s); }
+    }
+    if (cheats) CFRelease(cheats);
+}
+
 // A game of several programs (Super Mario 3D All-Stars): pack_app.py's table of them, with this app's paths filled in (it may move), for oe::ExecuteProgram (DM_PROGRAMS, hle_oe.c)
 static void programs_table(const char *contents, const char *res, const char *sup) {
     char in[PATH_MAX], out[PATH_MAX]; snprintf(in, sizeof in, "%s/dm/programs.tsv", res); snprintf(out, sizeof out, "%s/programs.tsv", sup);
@@ -207,6 +240,7 @@ int main(int argc, char **argv) {
     if (!shown) return 0;   // Quit: no game
     if (shown == 2) saved_choices();
     cloud_saves_folder();
+    mods_and_cheats();
     setenv("DM_ROOT", sup, 0); setenv("DM_ROMFS", romfs, 0); setenv("DM_SAVE", save, 0); setenv("DM_TEMP", temp, 0);
     snprintf(p, sizeof p, "%s/msl", res); setenv("DM_MSL_DIR", p, 0);
     snprintf(p, sizeof p, "%s/font", dm); setenv("DM_FONT_DIR", p, 0);

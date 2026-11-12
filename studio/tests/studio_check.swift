@@ -93,10 +93,13 @@ func install(_ options: InstallOptions?, keys: String? = nil, keepExtracted: Boo
                             macSigningIdentity: "Developer ID Application: A B (X)", extra: extra, install: options)
 }
 let installBase = ["install", "/g", "--progress", "json", "--device", "00008150-0000000000000001", "--team", "A1B2C3D4E5", "--files"]
-expect(install(onDevice, keys: "/k/prod.keys", extra: "--allow-damaged") == installBase + ["bundle", "-k", "/k/prod.keys", "--language", "it", "--no-show-fps", "--allow-damaged"],
-       "an install: the device, the team, the files in the app; no keep-extracted of its own and no Mac signing identity \(install(onDevice, keys: "/k/prod.keys", extra: "--allow-damaged") ?? [])")
+expect(install(onDevice, keys: "/k/prod.keys", extra: "--allow-damaged") == installBase + ["auto", "-k", "/k/prod.keys", "--language", "it", "--no-show-fps", "--allow-damaged"],
+       "an install: the device, the team, the files where the device allows; no keep-extracted of its own and no Mac signing identity \(install(onDevice, keys: "/k/prod.keys", extra: "--allow-damaged") ?? [])")
+var inApp = onDevice
+inApp.files = "bundle"
+expect(install(inApp)?.contains("bundle") == true, "the files in the app, when chosen")
 var slim = onDevice
-slim.separateFiles = true; slim.launch = true; slim.iCloudContainer = "iCloud.com.example.saves"
+slim.files = "separate"; slim.launch = true; slim.iCloudContainer = "iCloud.com.example.saves"
 expect(install(slim, showFPS: true) == installBase + ["separate", "--launch", "--icloud-container", "iCloud.com.example.saves", "--language", "it", "--show-fps"],
        "an install with the game files separate, opened afterwards, with an iCloud container \(install(slim, showFPS: true) ?? [])")
 expect(install(nil) == nil, "an install without a device and a team gives no command")
@@ -212,6 +215,43 @@ let modes = Dictionary(release.map { ($0.name, $0.mode) }, uniquingKeysWith: { f
 expect(modes["AetherNX.app/"].map { $0 & 0o170000 == 0o040000 } == true, "ditto's archive: the app is a folder")
 expect(modes["AetherNX.app/Contents/MacOS/AetherNX"] == 0o100755, "ditto's archive: the executable keeps its mode")
 expect(release.contains { $0.name.hasPrefix("__MACOSX/") }, "ditto's archive: the metadata copy is listed (\(release.count) entries)")
+
+// MARK: iCloud Drive › AetherNX, mods and cheats
+
+let aether = CloudSaves.aetherFolder(home: cloudHome)
+expect(CloudSaves.libraryTarget(aether, gameName: "Fire Emblem: Fortune's Weave", home: cloudHome) == aether + "/Fire Emblem- Fortune's Weave",
+       "with AetherNX as the library's folder each game takes a folder named after it, without what a file name cannot hold")
+expect(CloudSaves.libraryTarget("/c/Saves", gameName: "X", home: cloudHome) == "/c/Saves" && CloudSaves.libraryTarget("", gameName: "X", home: cloudHome) == "",
+       "another library folder is every game's, and none is none")
+expect(CloudSaves.folderName(for: " ../ ") == "-" || !CloudSaves.folderName(for: " ../ ").contains("/"), "a name never makes a path")
+expect(GameExtras.isOwnFolder(aether + "/Game", titleID: title, home: cloudHome) && GameExtras.isOwnFolder("/c/\(title)", titleID: title, home: cloudHome)
+       && !GameExtras.isOwnFolder("/c/Saves", titleID: title, home: cloudHome), "a game's own folder: AetherNX › its name, or one named by its title ID")
+expect(CloudSaves.displayName(CloudSaves.automaticFolder(home: cloudHome) + "/\(title)/Mods", home: cloudHome) == "iCloud Drive › HorizonNative › \(title) › Mods",
+       "a folder inside the iCloud container, by its names in iCloud Drive")
+let modsRoot = "\(root)/mods-check/Mods"
+let fm = FileManager.default
+for (name, sub) in [("B Music", "romfs/sound"), ("A Skin", "atmosphere/contents/\(title)/romfs/model"), ("C Code", "exefs"), ("D Both", "romfs/x")] {
+    try? fm.createDirectory(atPath: "\(modsRoot)/\(name)/\(sub)", withIntermediateDirectories: true)
+}
+try? fm.createDirectory(atPath: "\(modsRoot)/D Both/exefs", withIntermediateDirectories: true)
+let mods = GameExtras.mods(in: modsRoot, order: ["B Music"], titleID: title)
+expect(mods.map(\.name) == ["B Music", "A Skin", "C Code", "D Both"], "the chosen order first, the new mods after it by name \(mods.map(\.name))")
+expect(mods.first { $0.name == "A Skin" }?.romfs?.hasSuffix("atmosphere/contents/\(title)/romfs") == true, "Atmosphère's layout is a mod too")
+expect(mods.first { $0.name == "C Code" }.map { $0.romfs == nil && $0.hasCode } == true && mods.first { $0.name == "D Both" }?.hasCode == true, "code mods are told apart")
+let overlay = GameExtras.overlay(mods, off: ["A Skin"])
+expect(overlay == ["\(modsRoot)/B Music/romfs", "\(modsRoot)/D Both/romfs"], "the overlay: the mods on that have a romfs, in order \(overlay)")
+try? fm.createDirectory(atPath: "\(root)/mods-check/Cheats", withIntermediateDirectories: true)
+try? "[Infinite HP]\n04000000 00000000 00000063\n{Master}\n[Max Gold]\n".write(toFile: "\(root)/mods-check/Cheats/0123456789ABCDEF.txt", atomically: true, encoding: .utf8)
+expect(GameExtras.cheatFiles(in: "\(root)/mods-check/Cheats", titleID: title).map(\.cheats) == [3], "a cheat file and how many cheats it has")
+
+// MARK: What a build stage does, and what an engine update means
+
+expect(StageGuide.entry(for: "extract base") != nil && StageGuide.entry(for: "iOS shaders") != nil && StageGuide.entry(for: "Pipeline archive") != nil
+       && StageGuide.entry(for: "sign for the device") != nil && StageGuide.entry(for: "copy the game files") != nil, "the build's and the install's stages are explained")
+expect(StageGuide.entry(for: "something new") == nil && StageGuide.title(for: "something new") == "something new", "a stage it does not know shows by its own name")
+expect(UpdateCenter.impact(of: ["studio/Sources/App.swift"]) == (false, false, true), "a change of the app's sources only")
+expect(UpdateCenter.impact(of: ["dm/host/hle_fs.c", "dm/gfx/nvn/dmsh_chain.h"]) == (true, true, false), "an engine change and a new shader chain")
+expect(UpdateCenter.impact(of: ["docs/playing.md"]) == (false, false, false), "documentation only")
 
 print("studio check: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

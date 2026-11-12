@@ -19,6 +19,13 @@ final class UpdateCenter {
     }
 
     struct Tools: Equatable {
+        struct Commit: Equatable, Identifiable {
+            var id: String { hash }
+            var hash: String
+            var date: String
+            var subject: String
+        }
+
         var behind: Int
         var ahead: Int
         var hasLocalChanges: Bool
@@ -28,6 +35,13 @@ final class UpdateCenter {
         var newestCommit: String
         var newestSubject: String?
         var newestVersion: String?
+        /// The changes an update brings, newest first (at most 40).
+        var newCommits: [Commit] = []
+        /// What they touch: the engine (games are rebuilt to get it), the shader chain (every game's shaders are translated again at its next
+        /// build), the Studio app's own sources (they come with a new release of the app, not with this update).
+        var touchesEngine = false
+        var touchesShaderChain = false
+        var touchesApp = false
         /// A fast-forward pull applies: the folder follows its remote branch and has no changes of its own.
         var canUpdate: Bool { isTracking && ahead == 0 && !hasLocalChanges }
     }
@@ -186,9 +200,27 @@ final class UpdateCenter {
         let newest = await git(engine, ["rev-parse", "--short", tracking]).out
         let subject = await git(engine, ["log", "-1", "--format=%s", tracking]).out
         let version = await git(engine, ["show", "\(tracking):VERSION"])
-        return .success(Tools(behind: counts[1], ahead: counts[0], hasLocalChanges: !changes.isEmpty, branch: branch, tracking: tracking,
-                              isTracking: upstreamRef.ok, newestCommit: newest, newestSubject: subject.isEmpty ? nil : subject,
-                              newestVersion: version.ok ? version.out : nil))
+        var tools = Tools(behind: counts[1], ahead: counts[0], hasLocalChanges: !changes.isEmpty, branch: branch, tracking: tracking,
+                          isTracking: upstreamRef.ok, newestCommit: newest, newestSubject: subject.isEmpty ? nil : subject,
+                          newestVersion: version.ok ? version.out : nil)
+        if counts[1] > 0 {
+            let log = await git(engine, ["log", "--format=%h%x09%as%x09%s", "-n", "40", "HEAD..\(tracking)"]).out
+            tools.newCommits = log.split(separator: "\n").compactMap { line in
+                let parts = line.split(separator: "\t", maxSplits: 2).map(String.init)
+                return parts.count == 3 ? Tools.Commit(hash: parts[0], date: parts[1], subject: parts[2]) : nil
+            }
+            let files = await git(engine, ["diff", "--name-only", "HEAD...\(tracking)"]).out.split(separator: "\n").map(String.init)
+            (tools.touchesEngine, tools.touchesShaderChain, tools.touchesApp) = Self.impact(of: files)
+        }
+        return .success(tools)
+    }
+
+    /// What a set of changed files means for the player: (engine, shader chain, app).
+    nonisolated static func impact(of files: [String]) -> (Bool, Bool, Bool) {
+        let engine = files.contains { $0.hasPrefix("dm/") || ($0.hasPrefix("scripts/") && !$0.hasPrefix("scripts/release")) }
+        let chain = files.contains { $0 == "dm/gfx/nvn/dmsh_chain.h" || $0.hasPrefix("dm/gfx/tools/dmsh_xlate") || $0 == "dm/gfx/tools/dmsh_chain.lock" }
+        let app = files.contains { $0.hasPrefix("studio/") }
+        return (engine, chain, app)
     }
 
     /// The nxnative commit of AetherNX's last sync: the subject "Sync with seedds/nxnative up to <commit> (<date>)" in the

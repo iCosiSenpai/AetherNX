@@ -35,7 +35,7 @@
 #   --os-min: the archives' system (default: for iOS the SDK's major version, e.g. 27.0; for macOS the major version this Mac runs, since the Mac app is built for the Mac that builds it).
 #   A device opens only an archive of its own major version (macOS 27.2 refused archives made for 26.0 and 26.6 and opened those for 27.0 and 27.2), and builds the bases itself
 #   otherwise: the SDK's version on a Mac whose system is older than its Xcode's SDK (macOS 26.6 with Xcode 27.1) left that Mac without them (GitHub issue #673)
-import argparse, concurrent.futures, filecmp, hashlib, json, os, shutil, struct, subprocess, sys, time
+import argparse, concurrent.futures, filecmp, hashlib, json, os, shutil, struct, subprocess, sys, threading, time
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'tools'))
@@ -45,6 +45,17 @@ LAYER = b'render_target_array_index'
 BATCH = 1000   # bases per metal-tt run: Odyssey's largest compiler lifetime footprint at this size was 2.065 GiB on an 8 GB M2
 COMPUTE_BATCH = 16   # compute pipelines per metal-tt run, JOBS runs at a time: one metal-tt keeps about 2-3 cores busy: Star Fox's 233 took 268 s in 16 groups against 453 s in one run (M5 Pro, background priority, a loaded Mac)
 JOBS = max(1, (os.cpu_count() or 2) // 2)
+
+
+def base_jobs():
+    """How many groups of bases compile at a time: one metal-tt keeps about three cores busy and peaks near 2 GiB at BATCH bases (Odyssey on an 8 GB M2), so
+    as many as the cores allow, keeping 6 GiB of memory per run, at least one. DM_PSO_BASE_JOBS sets it (1: one after the other, as before). Fire Emblem
+    Fortune's Weave's 12 groups took 354 s one after the other on a 16 GB, 10-core M5; two at a time halve the wait on such a Mac."""
+    env = os.environ.get('DM_PSO_BASE_JOBS', '')
+    if env.isdigit() and int(env) > 0: return int(env)
+    try: mem = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+    except (ValueError, OSError, AttributeError): mem = 8 << 30
+    return max(1, min((os.cpu_count() or 2) // 3, mem // (6 << 30)))
 COLOUR = ('pixel_format', 'write_mask', 'blending_state', 'alpha_blend_operation', 'rgb_blend_operation', 'destination_alpha_blend_factor', 'destination_rgb_blend_factor',
           'source_alpha_blend_factor', 'source_rgb_blend_factor')
 
@@ -313,18 +324,25 @@ def compile_batches(lib_dir, bases, work, part, arch, platform, osmin, toolchain
     This bounds input count, not memory: a single pipeline can still exceed Apple's compiler resources.
     On M2, merged archives passed archive-only lookups of two synthetic pipelines and all 32,864 Odyssey bases.
     Other workloads and compiler versions can have different resource use.
-    The groups of bases run one after the other, as before; the compute groups, small, jobs at a time, each in its own folder (its TMPDIR).
+    The groups of bases run base_jobs() at a time (bounded by memory: each run can take 2 GiB); the compute groups, small, jobs at a time, each in its
+    own folder (its TMPDIR). The pieces keep the groups' order whatever order they finish in.
     """
     groups = groups_of(bases, computes, batch_size, compute_size); total = len(groups); names = {name for name, _, _ in groups}
     for old in [*(work / f'batches.{arch}').glob('[0-9]*'), *(work / f'batches.{arch}').glob('c[0-9]*')]:   # the groups of a longer list than this one
         if old.name not in names: shutil.rmtree(old)
+    failed = threading.Event()   # after a group fails no other starts: the ones under way finish and stay cached
     def one(index, name, group, cgroup):
+        if failed.is_set(): raise SystemExit(f'[RED] pso_offline: {arch}: batch {index}/{total} not started: an earlier batch failed')
         print(f'pso_offline: {arch}: batch {index}/{total}: {f"{len(group)} bases" if group else f"{len(cgroup)} compute pipelines"}, compiling or checking cache', flush=True)
-        piece, reused = compile_batch(lib_dir, group, work / f'batches.{arch}' / name, arch, platform, osmin, toolchain, cgroup)
+        try: piece, reused = compile_batch(lib_dir, group, work / f'batches.{arch}' / name, arch, platform, osmin, toolchain, cgroup)
+        except BaseException:
+            failed.set(); raise
         print(f'pso_offline: {arch}: batch {index}/{total}: ready ({"reused" if reused else "compiled"})', flush=True)
         return piece
-    pieces = [one(i, *g) for i, g in enumerate(groups, 1) if g[1]]
-    with concurrent.futures.ThreadPoolExecutor(max(1, jobs)) as pool:   # a failed group stops the build once the others under way have finished (their pieces stay cached)
+    with concurrent.futures.ThreadPoolExecutor(base_jobs()) as pool:   # a failed group stops the build once the others under way have finished (their pieces stay cached)
+        futures = [pool.submit(one, i, *g) for i, g in enumerate(groups, 1) if g[1]]
+        pieces = [f.result() for f in futures]
+    with concurrent.futures.ThreadPoolExecutor(max(1, jobs)) as pool:
         futures = [pool.submit(one, i, *g) for i, g in enumerate(groups, 1) if not g[1]]
         pieces += [f.result() for f in futures]
     part.unlink(missing_ok=True)

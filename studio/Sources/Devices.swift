@@ -52,7 +52,8 @@ struct DeviceList: Decodable {
 struct InstallOptions: Equatable {
     var device: String
     var team: String
-    var separateFiles = false
+    /// auto, bundle or separate (`./aethernx install --files`).
+    var files = "auto"
     var launch = false
     var iCloudContainer = ""
 }
@@ -115,7 +116,7 @@ struct DeviceSettings: View {
     @Environment(AppModel.self) private var model
     @AppStorage(Pref.installDevice) private var installDevice = ""
     @AppStorage(Pref.signingTeam) private var signingTeam = ""
-    @AppStorage(Pref.installSeparateFiles) private var separateFiles = false
+    @AppStorage(Pref.installFiles) private var files = "auto"
     @AppStorage(Pref.installLaunch) private var launch = false
     @AppStorage(Pref.showFPS) private var showFPS = false
     @AppStorage(Pref.ascKeyPath) private var keyPath = ""
@@ -170,13 +171,17 @@ struct DeviceSettings: View {
             }
 
             Section {
-                Toggle("Keep the game files out of the app", isOn: $separateFiles)
+                Picker("Game files", selection: $files) {
+                    Text("Automatic").tag("auto")
+                    Text("Inside the app").tag("bundle")
+                    Text("On the device, copied once").tag("separate")
+                }
                 Toggle("Open the game when it is installed", isOn: $launch)
                 Toggle("Show the frame rate", isOn: $showFPS)
             } header: {
                 Text("Install")
             } footer: {
-                Text("Out of the app, the game files are copied to the device once and stay there across installs: for games too big to install whole, and for quick reinstalls. That copy needs a cable and afcclient (brew install libimobiledevice) for a large game.")
+                Text("On the device, the game files are copied once and stay there: installing again (after an engine update, say) copies only the app, minutes less for a large game. Automatic does that when the device is on a cable and afcclient is installed (brew install libimobiledevice), and puts the files inside the app otherwise.")
             }
 
             Section {

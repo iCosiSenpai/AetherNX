@@ -559,49 +559,113 @@ def importable(name):
     except (ImportError, ValueError): return False
 
 
+# What each check is for, in a sentence a player reads before installing anything (Studio shows its own translation, by the check's key), and how a front end
+# can install it without a terminal: "brew:<formula>", "cask:<cask>", "run:<command> <args>" (no administrator password), "open:<url>", or "" (only by hand:
+# the fix says how). docs/frontends.md, The setup check.
+WHY = {
+    'xcode': 'Apple\'s developer app: it compiles the engine and the Metal shaders, and signs and installs the iPhone and iPad apps. Free from the App Store.',
+    'xcode-select': 'The command-line tools must be Xcode\'s own, not the smaller Command Line Tools package, which has no Metal compiler and no iOS SDK.',
+    'xcode-license': 'Xcode does nothing from the command line until its license is accepted and its first-launch components are installed.',
+    'metal-toolchain': 'Compiles the translated shaders into Metal libraries for Apple GPUs. Xcode downloads it as a separate component.',
+    'metal-compiler': 'The shaders are tested with one version of Apple\'s Metal compiler: another one could make wrong pictures, so the build checks it.',
+    'ios-sdk': 'Needed only for iPhone and iPad builds: the system libraries the app is compiled against.',
+    'git': 'Downloads AetherNX and its updates, and the engine\'s parts kept in other repositories. It comes with Xcode.',
+    'homebrew': 'The package manager that installs the open-source tools below (Python, zstd, glslang…) with one command, and updates them.',
+    'python': 'The build scripts are written in Python: it unpacks the game, rewrites its code and translates the shaders.',
+    'python-arm64': 'An Intel Python runs under Rosetta and is several times slower at the long steps.',
+    'lz4': 'Decompresses the code modules of the games.',
+    'fonttools': 'Converts the system fonts the games ask for.',
+    'capstone': 'Disassembles the game code, so the rewriter knows what it is changing.',
+    'zstd-python': 'Reads and writes zstd-compressed data in the game files and the shader cache.',
+    'nsz': 'Only for compressed packages (.nsz, .xcz): turns them into plain ones.',
+    'zbic': 'Decrypts the files of games made with the console\'s system 22.0.0 or later; the build uses it for every game.',
+    'dotnet': 'Runs the shader translator of this engine version.',
+    'zstd': 'Compresses and decompresses the game data and the caches quickly.',
+    'glslang': 'Checks and compiles the shaders of games that use Vulkan or OpenGL.',
+    'xcodegen': 'Only for iPhone and iPad builds: writes the Xcode project the app is signed with.',
+    'archives': 'Only for games kept in RAR or 7z archives: extracts them (zip and tar work without it).',
+    'afcclient': 'Optional, for iPhone and iPad: copies a large game to the device over the cable at full speed, once, so later installs do not copy it again.',
+    'signing': 'Optional, for iPhone and iPad: the certificate that signs the apps with your own Apple team. Xcode makes it when you sign in with your Apple ID.',
+    'keys': 'Your prod.keys, dumped from your own Switch: they decrypt the game packages. Never uploaded, never put in the apps.',
+    'nxrt': 'For developers: the static recompiler that translates a module to C.',
+    'nnheaders': 'For developers: the SDK headers of the decompilation project.',
+    'sead': 'For developers: the headers of Nintendo\'s sead library.',
+    'unicorn': 'For developers: the CPU emulator nxrt uses.',
+}
+
+
 def doctor():
     checks = []
-    def check(group, name, ok, detail='', fix='', required=True):
-        checks.append({'group': group, 'name': name, 'ok': bool(ok), 'required': required, 'detail': detail, 'fix': fix})
-    pip = f'{sys.executable} -m pip install' if not (ROOT / '.venv').exists() else f'{ROOT}/.venv/bin/pip install'
-    check('Python', f'Python {platform.python_version()}', sys.version_info >= (3, 12), sys.executable, 'brew install python, then ./aethernx setup')
-    rosetta = run_out(['sysctl', '-n', 'sysctl.proc_translated'])[1] == '1'
-    check('Python', 'Native arm64 Python', not rosetta, platform.machine(), 'use an Apple-silicon Python (/opt/homebrew/bin/python3), not an Intel one')
-    for mod, label in (('lz4.block', 'lz4'), ('fontTools', 'fonttools')):
-        check('Python', label, importable(mod), '', f'./aethernx setup (or {pip} {label})')
-    cap, cap_version = None, 'missing'
-    if importable('capstone'):
-        import capstone
-        cap, cap_version = capstone.cs_version()[0], capstone.__version__
-    check('Python', 'capstone 5', cap == 5, cap_version, f'{pip} "capstone>=5,<6"')
-    check('Python', 'zstd', importable('compression.zstd') or importable('backports.zstd'), '', f'{pip} backports.zstd')
-    check('Python', 'nsz (for .nsz / .xcz packages)', importable('nsz') or shutil.which('nsz'), '', f'{pip} nsz', required=False)
-    check('Python', 'zbic (for games built with system 22.0.0 or later; the build needs it for every game)', importable('zbic'), '', f'{pip} zbic')
+    def check(key, group, name, ok, detail='', fix='', required=True, install=''):
+        checks.append({'key': key, 'group': group, 'name': name, 'ok': bool(ok), 'required': required, 'detail': detail, 'fix': fix,
+                       'why': WHY.get(key, ''), 'install': '' if ok else install})
+    brew = shutil.which('brew') or next((b for b in ('/opt/homebrew/bin/brew', '/usr/local/bin/brew') if os.access(b, os.X_OK)), None)
+    def via_brew(formula, cask=False):
+        return (f'cask:{formula}' if cask else f'brew:{formula}') if brew else ''
 
     code, out = run_out(['xcodebuild', '-version'])
     xcode = out.splitlines()[0] if code == 0 and out else ''
-    check('Xcode', 'Xcode', code == 0, xcode or out[-200:], 'install Xcode 27.2 and select it: sudo xcode-select -s /Applications/Xcode.app')
-    check('Xcode', 'Metal toolchain', run_out(['xcrun', '-sdk', 'macosx', 'metal', '--version'])[0] == 0, '', 'xcodebuild -downloadComponent MetalToolchain')
+    check('xcode', 'Xcode', 'Xcode', code == 0, xcode or out[-200:], 'install Xcode 27.2 from the App Store, open it once, then: sudo xcode-select -s /Applications/Xcode.app',
+          install='open:macappstore://apps.apple.com/app/id497799835')
+    _, selected = run_out(['xcode-select', '-p'])
+    check('xcode-select', 'Xcode', "Xcode's command-line tools selected", '.app/' in selected, selected or 'none',
+          'sudo xcode-select -s /Applications/Xcode.app (in Terminal: it asks for your password)')
+    if code == 0:
+        lcode, lout = run_out(['xcodebuild', '-checkFirstLaunchStatus'], timeout=60)
+        check('xcode-license', 'Xcode', 'Xcode license and first launch', lcode == 0, '', 'open Xcode once and accept its license (or, in Terminal: sudo xcodebuild -runFirstLaunch)')
+    check('metal-toolchain', 'Xcode', 'Metal toolchain', run_out(['xcrun', '-sdk', 'macosx', 'metal', '--version'])[0] == 0, '', 'xcodebuild -downloadComponent MetalToolchain',
+          install='run:xcodebuild -downloadComponent MetalToolchain')
     # The Metal compiler the shaders were tested with (dmsh_chain.lock): another one stops an NVN game's build before its shader steps, so "ready" must not be said without it.
     # own_compilers.py's own stop message is the fix: it names the Xcode to install and --allow-other-metal (DM_ALLOW_OTHER_METAL=1 here passes the check, as it passes the build)
     if code == 0:
         mcode, mout = run_out([sys.executable, str(ROOT / 'dm' / 'gfx' / 'tools' / 'own_compilers.py'), '--check-metal'], timeout=60)
-        check('Xcode', "Metal compiler of the tested shaders (NVN games)", mcode == 0, '', '' if mcode == 0 else mout[-600:] or 'python3 dm/gfx/tools/own_compilers.py --check-metal failed')
-    check('Xcode', 'iOS SDK (iPhone and iPad builds)', run_out(['xcrun', '--sdk', 'iphoneos', '--show-sdk-version'])[0] == 0, '', 'Xcode → Settings → Components → iOS', required=False)
-    for tool, fix, req in (('dotnet', 'brew install --cask dotnet-sdk', True), ('zstd', 'brew install zstd', True), ('glslangValidator', 'brew install glslang', True),
-                           ('xcodegen', 'brew install xcodegen (iPhone and iPad builds)', False)):
-        check('Tools', tool, shutil.which(tool), shutil.which(tool) or 'not found', fix, required=req)
+        check('metal-compiler', 'Xcode', "Metal compiler of the tested shaders (NVN games)", mcode == 0, '', '' if mcode == 0 else mout[-600:] or 'python3 dm/gfx/tools/own_compilers.py --check-metal failed')
+    check('ios-sdk', 'Xcode', 'iOS SDK (iPhone and iPad builds)', run_out(['xcrun', '--sdk', 'iphoneos', '--show-sdk-version'])[0] == 0, '', 'Xcode → Settings → Components → iOS',
+          required=False, install='run:xcodebuild -downloadPlatform iOS')
+    gcode, gout = run_out(['git', '--version'])
+    check('git', 'Tools', 'Git', gcode == 0, gout if gcode == 0 else 'not found', 'install Xcode (it brings Git), or: xcode-select --install')
+    check('homebrew', 'Tools', 'Homebrew', brew, brew or 'not found', 'install it from https://brew.sh (one command in Terminal; it asks for your password)',
+          required=False, install='open:https://brew.sh')
+
+    pip = f'{sys.executable} -m pip install' if not (ROOT / '.venv').exists() else f'{ROOT}/.venv/bin/pip install'
+    check('python', 'Python', f'Python {platform.python_version()}', sys.version_info >= (3, 12), sys.executable, 'brew install python, then ./aethernx setup', install=via_brew('python'))
+    rosetta = run_out(['sysctl', '-n', 'sysctl.proc_translated'])[1] == '1'
+    check('python-arm64', 'Python', 'Native arm64 Python', not rosetta, platform.machine(), 'use an Apple-silicon Python (/opt/homebrew/bin/python3), not an Intel one')
+    for mod, label, key in (('lz4.block', 'lz4', 'lz4'), ('fontTools', 'fonttools', 'fonttools')):
+        check(key, 'Python', label, importable(mod), '', f'./aethernx setup (or {pip} {label})', install='run:./aethernx setup')
+    cap, cap_version = None, 'missing'
+    if importable('capstone'):
+        import capstone
+        cap, cap_version = capstone.cs_version()[0], capstone.__version__
+    check('capstone', 'Python', 'capstone 5', cap == 5, cap_version, f'{pip} "capstone>=5,<6"', install='run:./aethernx setup')
+    check('zstd-python', 'Python', 'zstd', importable('compression.zstd') or importable('backports.zstd'), '', f'{pip} backports.zstd', install='run:./aethernx setup')
+    check('nsz', 'Python', 'nsz (for .nsz / .xcz packages)', importable('nsz') or shutil.which('nsz'), '', f'{pip} nsz', required=False, install='run:./aethernx setup')
+    check('zbic', 'Python', 'zbic (for games built with system 22.0.0 or later; the build needs it for every game)', importable('zbic'), '', f'{pip} zbic', install='run:./aethernx setup')
+
+    for key, tool, formula, cask, req in (('dotnet', 'dotnet', 'dotnet-sdk', True, True), ('zstd', 'zstd', 'zstd', False, True), ('glslang', 'glslangValidator', 'glslang', False, True),
+                                          ('xcodegen', 'xcodegen', 'xcodegen', False, False)):
+        found = shutil.which(tool)
+        check(key, 'Tools', tool, found, found or 'not found', f'brew install {"--cask " if cask else ""}{formula}', required=req, install=via_brew(formula, cask))
     arch = shutil.which('7zz') or shutil.which('7z') or shutil.which('unar')
-    check('Tools', '7-Zip or unar (RAR 5 archives)', arch, arch or 'zip and tar archives still work', 'brew install sevenzip', required=False)
+    check('archives', 'Tools', '7-Zip or unar (RAR 5 archives)', arch, arch or 'zip and tar archives still work', 'brew install sevenzip', required=False, install=via_brew('sevenzip'))
+
+    afc = shutil.which('afcclient')
+    check('afcclient', 'iPhone and iPad', 'afcclient (libimobiledevice)', afc, afc or 'not found: large games are copied inside the app at every install',
+          'brew install libimobiledevice', required=False, install=via_brew('libimobiledevice'))
+    _, idents = run_out(['/usr/bin/security', 'find-identity', '-v', '-p', 'codesigning'])
+    dev = re.findall(r'"((?:Apple Development|iPhone Developer)[^"]*)"', idents)
+    check('signing', 'iPhone and iPad', 'Apple Development certificate', dev, f'{len(set(dev))} found' if dev else 'none on this Mac',
+          'sign in with your Apple ID in Xcode › Settings › Accounts, then Manage Certificates › + › Apple Development', required=False)
 
     keys = default_keys()
-    check('Keys', 'prod.keys', keys and keys.is_file(), str(keys) if keys else 'not in ~/.switch/prod.keys',
+    check('keys', 'Keys', 'prod.keys', keys and keys.is_file(), str(keys) if keys else 'not in ~/.switch/prod.keys',
           'put your prod.keys in ~/.switch/prod.keys, set AETHERNX_KEYS, or pass -k (Studio: Settings → Keys)', required=False)
 
     for sub, use in (('nxrt', 'lift'), ('nnheaders', 'decomp-init headers'), ('sead', 'decomp-init headers')):
         present = any((ROOT / 'vendor' / sub).iterdir()) if (ROOT / 'vendor' / sub).is_dir() else False
-        check('Developer tools', f'vendor/{sub} ({use})', present, '', f'git submodule update --init --depth 1 vendor/{sub}', required=False)
-    check('Developer tools', 'unicorn (lift)', importable('unicorn'), '', './aethernx setup --tools', required=False)
+        check(sub, 'Developer tools', f'vendor/{sub} ({use})', present, '', f'git submodule update --init --depth 1 vendor/{sub}', required=False,
+              install=f'run:git submodule update --init --depth 1 vendor/{sub}')
+    check('unicorn', 'Developer tools', 'unicorn (lift)', importable('unicorn'), '', './aethernx setup --tools', required=False, install='run:./aethernx setup --tools')
     return {'version': VERSION, 'ok': all(c['ok'] for c in checks if c['required']), 'checks': checks}
 
 
@@ -615,6 +679,7 @@ def cmd_doctor(args):
             group = c['group']; print(f'\n{group}')
         mark = '✓' if c['ok'] else ('✗' if c['required'] else '–')
         print(f'  {mark} {c["name"]}' + (f'  ({c["detail"]})' if c['detail'] and c['ok'] else ''))
+        if not c['ok'] and c['why']: print(f'      why: {c["why"]}')
         if not c['ok'] and c['fix']: print(f'      fix: {c["fix"]}')
     print('\nReady to build.' if rep['ok'] else '\nSome required pieces are missing (✗).')
     return 0 if rep['ok'] else 1
@@ -656,8 +721,9 @@ def main(argv=None):
     p.add_argument('folder', help="the game's folder: base game, update and DLC packages")
     p.add_argument('--device', help='the device: its UDID or its name (default: the only one connected; ./aethernx devices lists them)')
     p.add_argument('--team', help='your Apple team ID (default: $AETHERNX_TEAM, else the team this game was last signed with, else the only one with a certificate on this Mac)')
-    p.add_argument('--files', choices=('bundle', 'separate'), default='bundle',
-                   help='bundle = the game files inside the app (default); separate = a small app, and the files copied to its Documents once (for games too big to install)')
+    p.add_argument('--files', choices=('auto', 'bundle', 'separate'), default='auto',
+                   help='auto = separate on a cable with afcclient, else bundle (default); bundle = the game files inside the app; separate = a small app, and the files copied '
+                        'to its Documents once, and not again while they are the same')
     p.add_argument('--icloud-container', help='sign with this iCloud container for automatic iCloud saves (your team must own it: iCloud.<…>); without it, choose a cloud saves folder in the app')
     p.add_argument('--launch', action='store_true', help='open the game on the device once it is installed')
     p.add_argument('--progress', choices=('plain', 'json'), default='plain', help='json = one JSON event per line, as the build script writes them (docs/frontends.md)')

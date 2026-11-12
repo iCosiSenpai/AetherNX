@@ -13,11 +13,13 @@ struct SidebarView: View {
 
     var body: some View {
         @Bindable var model = model
-        List(selection: $model.selectedGameID) {
+        List(selection: $model.sidebarSelection) {
+            Label("Home", systemImage: "house")
+                .tag(SidebarItem.home)
             Section {
                 ForEach(filtered) { game in
                     GameRow(game: game, job: model.jobFor(game))
-                        .tag(game.id)
+                        .tag(SidebarItem.game(game.id))
                         .contextMenu { GameContextMenu(game: game) }
                 }
             } header: {
@@ -42,6 +44,23 @@ struct SidebarView: View {
                     }
                 }
             }
+            Section("AetherNX") {
+                PageRow(title: "Activity", systemImage: "list.bullet.rectangle") {
+                    if let job = model.job, job.isRunning { ProgressView().controlSize(.mini) }
+                }
+                .tag(SidebarItem.page(.activity))
+                PageRow(title: "Devices", systemImage: "iphone.gen3") {
+                    let connected = model.devices.devices.filter(\.isReachable).count
+                    if connected > 0 { Text(verbatim: "\(connected)").monospacedDigit().foregroundStyle(.secondary) }
+                }
+                .tag(SidebarItem.page(.devices))
+                PageRow(title: "Updates", systemImage: "arrow.down.circle") {
+                    if model.updates.hasUpdates { Circle().fill(.tint).frame(width: 8, height: 8).help("An update is ready") }
+                }
+                .tag(SidebarItem.page(.updates))
+                PageRow(title: "Settings", systemImage: "gearshape") { EmptyView() }
+                    .tag(SidebarItem.page(.settings))
+            }
         }
         .listStyle(.sidebar)
         .overlay {
@@ -49,6 +68,21 @@ struct SidebarView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             SidebarFooter()
+        }
+    }
+}
+
+/// A row for one of the app's own pages, with what it has to say at its end (a count, a dot, a spinner).
+private struct PageRow<Accessory: View>: View {
+    let title: LocalizedStringKey
+    let systemImage: String
+    @ViewBuilder let accessory: Accessory
+
+    var body: some View {
+        HStack {
+            Label(title, systemImage: systemImage)
+            Spacer(minLength: 4)
+            accessory
         }
     }
 }
@@ -155,7 +189,7 @@ private struct SidebarFooter: View {
                 Text("Builds need the keys from your own Switch.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                SettingsLink { Text("Open Settings…") }
+                Button("Open Settings…") { model.showSettings(.keys) }
                     .controlSize(.small)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

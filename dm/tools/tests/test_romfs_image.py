@@ -273,6 +273,10 @@ if cmd == 'put':
     else:
         if dst.exists() and 'f' not in flags: fail('Failed to write into existing file without -f option')
         data = src.read_bytes(); dst.write_bytes(data[:len(data) // 2] if os.environ.get('AFC_PUT_SHORT') else data)
+elif cmd == 'get':
+    src, dst = at(rest[0]), Path(rest[1])
+    if not src.is_file(): fail('Failed to open remote file: Not found (8)')
+    dst.write_bytes(src.read_bytes())
 elif cmd == 'info':
     p = at(rest[0])
     if not p.exists(): fail('Failed to get file info: Not found (8)')
@@ -425,6 +429,24 @@ class AfcTransfers(unittest.TestCase):
         self.assertIn('mv /Documents/romfs.img.part /Documents/romfs.img', calls)
         self.assertFalse(self.xcrun_calls.exists())   # devicectl is not used for the image
         self.assertIn('game files on the phone', result.stdout)
+
+    def test_an_image_already_on_the_device_is_not_copied_again(self):
+        # The identity beside the image after its copy: a second push of the same image copies nothing; another image, or ROMFS_PUSH_FORCE=1, copies again
+        self.afc()
+        result = self.push(); self.assertEqual(result.returncode, 0, result.stderr)
+        ident = (self.device / 'Documents/romfs.img.id').read_text()
+        self.assertTrue(ident and ident in result.stdout)
+        self.calls.write_text('')
+        result = self.push(); self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('already has this image', result.stdout)
+        self.assertNotIn(' put ', self.calls.read_text().replace('romfs.img.id', ''))
+        self.env['ROMFS_PUSH_FORCE'] = '1'; self.calls.write_text('')
+        result = self.push(); self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f'put -f {self.img} /Documents/romfs.img.part', self.calls.read_text())
+        del self.env['ROMFS_PUSH_FORCE']
+        (self.device / 'Documents/romfs.img.id').write_text('another image'); self.calls.write_text('')
+        result = self.push(); self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f'put -f {self.img} /Documents/romfs.img.part', self.calls.read_text())
 
     def test_cut_off_afc_copy_fails_and_never_replaces_the_image(self):
         self.afc(); old = b'an older image'; (self.device / 'Documents/romfs.img').write_bytes(old)

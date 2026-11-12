@@ -1,16 +1,65 @@
 import AppKit
 import SwiftUI
 
-struct SettingsView: View {
+/// Settings, as a page of the main window: the groups in a list beside them when the window has room, as tabs above them when it is narrow.
+/// The iPhone and iPad settings are on the Devices page.
+struct SettingsPage: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.layoutWidth) private var layoutWidth
+
     var body: some View {
-        TabView {
-            Tab("General", systemImage: "gearshape") { GeneralSettings() }
-            Tab("Keys", systemImage: "key") { KeysSettings() }
-            Tab("Building", systemImage: "hammer") { BuildingSettings() }
-            Tab("iPhone & iPad", systemImage: "iphone") { DeviceSettings() }
+        @Bindable var model = model
+        Group {
+            if layoutWidth == .compact {
+                VStack(spacing: 0) {
+                    Picker("Settings", selection: $model.settingsPane) {
+                        ForEach(SettingsPane.allCases) { pane in
+                            Text(pane.title).tag(pane)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .padding(12)
+                    Divider()
+                    pane(model.settingsPane)
+                }
+            } else {
+                HStack(spacing: 0) {
+                    List(selection: $model.settingsPane) {
+                        ForEach(SettingsPane.allCases) { pane in
+                            Label(pane.title, systemImage: pane.systemImage).tag(pane)
+                        }
+                        Section {
+                            Button {
+                                model.sidebarSelection = .page(.devices)
+                            } label: {
+                                Label("iPhone & iPad…", systemImage: "iphone.gen3")
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .listStyle(.sidebar)
+                    .frame(width: 220)
+                    Divider()
+                    pane(model.settingsPane)
+                        .frame(maxWidth: 860)
+                        .frame(maxWidth: .infinity)
+                }
+            }
         }
-        .frame(width: 540)
-        .scenePadding(.minimum)
+        .navigationTitle("Settings")
+        .measuringLayoutWidth()
+    }
+
+    @ViewBuilder
+    private func pane(_ pane: SettingsPane) -> some View {
+        switch pane {
+        case .general: GeneralSettings()
+        case .library: LibrarySettings()
+        case .keys: KeysSettings()
+        case .building: BuildingSettings()
+        case .cloud: CloudSettings()
+        }
     }
 }
 
@@ -18,10 +67,64 @@ struct SettingsView: View {
 
 private struct GeneralSettings: View {
     @Environment(AppModel.self) private var model
-    @AppStorage(Pref.downloadArtwork) private var downloadArtwork = true
     @AppStorage(Pref.notifyBuilds) private var notifyBuilds = true
     @AppStorage(Pref.checkUpdatesAtLaunch) private var checkUpdatesAtLaunch = true
     @AppStorage(Pref.showsMenuBarItem) private var showsMenuBarItem = true
+
+    var body: some View {
+        Form {
+            Section {
+                LabeledContent("Folder") {
+                    HStack {
+                        Text(model.engine.map { abbreviated($0.path) } ?? String(localized: "Not set"))
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                            .foregroundStyle(model.engine == nil ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                        Button("Choose…") { model.chooseEngineFolder() }
+                    }
+                }
+                if let version = model.engineVersion {
+                    LabeledContent("Version", value: version)
+                }
+                HStack {
+                    Button("Check Setup…") { model.showsSetupCheck = true }
+                        .disabled(model.engine == nil)
+                    Button("Updates…") { model.sidebarSelection = .page(.updates) }
+                    if model.engine == nil {
+                        Button("Download") { model.downloadEngine() }
+                            .disabled(!model.canStartJob)
+                    }
+                }
+            } header: {
+                Text("AetherNX Engine")
+            } footer: {
+                Text("The folder with the aethernx command, the build scripts and the HorizonNative engine. The app runs the builds from there, and updates it on its own, without a new version of the app (Updates).")
+            }
+
+            Section {
+                Toggle("Check for updates at launch", isOn: $checkUpdatesAtLaunch)
+                Toggle("Show AetherNX in the menu bar", isOn: $showsMenuBarItem)
+                Toggle("Notify me when a build finishes", isOn: $notifyBuilds)
+                    .onChange(of: notifyBuilds) { _, on in if on { Notifier.requestPermission() } }
+            } header: {
+                Text("App")
+            }
+
+            Section {
+                Button("Open Setup Assistant…") { model.showsSetupAssistant = true }
+            } footer: {
+                Text("The assistant checks what the builds need on this Mac (Xcode, Python, Git and the rest), says what each one is for, and installs what it can.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - Library
+
+private struct LibrarySettings: View {
+    @Environment(AppModel.self) private var model
+    @AppStorage(Pref.downloadArtwork) private var downloadArtwork = true
 
     var body: some View {
         Form {
@@ -57,36 +160,6 @@ private struct GeneralSettings: View {
             }
 
             Section {
-                LabeledContent("Folder") {
-                    HStack {
-                        Text(model.engine.map { abbreviated($0.path) } ?? String(localized: "Not set"))
-                            .lineLimit(1)
-                            .truncationMode(.head)
-                            .foregroundStyle(model.engine == nil ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
-                        Button("Choose…") { model.chooseEngineFolder() }
-                    }
-                }
-                if let version = model.engineVersion {
-                    LabeledContent("Version", value: version)
-                }
-                HStack {
-                    Button("Check Setup…") { model.showsSetupCheck = true }
-                        .disabled(model.engine == nil)
-                    Button("Update") { model.updateEngine() }
-                        .disabled(model.engine == nil || !model.canStartJob)
-                        .help("git pull in the AetherNX folder")
-                    if model.engine == nil {
-                        Button("Download") { model.downloadEngine() }
-                            .disabled(!model.canStartJob)
-                    }
-                }
-            } header: {
-                Text("AetherNX Tools")
-            } footer: {
-                Text("The folder with the aethernx command and the build scripts. The app runs the builds from there.")
-            }
-
-            Section {
                 Toggle("Download game artwork", isOn: $downloadArtwork)
                 HStack {
                     Text("\(model.artwork.art.values.filter { $0.source != nil }.count) games have artwork")
@@ -101,22 +174,26 @@ private struct GeneralSettings: View {
                 Text("Icons and banners of Switch games come from nlib.cc by title ID; other games, Switch 2 ones among them, get their box art from Wikipedia by name. Only the title ID or the name is sent. Without a picture online, the icon in the game's own files is used.")
             }
 
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - Saves, mods and cheats
+
+private struct CloudSettings: View {
+    var body: some View {
+        Form {
             CloudSavesSettings()
-
             Section {
-                Toggle("Check for updates at launch", isOn: $checkUpdatesAtLaunch)
-                Toggle("Show AetherNX in the menu bar", isOn: $showsMenuBarItem)
-                Button("Check for Updates…") { model.checkForUpdates(userInitiated: true) }
+                Label("Mods: a folder per mod in the game's Mods folder, with a romfs folder inside. Turn them on and off, and order them, on the game's page. No rebuild: they apply at the game's next start.",
+                      systemImage: "puzzlepiece.extension")
+                Label("Cheats: Atmosphère cheat files named by the game's build ID, in its Cheats folder. Turn single cheats on and off while playing, from the game's Cheats menu.",
+                      systemImage: "wand.and.stars")
             } header: {
-                Text("Updates")
+                Text("Mods and Cheats")
             } footer: {
-                Text("The app from AetherNX's GitHub releases, the tools from their Git remote, and what nxnative, the engine AetherNX is built on, changed since AetherNX's last sync.")
-            }
-
-            Section {
-                Toggle("Notify me when a build finishes", isOn: $notifyBuilds)
-                    .onChange(of: notifyBuilds) { _, on in if on { Notifier.requestPermission() } }
-                Button("Open Setup Assistant…") { model.showsSetupAssistant = true }
+                Text("Both folders sit next to the game's save: in iCloud Drive › AetherNX › the game's name when the cloud is on, so every Mac and device of yours sees the same ones; else on this Mac. Code mods (exefs) and mods that need a loader do not work with the engine.")
             }
         }
         .formStyle(.grouped)
