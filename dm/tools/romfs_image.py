@@ -256,4 +256,8 @@ if __name__ == '__main__':
     args = ap.parse_args()
     try: n = pack(args.source, args.image, reuse=args.reuse)
     except ValueError as e: sys.exit(f'[RED] {e}')
+    except OSError as e:   # a full disk, a drive pulled out, a folder that cannot be read: one line that says which, as the script's caller shows it; an image there before is kept
+        import errno
+        room = ' (the image needs room for all of the game\'s files)' if e.errno == errno.ENOSPC else ''
+        sys.exit(f'[RED] the image {args.image} was not written: {e.strerror or e}{f": {e.filename}" if e.filename else ""}{room}; an image there before is unchanged')
     print(f'{args.image}: {n} entries, {os.path.getsize(args.image)} bytes')

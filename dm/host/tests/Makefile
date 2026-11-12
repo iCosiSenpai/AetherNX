@@ -159,6 +159,16 @@ $(B)/t_save_sync_faults: t_save_sync_faults.c t_save_sync_faults_hook.c ../save_
 	$(CLANG) -O1 -g -Wall -Wno-unused-function -Wno-deprecated-declarations -I.. -o $@ t_save_sync_faults.c t_save_sync_faults_hook.c
 $(B)/t_save_sync_metadata: t_save_sync_metadata.c ../save_sync.c ../save_sync.h | $(B)
 	$(CLANG) -O1 -Wall -Wno-unused-function -I.. -o $@ t_save_sync_metadata.c
+# Cloud saves on a volume that is really full (t_save_sync_fulldisk.c): a 24 MB disk image is made, mounted, filled to its last byte by the test, and removed.
+# Not in `run`: it needs hdiutil and mounts a volume, which a CI runner and a sandbox may not allow
+.PHONY: full-disk
+full-disk: $(B)/t_save_sync_fulldisk
+	rm -rf $(B)/fulldisk && mkdir -p $(B)/fulldisk/mnt $(B)/fulldisk/roomy
+	hdiutil create -quiet -size 24m -fs APFS -volname dmfull $(B)/fulldisk/full.dmg
+	hdiutil attach -quiet -nobrowse -mountpoint $(B)/fulldisk/mnt $(B)/fulldisk/full.dmg
+	$(B)/t_save_sync_fulldisk "$(abspath $(B))/fulldisk/mnt" "$(abspath $(B))/fulldisk/roomy" $(QUIET); s=$$?; hdiutil detach -quiet -force $(B)/fulldisk/mnt; rm -rf $(B)/fulldisk; exit $$s
+$(B)/t_save_sync_fulldisk: t_save_sync_fulldisk.c t_fs_stub.c ../hle_fs.c ../save_sync.c ../save_sync.h ../hle_bigstack.c ../hle.h ../dm.h $(GAME_H) | $(B)
+	$(CLANG) -O1 -Wall -Wno-unused-function -I.. $(GINC) -o $@ t_save_sync_fulldisk.c t_fs_stub.c ../hle_bigstack.c ../save_sync.c
 .PHONY: save-sync
 save-sync: $(B)/t_save_sync $(B)/t_save_sync_faults $(B)/t_save_sync_metadata
 	TMPDIR="$(abspath $(B))" $(B)/t_save_sync $(QUIET)

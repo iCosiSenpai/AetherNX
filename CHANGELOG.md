@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+**Install on your iPhone or iPad from the Mac**
+
+- **Install** on a game's page (Build → Install on iPhone or iPad, ⇧⌘I) builds the game, signs it with your own Apple team, free or paid, and installs it on a device paired with the Mac: no Xcode window and no sideloading tool. Installing again keeps the saves and the game files on the device. Settings → **iPhone & iPad** chooses the device, the team, whether the game files stay out of the app (copied once, for games too big to install whole), and for a Mac with no Apple ID in Xcode an App Store Connect API key.
+- `./aethernx install <game folder>` does the same from a terminal, and `./aethernx devices` lists the paired devices and the signing teams. A bundle ID that belongs to another team is signed under your team's own and kept; a profile that cannot carry the Increased Memory Limit, or a team without the iCloud container, is signed without it and says so.
+- The route follows [NX2Apple](https://github.com/LNPANDY/NX2Apple)'s launcher ([credits](CREDITS.md)).
+
+**Saves**
+
+- A **Saves** section on each game's page: the save on this Mac, the cloud folder its Mac app syncs through with **Change** (iCloud Drive › HorizonNative, iCloud Drive › HorizonNative Saves, another folder, off), when the cloud's copy last changed and what the last session said about the sync.
+- Settings → General → **Cloud saves** sets one folder for the whole library; a game with a choice of its own keeps it.
+
+**Also**
+
+- **Make Bug Report…** (a game's More menu, and Help) and `./aethernx report <game folder>`: the game's logs, versions and settings in one zip on the Desktop, never any game data.
+- `scripts/push_aoc.sh` sends add-on content over AFC, as `push_romfs.sh` sends the game's image: a DLC as large as a game no longer goes through the Mac's memory, an image is renamed into place only once the device holds all of it, and the DLC already on the phone stay.
+- [The Increased Memory Limit](docs/playing.md#the-increased-memory-limit): which ways of installing keep it, and how to read from `log.txt` whether it took effect.
+
 ## 0.2.0
 
 Switch 2 games, and an app that sets itself up and keeps itself up to date.

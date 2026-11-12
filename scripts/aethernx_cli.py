@@ -4,8 +4,11 @@
   scan [folders...] [--json]          list the games in your library folders
   unpack <archive|folder> [--out DIR] extract .zip / .rar / .7z / .tar archives of game packages
   build <game folder> [--target T]    build a game: mac (default), ios, ios-slim or xcode; other options go to build_ipa_from_nsp.py
+  devices [--json]                    the iPhones and iPads paired with this Mac, and the Apple teams it can sign with
+  install <game folder> [--device D]  build a game, sign it with your Apple team and install it on a paired iPhone or iPad
   decomp-init <game folder>           function and symbol tables of an extracted game, with a C++ starter project
   lift <game folder>                  translate an extracted module to C with nxrt (vendor/nxrt)
+  report <game folder|title ID>       a zip for a bug report: logs, versions and settings, never game data (scripts/bug_report.py)
   setup [--tools]                     create .venv and install the Python packages the build needs
   doctor [--json]                     check the tools and files a build needs
   studio [--rebuild]                  build (once) and open AetherNX Studio
@@ -150,6 +153,14 @@ def package_contents(paths):
     return out
 
 
+def device_install_record(work):
+    try:
+        with open(work / 'xcode' / 'install.json') as f: rec = json.load(f)
+    except (OSError, ValueError): return None
+    if not isinstance(rec, dict): return None
+    return {k: str(rec[k]) for k in ('team', 'bundle_id', 'device', 'device_name', 'installed') if isinstance(rec.get(k), str)} or None
+
+
 def scan_game(folder):
     """One game folder as a dict, or None when the folder holds no game. Raises CliError with the reason when it holds an unreadable one."""
     b = builder()
@@ -201,6 +212,7 @@ def scan_game(folder):
         'icon': str(newest / 'icon.jpg') if newest and (newest / 'icon.jpg').is_file() else None,
         'mac_apps': built_apps(folder, tid),
         'ipas': [str(p) for p in sorted(folder.glob('*.ipa')) if p.is_file()],
+        'device_install': device_install_record(work),   # the last ./aethernx install: the device, the team and the bundle ID it was signed with
         'save_dir': str(HORIZON_SUPPORT / tid),
         'log_file': str(HORIZON_LOGS / f'{tid}.log'),
         'decomp_dir': str(decomp) if (decomp / 'manifest.json').is_file() else None,
@@ -350,6 +362,47 @@ def cmd_build(args, rest):
     os.execv(sys.executable, cmd)
 
 
+# ---- devices, install ----
+
+def cmd_devices(args):
+    import device_install as di
+    try: devices, teams = di.list_devices(), di.signing_teams()
+    except di.InstallError as e: raise CliError(str(e)) from e
+    if args.json:
+        print(json.dumps({'version': 1, 'devices': devices, 'teams': teams}, ensure_ascii=False, indent=1)); return 0
+    how = {'cable': 'connected by cable', 'network': 'on the network', 'none': 'not reachable now'}
+    for d in devices:
+        mode = '' if d['developer_mode'] is not False else ', Developer Mode off'
+        print(f"{d['name']}: {d['model'] or d['kind']}, {d['os']}, {how[d['connection']]}{mode}  [{d['udid']}]")
+    if not devices: print('No paired iPhone or iPad. Connect one with a cable, unlock it and choose Trust.')
+    print()
+    for t in teams: print(f"team {t['id']}: {t['name']} ({t['identity']})")
+    if not teams: print('No Apple development certificate on this Mac: sign in with your Apple ID in Xcode › Settings › Accounts, then Manage Certificates › + › Apple Development.')
+    return 0
+
+
+def cmd_install(args, rest):
+    import device_install as di
+    folder = Path(args.folder).expanduser().resolve()
+    if not folder.is_dir(): raise CliError(f'no such folder: {folder}')
+    if '--work-dir' in rest:   # the build folder is the one the packing script is told to use
+        at = rest.index('--work-dir')
+        if at + 1 >= len(rest): raise CliError('--work-dir needs a folder')
+        work = Path(rest[at + 1]).expanduser().resolve()
+    else:
+        with contextlib.redirect_stdout(sys.stderr):
+            g = scan_game(folder)
+        if not g or g['kind'] == 'archives': raise CliError(f'no game in {folder}')
+        work = Path(g['work_dir'])
+    keys = Path(args.keys).expanduser() if args.keys else default_keys()
+    try:
+        return di.install(folder, work, build_args=rest, keys=keys, device=args.device, team=args.team, files=args.files, icloud_container=args.icloud_container or '',
+                          launch=args.launch, as_json=args.progress == 'json', api_key=args.api_key, api_key_id=args.api_key_id, api_issuer=args.api_issuer)
+    except di.InstallError as e:
+        if args.progress == 'json': print(json.dumps({'ev': 'say', 't': round(time.time(), 3), 'msg': f'[RED] {e}'}, ensure_ascii=False), flush=True)
+        raise CliError(str(e)) from e
+
+
 # ---- decomp-init ----
 
 def eh_functions(img):   # {offset: size} of the functions an NSO image's .eh_frame_hdr lists (MOD0 → eh_frame_hdr, the table the compiler writes for unwinding)
@@ -464,6 +517,16 @@ def cmd_lift(args):
     if args.json: print(json.dumps({'module': args.module, 'folder': str(out), 'files': files}))
     else: print(f'{g["name"]}: {args.module} → {files} C files in {out}')
     return 0
+
+
+# ---- report ----
+
+def cmd_report(args):
+    cmd = [sys.executable, str(ROOT / 'scripts' / 'bug_report.py'), args.target]
+    if args.ios_log: cmd += ['--ios-log', args.ios_log]
+    if args.out: cmd += ['--out', args.out]
+    sys.stdout.flush()
+    os.execv(sys.executable, cmd)
 
 
 # ---- setup ----
@@ -586,6 +649,22 @@ def main(argv=None):
     p.add_argument('folder', help="the game's folder: base game, update and DLC packages")
     p.add_argument('--target', choices=TARGETS, default='mac', help='mac = a Mac app (default); ios = an IPA; ios-slim = an IPA without the game files; xcode = an Xcode project')
     p.add_argument('-k', '--keys', help='your prod.keys (default: $AETHERNX_KEYS, else ~/.switch/prod.keys)')
+    p = sub.add_parser('devices', help='the iPhones and iPads paired with this Mac, and the Apple teams it can sign with', allow_abbrev=False)
+    p.add_argument('--json', action='store_true')
+    p = sub.add_parser('install', help='build a game, sign it with your Apple team and install it on a paired iPhone or iPad (other options go to scripts/build_ipa_from_nsp.py)',
+                       allow_abbrev=False)
+    p.add_argument('folder', help="the game's folder: base game, update and DLC packages")
+    p.add_argument('--device', help='the device: its UDID or its name (default: the only one connected; ./aethernx devices lists them)')
+    p.add_argument('--team', help='your Apple team ID (default: $AETHERNX_TEAM, else the team this game was last signed with, else the only one with a certificate on this Mac)')
+    p.add_argument('--files', choices=('bundle', 'separate'), default='bundle',
+                   help='bundle = the game files inside the app (default); separate = a small app, and the files copied to its Documents once (for games too big to install)')
+    p.add_argument('--icloud-container', help='sign with this iCloud container for automatic iCloud saves (your team must own it: iCloud.<…>); without it, choose a cloud saves folder in the app')
+    p.add_argument('--launch', action='store_true', help='open the game on the device once it is installed')
+    p.add_argument('--progress', choices=('plain', 'json'), default='plain', help='json = one JSON event per line, as the build script writes them (docs/frontends.md)')
+    p.add_argument('-k', '--keys', help='your prod.keys (default: $AETHERNX_KEYS, else ~/.switch/prod.keys)')
+    p.add_argument('--api-key', help='an App Store Connect API key file (AuthKey_<ID>.p8) for signing, when Xcode has no Apple ID signed in (default: $AETHERNX_ASC_KEY)')
+    p.add_argument('--api-key-id', help="the API key's ID (default: from the file's name, else $AETHERNX_ASC_KEY_ID)")
+    p.add_argument('--api-issuer', help="the API key's issuer ID (default: $AETHERNX_ASC_ISSUER)")
     p = sub.add_parser('decomp-init', help='function and symbol tables of an extracted game', allow_abbrev=False)
     p.add_argument('folder')
     p.add_argument('--json', action='store_true')
@@ -594,6 +673,10 @@ def main(argv=None):
     p.add_argument('--module', default='main', help='the ExeFS module (default: main)')
     p.add_argument('--limit', type=int, default=0, help='at most this many functions (for a quick test)')
     p.add_argument('--json', action='store_true')
+    p = sub.add_parser('report', help='a zip for a bug report: logs, versions and settings, never game data', allow_abbrev=False)
+    p.add_argument('target', help="the game's folder, its title ID or its Mac app")
+    p.add_argument('--ios-log', metavar='FILE', help='log.txt from the iPhone or iPad (Files app)')
+    p.add_argument('--out', metavar='FILE', help='the zip to write (default: HorizonNative-report-<title ID>-<date>.zip here)')
     p = sub.add_parser('setup', help='create .venv and install the Python packages', allow_abbrev=False)
     p.add_argument('--tools', action='store_true', help='also the packages the developer tools need (unicorn, numpy: scripts/requirements-tools.txt)')
     p = sub.add_parser('doctor', help='check the tools and files a build needs', allow_abbrev=False)
@@ -604,12 +687,13 @@ def main(argv=None):
     sub.add_parser('help', help='show this help')
 
     args, rest = ap.parse_known_args(argv)
-    if rest and args.cmd != 'build': ap.error(f'unrecognized arguments: {" ".join(rest)}')
+    if rest and args.cmd not in ('build', 'install'): ap.error(f'unrecognized arguments: {" ".join(rest)}')
     if args.cmd in (None, 'help'): ap.print_help(); return 0
     if args.cmd == 'version': print(f'AetherNX {VERSION}'); return 0
     try:
         if args.cmd == 'build': return cmd_build(args, rest)
-        return {'scan': cmd_scan, 'unpack': cmd_unpack, 'decomp-init': cmd_decomp_init, 'lift': cmd_lift, 'setup': cmd_setup,
+        if args.cmd == 'install': return cmd_install(args, rest)
+        return {'devices': cmd_devices, 'report': cmd_report, 'scan': cmd_scan, 'unpack': cmd_unpack, 'decomp-init': cmd_decomp_init, 'lift': cmd_lift, 'setup': cmd_setup,
                 'doctor': cmd_doctor, 'studio': cmd_studio}[args.cmd](args)
     except CliError as e:
         print(f'aethernx: {e}', file=sys.stderr)

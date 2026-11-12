@@ -7,6 +7,7 @@ import shlex
 import stat
 import struct
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -159,6 +160,19 @@ class Images(unittest.TestCase):
             image.pack(self.src, self.dst)
         self.assertEqual(self.dst.read_bytes(), original)
         self.assertFalse(Path(str(self.dst) + '.part').exists())
+
+    def test_a_folder_that_cannot_be_written_to_is_one_red_line(self):
+        """A full disk or a read-only folder ends the command with one line, not a traceback, and an image there before stays (run for real on a full 16 MB volume:
+        docs/validation.md)"""
+        folder = self.root / 'locked'; folder.mkdir()
+        image_path = folder / 'RomFS.img'; image_path.write_text('an older image')
+        folder.chmod(0o555); self.addCleanup(folder.chmod, 0o755)
+        result = subprocess.run([sys.executable, '-I', str(REPO / 'dm/tools/romfs_image.py'), str(self.src), str(image_path)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(result.stderr.startswith('[RED] the image '), result.stderr)
+        self.assertNotIn('Traceback', result.stderr)
+        self.assertEqual(image_path.read_text(), 'an older image')
+        self.assertEqual([p.name for p in folder.iterdir()], ['RomFS.img'])
 
     def test_push_helper_refreshes_cache_and_propagates_copy_failure(self):
         resources = self.root / 'resources.env'
@@ -438,6 +452,101 @@ class AfcTransfers(unittest.TestCase):
         self.env['ROMFS_PUSH_VIA'] = 'devicectl'   # chosen explicitly, it goes through devicectl
         result = self.push(); self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('Documents/romfs.img', self.xcrun_calls.read_text())
+
+
+class AocPushes(unittest.TestCase):
+    """push_aoc.sh adds add-on content to Documents/aoc over AFC, as push_romfs.sh sends the game's image: devicectl copies a whole file through the Mac's
+    memory, and a DLC can be as large as a game. An image arrives under a name the host never takes and is renamed once the device holds all of it."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='aoc push '); self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.aoc = self.root / 'add-on content'; self.aoc.mkdir()
+        for index, text in ((1, 'first DLC ' * 50), (3, 'third DLC ' * 80)):
+            source = self.root / f'dlc{index}'; source.mkdir(); (source / 'marker').write_text(text)
+            image.pack(source, self.aoc / f'{index}.img')
+        self.device = self.root / 'device'; (self.device / 'Documents').mkdir(parents=True)
+        self.bin = self.root / 'bin'; self.bin.mkdir()
+        self.calls = self.root / 'afc-calls'; self.xcrun_calls = self.root / 'xcrun-calls'
+        (self.bin / 'xcrun').write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$XCRUN_CALLS"\n'); (self.bin / 'xcrun').chmod(0o755)
+        self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ['PATH'], AFC_DEVICE=str(self.device),
+                        AFC_CALLS=str(self.calls), XCRUN_CALLS=str(self.xcrun_calls))
+        self.env.pop('ROMFS_PUSH_VIA', None)
+
+    def afc(self):
+        (self.bin / 'afcclient').write_text(FAKE_AFC); (self.bin / 'afcclient').chmod(0o755)
+
+    def push(self, *sources):
+        return subprocess.run(['bash', str(REPO / 'scripts/push_aoc.sh'), 'fixture-device', 'fixture.bundle', *map(str, sources or [self.aoc])],
+                              env=self.env, capture_output=True, text=True)
+
+    def test_images_go_over_afc_and_are_renamed_once_complete(self):
+        self.afc()
+        result = self.push(); self.assertEqual(result.returncode, 0, result.stderr)
+        remote = self.device / 'Documents/aoc'
+        self.assertEqual({p.name for p in remote.iterdir()}, {'1.img', '3.img'})   # no .part left
+        for name in ('1.img', '3.img'): self.assertEqual((remote / name).read_bytes(), (self.aoc / name).read_bytes())
+        calls = self.calls.read_text()
+        self.assertIn(f'put -f {self.aoc / "1.img"} /Documents/aoc/1.img.part', calls)
+        self.assertIn('mv /Documents/aoc/1.img.part /Documents/aoc/1.img', calls)
+        self.assertFalse(self.xcrun_calls.exists())   # nothing goes through devicectl
+        self.assertIn('2 add-on content image(s)', result.stdout)
+
+    def test_a_push_adds_to_the_dlc_on_the_phone_and_keeps_the_rest(self):
+        self.afc()
+        remote = self.device / 'Documents/aoc'; remote.mkdir()
+        (remote / '2.img').write_text('another DLC'); (remote / '3.img').write_text('an older third DLC')
+        save = self.device / 'Documents/save/slot_00'; save.parent.mkdir(); save.write_text('progress')
+        result = self.push(self.aoc / '3.img'); self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual({p.name for p in remote.iterdir()}, {'2.img', '3.img'})
+        self.assertEqual((remote / '2.img').read_text(), 'another DLC')
+        self.assertEqual((remote / '3.img').read_bytes(), (self.aoc / '3.img').read_bytes())
+        self.assertEqual(save.read_text(), 'progress')
+
+    def test_a_legacy_folder_is_packed_and_replaces_the_folder_on_the_phone(self):
+        self.afc()
+        (self.aoc / '5').mkdir(); (self.aoc / '5/marker').write_text('legacy DLC')
+        old = self.device / 'Documents/aoc/5'; old.mkdir(parents=True); (old / 'marker').write_text('the same DLC as a folder')
+        result = self.push(); self.assertEqual(result.returncode, 0, result.stderr)
+        remote = self.device / 'Documents/aoc'
+        self.assertEqual({p.name for p in remote.iterdir()}, {'1.img', '3.img', '5.img'})
+
+    def test_cut_off_copy_fails_and_leaves_the_dlc_on_the_phone_unchanged(self):
+        self.afc()
+        remote = self.device / 'Documents/aoc'; remote.mkdir(); (remote / '1.img').write_text('an older first DLC')
+        self.env['AFC_PUT_SHORT'] = '1'
+        result = self.push()
+        self.assertNotEqual(result.returncode, 0)   # afcclient itself exits 0: the script checks the size on the device
+        self.assertIn('incomplete', result.stderr)
+        self.assertEqual((remote / '1.img').read_text(), 'an older first DLC')
+        self.assertNotIn('add-on content on the phone', result.stdout)
+
+    def test_unknown_device_is_named_before_any_copy(self):
+        self.afc(); self.env['AFC_NO_DEVICE'] = '1'
+        result = self.push()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('UDID', result.stderr)
+        self.assertNotIn(' put ', self.calls.read_text())
+
+    def test_an_invalid_image_stops_before_any_copy(self):
+        self.afc()
+        (self.aoc / '3.img').write_bytes((self.aoc / '3.img').read_bytes()[:40])   # cut off
+        result = self.push()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.calls.exists())   # the first, valid image was not copied either
+
+    def test_without_afcclient_a_large_image_is_not_copied_through_devicectl(self):
+        self.env['PATH'] = str(self.bin) + os.pathsep + '/usr/bin:/bin'   # no afcclient; sysctl is the fake below
+        (self.bin / 'sysctl').write_text('#!/bin/sh\necho 64\n'); (self.bin / 'sysctl').chmod(0o755)   # a "Mac" with 64 bytes of memory
+        result = self.push()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('afcclient', result.stderr)
+        self.assertFalse(self.xcrun_calls.exists())   # not even the image that came before the large one
+        self.env['ROMFS_PUSH_VIA'] = 'devicectl'   # chosen explicitly, it goes through devicectl
+        result = self.push(); self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.xcrun_calls.read_text()
+        self.assertIn('Documents/aoc/1.img', calls); self.assertIn('Documents/aoc/3.img', calls)
+        self.assertNotIn('--remove-existing-content', calls)
 
 
 if __name__ == '__main__': unittest.main()

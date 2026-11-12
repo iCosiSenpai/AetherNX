@@ -7,6 +7,7 @@ struct SettingsView: View {
             Tab("General", systemImage: "gearshape") { GeneralSettings() }
             Tab("Keys", systemImage: "key") { KeysSettings() }
             Tab("Building", systemImage: "hammer") { BuildingSettings() }
+            Tab("iPhone & iPad", systemImage: "iphone") { DeviceSettings() }
         }
         .frame(width: 540)
         .scenePadding(.minimum)
@@ -99,6 +100,8 @@ private struct GeneralSettings: View {
             } footer: {
                 Text("Icons and banners of Switch games come from nlib.cc by title ID; other games, Switch 2 ones among them, get their box art from Wikipedia by name. Only the title ID or the name is sent. Without a picture online, the icon in the game's own files is used.")
             }
+
+            CloudSavesSettings()
 
             Section {
                 Toggle("Check for updates at launch", isOn: $checkUpdatesAtLaunch)
@@ -197,7 +200,6 @@ private struct BuildingSettings: View {
     @AppStorage(Pref.language) private var language = ""
     @AppStorage(Pref.keepExtracted) private var keepExtracted = true
     @AppStorage(Pref.pipelineArchive) private var pipelineArchive = true
-    @AppStorage(Pref.showFPS) private var showFPS = false
     @AppStorage(Pref.macSigningIdentity) private var signingIdentity = ""
     @AppStorage(Pref.extraArguments) private var extraArguments = ""
 
@@ -227,10 +229,6 @@ private struct BuildingSettings: View {
                 Text("Speed and Disk Space")
             } footer: {
                 Text("Kept files make the next build much faster and take about as much space as the game. Pre-built pipelines avoid stutters the first time a scene appears, at the cost of a longer build and a bigger app.")
-            }
-
-            Section("iPhone and iPad") {
-                Toggle("Show the frame rate", isOn: $showFPS)
             }
 
             Section {

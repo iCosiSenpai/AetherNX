@@ -4,7 +4,27 @@ How to build and install a game: [README](../README.md#get-started).
 
 - **Settings:** a screen before the game starts sets frame rate, resolution, docked or handheld mode, language, rumble and more. Tap **Play**; your choices are remembered. What each one does: [Settings](settings.md).
 - **Saves and logs** are in the Files app, under the game's name: `save/` and `log.txt` (the previous run is `log.prev.txt`). When something goes wrong, send `log.txt`.
-- **Reinstalling:** some sideloading tools give a reinstalled app a new data folder. Copy `save/` and `pso_user.tsv` over from the old one to keep your progress.
+- **Reinstalling:** some sideloading tools give a reinstalled app a new data folder. Copy `save/` and `pso_user.tsv` over from the old one to keep your progress. An install from the Mac ([README](../README.md#iphone-and-ipad)) goes over the app already there and keeps both.
+
+## The Increased Memory Limit
+
+iOS gives each app a memory budget and closes one that goes over it at once, with no message and no crash report. On current iPhones the budget is about 3.4 GB; with the Increased Memory Limit entitlement (`com.apple.developer.kernel.increased-memory-limit`) it is 6 to 8 GB, by device. The bigger games need the higher budget: a game that closes when a large scene loads, with nothing red in `log.txt`, most likely ran into it.
+
+The app always asks for it. Whether it gets it depends on how the app was signed, because two things must hold: the signature carries the entitlement, and the App ID registered with Apple has the capability.
+
+| Installed with | Increased Memory Limit |
+|---|---|
+| AetherNX's **Install** (`./aethernx install`), or Xcode | Yes, with a paid team and with a free Apple ID (Personal Team). When the team's profile cannot carry it, the install says so and signs without it |
+| AltStore Classic 2.2 or later | Yes |
+| Impactor, from a computer | Yes |
+| SideStore with a free Apple ID | Not by itself: add the capability to the app's App ID once (a tool such as GetMoreRam does it, signed in with the same Apple ID), then install the app again; it stays across the weekly refresh |
+| Sideloadly and other tools | Check the tool: Sideloadly does not turn it on |
+
+The unsigned IPA carries the request in an ad-hoc signature of its executable, so a tool that keeps the entitlements of the signature it replaces finds it there ([Quick reinstalls](development.md#quick-reinstalls)).
+
+**Check that it took effect.** Play for a minute, then open `log.txt` in the Files app and find the last line starting with `memory up to frame`. Its `resident` and the number at its end, the distance to the limit the system enforces, add up to the budget: about 3,400 MB means the entitlement is not in effect, 6,000 MB or more means it is.
+
+The table and the measurements behind it come from [NX2Apple](https://github.com/LNPANDY/NX2Apple/blob/main/ENTITLEMENTS.md) and [playport.dev](https://playport.dev/); they are not repeated here on every tool.
 
 ## Touch controls
 

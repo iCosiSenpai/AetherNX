@@ -36,6 +36,18 @@ struct DLCPackage: Decodable, Hashable, Identifiable {
     var id: String { path + "#" + titleId }
 }
 
+/// The last install on a device from this Mac (`<build folder>/xcode/install.json`, written by `./aethernx install`).
+struct DeviceInstall: Decodable, Hashable {
+    var team: String?
+    var bundleId: String?
+    var device: String?
+    var deviceName: String?
+    /// ISO 8601, UTC.
+    var installed: String?
+
+    var date: Date? { installed.flatMap { ISO8601DateFormatter().date(from: $0) } }
+}
+
 struct Game: Decodable, Hashable, Identifiable {
     enum Kind: String, Decodable {
         case packages, dump, archives
@@ -58,6 +70,7 @@ struct Game: Decodable, Hashable, Identifiable {
     var icon: String?
     var macApps: [String]
     var ipas: [String]
+    var deviceInstall: DeviceInstall?
     var saveDir: String?
     var logFile: String?
     var decompDir: String?
@@ -83,6 +96,7 @@ struct Game: Decodable, Hashable, Identifiable {
         icon = try c.decodeIfPresent(String.self, forKey: .icon)
         macApps = try c.decodeIfPresent([String].self, forKey: .macApps) ?? []
         ipas = try c.decodeIfPresent([String].self, forKey: .ipas) ?? []
+        deviceInstall = try c.decodeIfPresent(DeviceInstall.self, forKey: .deviceInstall)
         saveDir = try c.decodeIfPresent(String.self, forKey: .saveDir)
         logFile = try c.decodeIfPresent(String.self, forKey: .logFile)
         decompDir = try c.decodeIfPresent(String.self, forKey: .decompDir)
@@ -92,7 +106,7 @@ struct Game: Decodable, Hashable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, kind, titleId, name, folder, profile, base, updates, dlc, compressed, archives, workDir, extractedVersions
-        case displayVersion, icon, macApps, ipas, saveDir, logFile, decompDir, liftedFiles, notes
+        case displayVersion, icon, macApps, ipas, deviceInstall, saveDir, logFile, decompDir, liftedFiles, notes
     }
 
     var isBuildable: Bool { kind != .archives }
@@ -126,16 +140,18 @@ struct Game: Decodable, Hashable, Identifiable {
 
 enum BuildTarget: String, CaseIterable, Identifiable {
     case mac
+    case device
     case ios
     case iosSlim = "ios-slim"
     case xcode
 
     var id: String { rawValue }
-    static let menuOrder: [BuildTarget] = [.mac, .ios, .iosSlim, .xcode]
+    static let menuOrder: [BuildTarget] = [.mac, .device, .ios, .iosSlim, .xcode]
 
     var title: LocalizedStringKey {
         switch self {
         case .mac: "Mac App"
+        case .device: "iPhone or iPad, Installed"
         case .ios: "iPhone & iPad"
         case .iosSlim: "iPhone & iPad, Game Files Separate"
         case .xcode: "Xcode Project"
@@ -145,6 +161,7 @@ enum BuildTarget: String, CaseIterable, Identifiable {
     var commandTitle: LocalizedStringKey {
         switch self {
         case .mac: "Build Mac App"
+        case .device: "Install on iPhone or iPad"
         case .ios: "Build for iPhone & iPad"
         case .iosSlim: "Build for iPhone & iPad (Game Files Separate)"
         case .xcode: "Prepare Xcode Project"
@@ -154,6 +171,7 @@ enum BuildTarget: String, CaseIterable, Identifiable {
     var detail: LocalizedStringKey {
         switch self {
         case .mac: "A Mac app you open from Finder, next to the game files."
+        case .device: "Builds the game, signs it with your Apple team and installs it on the device chosen in Settings → iPhone & iPad."
         case .ios: "An unsigned IPA with the game inside, to install with a sideloading tool."
         case .iosSlim: "A small IPA without the game files: copy them to the app afterwards. For games too big to install."
         case .xcode: "An Xcode project, to sign and install with your developer account."
@@ -163,6 +181,7 @@ enum BuildTarget: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .mac: "macbook"
+        case .device: "arrow.down.app"
         case .ios: "iphone"
         case .iosSlim: "iphone.and.arrow.forward"
         case .xcode: "hammer"
@@ -172,6 +191,7 @@ enum BuildTarget: String, CaseIterable, Identifiable {
     var shortcut: (key: KeyEquivalent, modifiers: EventModifiers) {
         switch self {
         case .mac: ("b", .command)
+        case .device: ("i", [.command, .shift])
         case .ios: ("b", [.command, .shift])
         case .iosSlim: ("b", [.command, .shift, .option])
         case .xcode: ("b", [.command, .option])
@@ -181,6 +201,7 @@ enum BuildTarget: String, CaseIterable, Identifiable {
     var jobTitle: String {
         switch self {
         case .mac: String(localized: "Building Mac app")
+        case .device: String(localized: "Installing on iPhone or iPad")
         case .ios, .iosSlim: String(localized: "Building for iPhone & iPad")
         case .xcode: String(localized: "Preparing Xcode project")
         }

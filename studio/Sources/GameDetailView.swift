@@ -19,6 +19,7 @@ struct GameDetailView: View {
                 } else {
                     FilesSection(game: game)
                     BuildsSection(game: game)
+                    SavesSection(game: game)
                     DeveloperSection(game: game)
                 }
                 if !game.notes.isEmpty {
@@ -235,6 +236,10 @@ private struct MoreMenu: View {
             if let log = game.logFile, FileManager.default.fileExists(atPath: log) {
                 Button("Open Game Log") { Finder.open(log) }
             }
+            if game.isBuildable, game.isExtracted {
+                Button("Make Bug Report…") { model.makeBugReport(game) }
+                    .disabled(!model.canStartJob)
+            }
             if let work = game.workDir, FileManager.default.fileExists(atPath: work) {
                 Divider()
                 let shaders = (work as NSString).appendingPathComponent("shader")
@@ -446,9 +451,47 @@ private struct BuildsSection: View {
                 OutputRow(target: .ios, path: game.ipa) {
                     EmptyView()
                 }
+                Divider()
+                DeviceRow(game: game)
             }
             .padding(.horizontal, 4)
         }
+    }
+}
+
+/// The game on an iPhone or iPad: where this Mac last installed it, and the button that builds, signs and installs it there.
+private struct DeviceRow: View {
+    let game: Game
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: BuildTarget.device.systemImage)
+                .frame(width: 20)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("On iPhone or iPad")
+                Text(detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            SettingsLink { Text("Device…") }
+            Button(game.deviceInstall == nil ? "Install" : "Install Again") { model.build(game, target: .device) }
+                .disabled(!model.canStartJob)
+                .help("Builds the game, signs it with your Apple team and installs it on the device chosen in Settings → iPhone & iPad.")
+        }
+        .padding(.vertical, 8)
+    }
+
+    private var detail: String {
+        guard let last = game.deviceInstall, let name = last.deviceName else {
+            return String(localized: "Not installed from this Mac")
+        }
+        guard let date = last.date else { return String(localized: "Installed on \(name)") }
+        return String(localized: "Installed on \(name), \(date.formatted(date: .abbreviated, time: .shortened))")
     }
 }
 

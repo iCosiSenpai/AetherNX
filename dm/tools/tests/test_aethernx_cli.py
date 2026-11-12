@@ -23,6 +23,7 @@ from unittest import mock
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / 'scripts'))
 cli = importlib.import_module('aethernx_cli')
+device_install = importlib.import_module('device_install')
 SEVEN_ZIP = shutil.which('7zz') or shutil.which('7z') or ''   # a real 7-Zip, to make the volumes and the encrypted archive that unpack is given
 
 
@@ -204,6 +205,70 @@ class Pins(unittest.TestCase):
 class Targets(unittest.TestCase):
     def test_ios_slim_keeps_the_extracted_files(self):   # the build refuses --romfs separate without them: the image stays for the copy to the phone
         self.assertEqual(cli.TARGETS['ios-slim'][-1], '--keep-extracted')
+
+
+class Devices(Base):
+    """./aethernx devices and install: what the tool itself does before scripts/device_install.py takes over (dm/tools/tests/test_device_install.py has the rest)"""
+
+    def game(self):
+        folder = self.root / 'Stray'
+        nsp(folder / 'Stray [0100000000990000][v0].nsp')
+        return folder
+
+    def test_a_scan_tells_the_last_install_on_a_device(self):
+        folder = self.game()
+        games, _ = scan(self.root)
+        self.assertIsNone(games['Stray']['device_install'])
+        record = folder / '0100000000990000_build/xcode/install.json'; record.parent.mkdir(parents=True)
+        record.write_text('{"team": "A1B2C3D4E5", "bundle_id": "io.example.stray", "device": "U1", "device_name": "Phone", "installed": "2026-11-12T10:30:00Z", "other": 3}')
+        games, _ = scan(self.root)
+        self.assertEqual(games['Stray']['device_install'], {'team': 'A1B2C3D4E5', 'bundle_id': 'io.example.stray', 'device': 'U1', 'device_name': 'Phone',
+                                                            'installed': '2026-11-12T10:30:00Z'})
+        record.write_text('not JSON')   # a damaged record is no record, and no failed scan
+        games, errors = scan(self.root)
+        self.assertIsNone(games['Stray']['device_install']); self.assertEqual(errors, [])
+
+    def test_install_hands_the_build_folder_and_the_options_over(self):
+        folder = self.game()
+        with mock.patch.object(device_install, 'install', return_value=0) as install:
+            code, _, err = run('install', str(folder), '--device', 'Phone', '--team', 'A1B2C3D4E5', '--files', 'separate', '--launch', '--progress', 'json',
+                               '-k', str(self.root / 'prod.keys'), '--language', 'it', '--allow-damaged')
+        self.assertEqual(code, 0, err)
+        (game_folder, work), options = install.call_args.args, install.call_args.kwargs
+        self.assertEqual((game_folder, work), (folder, folder / '0100000000990000_build'))
+        self.assertEqual(options['build_args'], ['--language', 'it', '--allow-damaged'])   # what the tool does not know goes to the packing script
+        self.assertEqual((options['device'], options['team'], options['files'], options['launch'], options['as_json']), ('Phone', 'A1B2C3D4E5', 'separate', True, True))
+        self.assertEqual(options['keys'], self.root / 'prod.keys')
+        with mock.patch.object(device_install, 'install', return_value=0) as install:   # the build folder the packing script is told to use
+            run('install', str(folder), '--work-dir', str(self.root / 'elsewhere'))
+        self.assertEqual(install.call_args.args[1], self.root / 'elsewhere')
+
+    def test_install_says_why_it_cannot_start(self):
+        code, _, err = run('install', str(self.root / 'missing'))
+        self.assertEqual(code, 1); self.assertIn('no such folder', err)
+        (self.root / 'empty').mkdir()
+        code, _, err = run('install', str(self.root / 'empty'))
+        self.assertEqual(code, 1); self.assertIn('no game in', err)
+        folder = self.game()
+        with mock.patch.object(device_install, 'install', side_effect=device_install.InstallError('no iPhone or iPad is connected')):
+            code, out, err = run('install', str(folder), '--progress', 'json')
+        self.assertEqual(code, 1); self.assertIn('no iPhone or iPad is connected', err)
+        import json
+        self.assertEqual(json.loads(out)['msg'], '[RED] no iPhone or iPad is connected')   # a front end reads the reason as the build's own failures
+
+    def test_devices_lists_devices_and_teams(self):
+        phone = {'udid': 'U1', 'identifier': 'I1', 'name': 'Phone', 'model': 'iPhone 17 Pro', 'kind': 'iPhone', 'os': '27.2', 'connection': 'cable', 'paired': True, 'developer_mode': False}
+        team = {'id': 'A1B2C3D4E5', 'name': 'Jane Doe', 'identity': 'Apple Development: Jane Doe (Z9Y8X7W6V5)'}
+        with mock.patch.object(device_install, 'list_devices', return_value=[phone]), mock.patch.object(device_install, 'signing_teams', return_value=[team]):
+            code, out, _ = run('devices')
+            self.assertEqual(code, 0)
+            self.assertIn('Phone: iPhone 17 Pro, 27.2, connected by cable, Developer Mode off  [U1]', out); self.assertIn('team A1B2C3D4E5: Jane Doe', out)
+            import json
+            code, out, _ = run('devices', '--json')
+            self.assertEqual(json.loads(out), {'version': 1, 'devices': [phone], 'teams': [team]})
+        with mock.patch.object(device_install, 'list_devices', side_effect=device_install.InstallError('devicectl could not list the devices')):
+            code, _, err = run('devices')
+        self.assertEqual(code, 1); self.assertIn('devicectl', err)
 
 
 if __name__ == '__main__':

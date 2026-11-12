@@ -85,6 +85,103 @@ expect(mac == base + ["mac", "--progress", "json", "-k", "/k/prod.keys", "--no-k
                       "--mac-sign", "Developer ID Application: A B (X)", "--foo", "a b", "--bar"], "Mac: every setting, and the extra options split as a shell would \(mac ?? [])")
 expect(build(.mac, extra: "--foo 'open") == nil, "an extra option with a quote not closed gives no command")
 
+// MARK: Install on a device
+
+let onDevice = InstallOptions(device: "00008150-0000000000000001", team: "A1B2C3D4E5")
+func install(_ options: InstallOptions?, keys: String? = nil, keepExtracted: Bool = false, showFPS: Bool = false, extra: String = "") -> [String]? {
+    AppModel.buildArguments(folder: "/g", target: .device, keys: keys, keepExtracted: keepExtracted, language: "it", pipelineArchive: true, showFPS: showFPS,
+                            macSigningIdentity: "Developer ID Application: A B (X)", extra: extra, install: options)
+}
+let installBase = ["install", "/g", "--progress", "json", "--device", "00008150-0000000000000001", "--team", "A1B2C3D4E5", "--files"]
+expect(install(onDevice, keys: "/k/prod.keys", extra: "--allow-damaged") == installBase + ["bundle", "-k", "/k/prod.keys", "--language", "it", "--no-show-fps", "--allow-damaged"],
+       "an install: the device, the team, the files in the app; no keep-extracted of its own and no Mac signing identity \(install(onDevice, keys: "/k/prod.keys", extra: "--allow-damaged") ?? [])")
+var slim = onDevice
+slim.separateFiles = true; slim.launch = true; slim.iCloudContainer = "iCloud.com.example.saves"
+expect(install(slim, showFPS: true) == installBase + ["separate", "--launch", "--icloud-container", "iCloud.com.example.saves", "--language", "it", "--show-fps"],
+       "an install with the game files separate, opened afterwards, with an iCloud container \(install(slim, showFPS: true) ?? [])")
+expect(install(nil) == nil, "an install without a device and a team gives no command")
+expect(!(install(onDevice, keepExtracted: false) ?? []).contains("--no-keep-extracted"), "an install never drops the extracted files its Xcode project builds from")
+expect(AppModel.signingEnvironment(keyPath: "", keyID: "K", issuer: "I").isEmpty, "no API key file: nothing about a key in the environment")
+expect(AppModel.signingEnvironment(keyPath: "/k/AuthKey_K.p8", keyID: "", issuer: "I") == ["AETHERNX_ASC_KEY": "/k/AuthKey_K.p8", "AETHERNX_ASC_ISSUER": "I"],
+       "an API key goes to the install in its environment, the key ID left to the file's name")
+
+let listJSON = """
+{"version": 1, "devices": [
+ {"udid": "U1", "identifier": "I1", "name": "Phone", "model": "iPhone 17 Pro", "kind": "iPhone", "os": "27.2", "connection": "network", "paired": true, "developer_mode": true},
+ {"udid": "U2", "identifier": "I2", "name": "Tablet", "model": "iPad Pro", "kind": "iPad", "os": "26.6", "connection": "none", "paired": true, "developer_mode": null}],
+ "teams": [{"id": "A1B2C3D4E5", "name": "Jane Doe", "identity": "Apple Development: Jane Doe (Z9Y8X7W6V5)"}]}
+"""
+let list = try JSONDecoder.snakeCase.decode(DeviceList.self, from: Data(listJSON.utf8))
+expect(list.devices.map(\.udid) == ["U1", "U2"] && list.devices[0].isReachable && !list.devices[1].isReachable && list.devices[1].developerMode == nil,
+       "the device list of ./aethernx devices --json is read")
+expect(list.devices[1].systemImage == "ipad" && list.devices[0].summary.contains("iPhone 17 Pro"), "a device's picture and summary \(list.devices[0].summary)")
+expect(DeviceCenter.device(chosen: "", among: list.devices)?.udid == "U1", "no device chosen: the only one reachable")
+expect(DeviceCenter.device(chosen: "U2", among: list.devices)?.udid == "U2", "the chosen device, reachable or not (the install then says it is not connected)")
+expect(DeviceCenter.device(chosen: "GONE", among: list.devices) == nil, "a chosen device this Mac no longer lists is not replaced by another")
+var two = list.devices
+two[1].connection = "cable"
+expect(DeviceCenter.device(chosen: "", among: two) == nil, "two reachable devices and none chosen: none")
+expect(DeviceCenter.team(chosen: "", among: list.teams) == "A1B2C3D4E5", "no team chosen: the only one with a certificate")
+expect(DeviceCenter.team(chosen: " z9y8x7w6v5 ", among: list.teams) == "Z9Y8X7W6V5", "a team ID typed in is taken as it is")
+expect(DeviceCenter.team(chosen: "", among: list.teams + list.teams) == nil && DeviceCenter.team(chosen: "nonsense", among: []) == nil, "several teams or none, and no valid choice: none")
+
+let installedJSON = """
+{"id": "/g", "kind": "packages", "title_id": "\(title)", "name": "Stray", "folder": "/g",
+ "device_install": {"team": "A1B2C3D4E5", "bundle_id": "io.example.game", "device": "U1", "device_name": "Phone", "installed": "2026-11-12T10:30:00Z"}}
+"""
+let installed = try JSONDecoder.snakeCase.decode(Game.self, from: Data(installedJSON.utf8))
+expect(installed.deviceInstall?.deviceName == "Phone" && installed.deviceInstall?.date != nil, "a scan's record of the last install on a device")
+expect(game.deviceInstall == nil, "a game never installed has none")
+expect(BuildTarget.menuOrder.contains(.device) && BuildTarget(rawValue: "device") == .device, "the install is one of the Build button's targets")
+
+// MARK: Cloud saves
+
+let cloudHome = "/Users/jane"
+let drive = "\(cloudHome)/Library/Mobile Documents/com~apple~CloudDocs"
+expect(CloudSaves.displayName(CloudSaves.automaticFolder(home: cloudHome), home: cloudHome) == "iCloud Drive › HorizonNative", "the iCloud container's folder by its name in iCloud Drive")
+expect(CloudSaves.displayName("\(drive)/Games/My Saves", home: cloudHome) == "iCloud Drive › Games › My Saves", "an iCloud Drive folder as the Finder shows it")
+expect(CloudSaves.displayName(CloudSaves.driveFolder(home: cloudHome), home: cloudHome) == "iCloud Drive › HorizonNative Saves", "the folder DM_SAVE_SYNC=icloud names")
+expect(CloudSaves.displayName("\(cloudHome)/Saves", home: cloudHome) == "~/Saves" && CloudSaves.displayName("/Volumes/Drive/Saves", home: cloudHome) == "/Volumes/Drive/Saves",
+       "another folder from the home folder, or whole")
+expect(CloudSaves.cloudFile(folder: "/c/Saves", titleID: title) == "/c/Saves/\(title)/save.dmsync", "a game's file in a folder for every game")
+expect(CloudSaves.cloudFile(folder: "/c/Saves/\(title.lowercased())", titleID: title) == "/c/Saves/\(title.lowercased())/save.dmsync", "a folder that is already the game's own")
+let envText = "# comment\nDM_FPS_TARGET=30\nDM_SAVE_SYNC=/a\n  export DM_SAVE_SYNC = \"/b c\" \n#DM_SAVE_SYNC=/no\nDM_SAVE_SYNC_CHOICE=ask\n"
+expect(CloudSaves.envValue("DM_SAVE_SYNC", in: envText) == "/a", "an env file's value: the name whole, a spaced or commented line is not one \(CloudSaves.envValue("DM_SAVE_SYNC", in: envText) ?? "nil")")
+expect(CloudSaves.envValue("DM_SAVE_SYNC", in: "DM_SAVE_SYNC=/a\nexport DM_SAVE_SYNC='/b c'\n") == "/b c", "the last line wins, quotes and export taken off")
+expect(CloudSaves.envValue("DM_SAVE_SYNC", in: "DM_FPS_TARGET=30\n") == nil, "a file without the variable")
+let logText = "[dm] boot: cloud saves through /c (the picked folder)\n[dm] save sync: the cloud's save is newer: brought in\n[dm] frame 60\n[dm] save sync: sent (3 files, 1.2 MB)\n[dm] quit\n"
+expect(CloudSaves.lastNote(inLog: logText) == CloudSaves.LogNote(text: "sent (3 files, 1.2 MB)", isError: false), "the last thing a session said about the sync")
+expect(CloudSaves.lastNote(inLog: logText + "[dm] [RED] save sync: writing /c to the cloud failed: offline\n")?.isError == true, "a red line is an error")
+expect(CloudSaves.lastNote(inLog: "[dm] frame 60\n") == nil, "a log that says nothing about it")
+let sentTo = "sent: 8 files, to \(CloudSaves.automaticFolder(home: cloudHome))/\(title)/save.dmsync"
+expect(CloudSaves.shortened(sentTo, folder: CloudSaves.automaticFolder(home: cloudHome), home: cloudHome) == "sent: 8 files, to iCloud Drive › HorizonNative/\(title)/save.dmsync",
+       "a log line names the cloud folder as the Finder does")
+expect(CloudSaves.shortened("kept in \(cloudHome)/Library/x", folder: "/c", home: cloudHome) == "kept in ~/Library/x", "and the home folder as ~")
+
+// The store: a throwaway preferences domain, removed afterwards
+let cloudDomain = "io.github.icosisenpai.aethernx.studio-check.\(UUID().uuidString)"
+let otherDomain = cloudDomain + ".other"
+func forget(_ domain: String) {
+    for key in [CloudSaves.folderKey, CloudSaves.inheritedKey] { CFPreferencesSetAppValue(key as CFString, nil, domain as CFString) }
+    CFPreferencesAppSynchronize(domain as CFString)
+}
+expect(CloudSaves.setting(domain: cloudDomain) == .unset, "a game with no choice")
+expect(CloudSaves.applyLibraryFolder("/c/Library", domains: [cloudDomain, otherDomain, cloudDomain]) == 2, "the library's folder reaches the games with no choice, each once")
+expect(CloudSaves.setting(domain: cloudDomain) == .folder("/c/Library", inherited: true), "it is marked as the library's")
+CloudSaves.choose("/c/Own", domain: otherDomain)
+expect(CloudSaves.setting(domain: otherDomain) == .folder("/c/Own", inherited: false), "a game's own folder")
+expect(CloudSaves.applyLibraryFolder("/c/Moved", domains: [cloudDomain, otherDomain]) == 1, "a new library folder moves only the games that follow it")
+expect(CloudSaves.setting(domain: cloudDomain).folder == "/c/Moved" && CloudSaves.setting(domain: otherDomain).folder == "/c/Own", "the game's own choice stays")
+CloudSaves.choose(nil, domain: otherDomain)
+expect(CloudSaves.setting(domain: otherDomain) == .off, "off for one game")
+expect(CloudSaves.applyLibraryFolder("/c/Moved", domains: [otherDomain]) == 0 && CloudSaves.setting(domain: otherDomain) == .off, "a game turned off stays off under a library folder")
+expect(CloudSaves.applyLibraryFolder("", domains: [cloudDomain, otherDomain]) == 1 && CloudSaves.setting(domain: cloudDomain) == .unset, "the library turned off: the games that followed it have no folder")
+CloudSaves.followLibrary("/c/Library", domain: otherDomain)
+expect(CloudSaves.setting(domain: otherDomain) == .folder("/c/Library", inherited: true), "a game goes back to the library's setting")
+forget(cloudDomain); forget(otherDomain)
+expect(CloudSaves.setting(domain: otherDomain) == .unset, "the throwaway domains are gone")
+expect(CloudSaves.domain(for: game) == "io.github.icosisenpai.horizonnative.\(title)", "a game's domain is its built app's bundle ID \(CloudSaves.domain(for: game) ?? "nil")")
+
 // MARK: Commands the app waits for
 
 let started = Date()

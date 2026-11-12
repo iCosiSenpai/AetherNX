@@ -10,6 +10,8 @@ HorizonNative is a fork of **[nxnative](https://github.com/seedds/nxnative)** by
 
 The Studio app, the command-line tool and the release packaging are by Alessio Cosi ([iCosiSenpai](https://github.com/iCosiSenpai)), under the MIT License.
 
+Two parts follow **[NX2Apple](https://github.com/LNPANDY/NX2Apple)** by LNPANDY and its contributors (MIT), a launcher for the same engine, rewritten here for AetherNX's one app per game: the install on a device (`scripts/device_install.py`: signing with the player's own team through `xcodebuild -allowProvisioningUpdates`, `devicectl device install app`, the retry under the team's own bundle ID and the retry without a capability the team's profile cannot carry, from its `ShellInstall.swift`), and a library-wide cloud saves folder that a game's own choice overrides (`studio/Sources/CloudSaves.swift`, from its save setup). The page on the Increased Memory Limit ([playing.md](docs/playing.md#the-increased-memory-limit)) summarizes its `ENTITLEMENTS.md`.
+
 ## Submodules (`vendor/`)
 
 Related projects are included as Git submodules, not copied: each stays a separate repository with its own history, authors and license, pinned to a fork under [iCosiSenpai](https://github.com/iCosiSenpai) so the pinned commit stays available. The engine and the Studio app do not need them; `./aethernx lift` uses `nxrt`, and the C++ project of `./aethernx decomp-init` uses `nnheaders` and `sead`.

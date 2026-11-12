@@ -126,6 +126,8 @@ struct AppCommands: Commands {
         CommandGroup(replacing: .help) {
             Button("Setup Assistant…") { model.showsSetupAssistant = true }
             Button("Check Setup…") { model.showsSetupCheck = true }
+            Button("Make Bug Report…") { if let game = model.selectedGame { model.makeBugReport(game) } }
+                .disabled(model.selectedGame?.isExtracted != true || !model.canStartJob)
             Divider()
             Link("AetherNX on GitHub", destination: Links.repository)
             Link("Report a Problem", destination: Links.issues)

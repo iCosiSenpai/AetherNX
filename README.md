@@ -98,6 +98,7 @@ The sidebar lists your games, with the free space on their disk at the bottom; a
 |---|---|
 | <kbd>⌘</kbd> <kbd>R</kbd> | Play the selected game's Mac app |
 | <kbd>⌘</kbd> <kbd>B</kbd> | Build the Mac app |
+| <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>I</kbd> | Build, sign and install on your iPhone or iPad |
 | <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>B</kbd> | Build for iPhone and iPad |
 | <kbd>⌥</kbd> <kbd>⌘</kbd> <kbd>B</kbd> | Prepare an Xcode project |
 | <kbd>⌘</kbd> <kbd>.</kbd> | Stop the running build |
@@ -111,7 +112,10 @@ The sidebar lists your games, with the free space on their disk at the bottom; a
 | <kbd>⌘</kbd> <kbd>F</kbd> | Search the library |
 | <kbd>⌘</kbd> <kbd>,</kbd> | Settings |
 
-**Settings** has three panes: **General** (library folders, the AetherNX folder, setup check, game artwork, notifications), **Keys** (your `prod.keys`, checked without ever showing a key) and **Building** (what the Build button makes, the game's language, kept files, pre-built shader pipelines, the frame-rate counter on iPhone, a signing identity for the Mac app). The app is in English and Italian.
+- **Saves.** Each game's page shows its save on this Mac and its **cloud saves**: the folder its Mac app syncs through (iCloud Drive › HorizonNative, another iCloud Drive folder, or off), when the cloud's copy last changed and what the last session said about the sync. Settings → General sets one folder for the whole library; a game with a choice of its own keeps it ([Cloud saves](docs/settings.md#cloud-saves)).
+- **Bug reports.** More → **Make Bug Report…** (also in the Help menu) writes a zip with the game's logs, versions and settings to the Desktop, and never any game data.
+
+**Settings** has four panes: **General** (library folders, the AetherNX folder, setup check, game artwork, cloud saves, notifications), **Keys** (your `prod.keys`, checked without ever showing a key), **Building** (what the Build button makes, the game's language, kept files, pre-built shader pipelines, a signing identity for the Mac app) and **iPhone & iPad** (the device to install on, your Apple team, how the game files travel, the frame-rate counter). The app is in English and Italian.
 
 ## Console Mode
 
@@ -127,8 +131,11 @@ Pick up a controller and press **≡** (Menu), or choose View → Console Mode (
 |---|---|
 | `./aethernx scan [folders] [--json]` | List the games in your library folders (default: `$AETHERNX_LIBRARY`, else `~/Games`) |
 | `./aethernx build <game folder> [--target mac\|ios\|ios-slim\|xcode]` | Build a game; other options go to the packing script (`-k` for the keys, `--language it`, `--progress json`, …) |
+| `./aethernx devices [--json]` | List the iPhones and iPads paired with this Mac, and the Apple teams it can sign with |
+| `./aethernx install <game folder> [--device <UDID or name>] [--team <team ID>]` | Build a game, sign it with your Apple team and install it on a paired iPhone or iPad (`--files separate` keeps the game files out of the app and copies them once) |
 | `./aethernx unpack <archive or folder>` | Extract `.zip`, `.rar`, `.7z` and `.tar` archives of game packages |
 | `./aethernx doctor` | Check Xcode, the tools, the Python packages and your keys, with the command that fixes each missing piece |
+| `./aethernx report <game folder>` | Collect a game's logs, versions and settings into one zip for a bug report (no game data) |
 | `./aethernx setup [--tools]` | Create `.venv` with the Python packages (`--tools` adds the developer tools' ones) |
 | `./aethernx decomp-init <game folder>` | Function and symbol tables of a built game, with a C++ starter project |
 | `./aethernx lift <game folder>` | Translate the game's `main` module to C with nxrt |
@@ -138,11 +145,17 @@ Pick up a controller and press **≡** (Menu), or choose View → Console Mode (
 
 ## iPhone and iPad
 
-**Build for iPhone & iPad** makes an unsigned IPA next to the game files. Install it with a sideloading tool such as AltStore, SideStore, Sideloadly or LiveContainer, and turn on **Increased Memory Limit** if your tool offers it: the bigger games need it. With an Apple developer account, **Prepare Xcode Project** lets Xcode sign and install the app with that capability and iCloud saves ([Build and run on a device with Xcode](docs/development.md#build-and-run-on-a-device-with-xcode)).
+There are two ways to get a game onto the device.
 
+**Install from the Mac.** Connect the iPhone or iPad with a cable, unlock it, choose Trust and turn on Developer Mode (Settings › Privacy & Security). In AetherNX, pick the device and your Apple team in Settings → iPhone & iPad, then press **Install** on the game's page (or Build → **Install on iPhone or iPad**, <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>I</kbd>): the app builds the game, has Xcode sign it with your own team, free or paid, installs it and, for a build with the game files separate, copies them. Installing again keeps the saves and the game files already on the device. From a terminal it is `./aethernx install <game folder>`. Your team comes from the Apple ID you add in Xcode › Settings › Accounts ([Install on a device from the Mac](docs/development.md#install-on-a-device-from-the-mac)).
+
+**Sideload an IPA.** **Build for iPhone & iPad** makes an unsigned IPA next to the game files. Install it with a sideloading tool such as AltStore, SideStore, Sideloadly or LiveContainer. To sign in Xcode yourself, **Prepare Xcode Project** makes the project the install uses ([Build and run on a device with Xcode](docs/development.md#build-and-run-on-a-device-with-xcode)).
+
+- **Big games need the Increased Memory Limit.** Without it iOS gives an app about 3.4 GB and closes a game that needs more, with no message. The app asks for it; an install from the Mac or from Xcode carries it, a sideloading tool may drop it ([which keep it, and how to check](docs/playing.md#the-increased-memory-limit)).
 - **No JIT.** The game's code is rewritten and compiled into the app on the Mac, so iOS runs it like any other app: no JIT, no debugger, no second device.
 - **Free Apple ID.** Sideloaded apps signed with a free account expire after 7 days; SideStore and AltStore can sign them again from the phone.
-- **Game too big to install?** Build with **Game Files Separate** (`--target ios-slim`): the IPA leaves the game files out, and `scripts/push_romfs.sh` copies them to the phone once ([Quick reinstalls](docs/development.md#quick-reinstalls)).
+- **Game too big to install?** Keep the game files out of the app: for an install from the Mac, turn on **Keep the game files out of the app** in Settings → iPhone & iPad (`--files separate`); for an IPA, build with **Game Files Separate** (`--target ios-slim`) and copy them once with `scripts/push_romfs.sh` ([Quick reinstalls](docs/development.md#quick-reinstalls)).
+- **Saves on both.** The Mac app and the iPhone app of a game share a save through iCloud Drive ([Cloud saves](docs/settings.md#cloud-saves)).
 - It needs iOS or iPadOS 26 on an iPhone 15 Pro or later, or an iPad with an M1 chip or later.
 
 Controls, saves and in-game settings: [Playing](docs/playing.md) and [Settings](docs/settings.md).

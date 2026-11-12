@@ -22,6 +22,15 @@ enum Pref {
     static let checkUpdatesAtLaunch = "checkUpdatesAtLaunch"
     static let showsMenuBarItem = "showsMenuBarItem"
     static let seenUpdates = "seenUpdates"
+    static let installDevice = "installDevice"
+    static let signingTeam = "signingTeam"
+    static let installSeparateFiles = "installSeparateFiles"
+    static let installLaunch = "installLaunch"
+    static let ascKeyPath = "ascKeyPath"
+    static let ascKeyID = "ascKeyID"
+    static let ascIssuer = "ascIssuer"
+    static let iCloudContainer = "iCloudContainer"
+    static let cloudSavesFolder = "cloudSavesFolder"
 
     static func register() {
         UserDefaults.standard.register(defaults: [
@@ -138,6 +147,7 @@ final class AppModel {
     let artwork = ArtworkStore()
     let updates = UpdateCenter()
     let playLog = PlayLog()
+    let devices = DeviceCenter()
     /// What each game takes on disk, by kind, for its Danger Zone; measured when its page opens, forgotten at each scan.
     private(set) var removalPlans: [Game.ID: RemovalPlan] = [:]
     @ObservationIgnored private var measuring: Set<Game.ID> = []
@@ -289,6 +299,7 @@ final class AppModel {
                 var apps: [String: String] = [:]
                 for game in games { for app in game.macApps { apps[URL(filePath: app).standardizedFileURL.path] = PlayLog.key(for: game) } }
                 playLog.setKnownApps(apps)
+                applyCloudSavesFolder()   // a game built since the last scan takes the library's cloud folder
                 if selectedGameID == nil || !games.contains(where: { $0.id == selectedGameID }) {
                     selectedGameID = games.first?.id
                 }
@@ -324,6 +335,13 @@ final class AppModel {
 
     func build(_ game: Game, target: BuildTarget) {
         guard canStartJob, engine != nil, game.isBuildable else { return }
+        if target == .device, !devices.hasLoaded {   // the devices are read when first needed: an install started before Settings was ever opened
+            devices.refresh(engine: engine) { [weak self] in
+                guard let self, devices.hasLoaded else { return }
+                build(game, target: target)
+            }
+            return
+        }
         keys = KeysStatus.current()
         // A dump holds the game's files already decrypted: only packages need the keys
         guard keys.isUsable || game.kind == .dump else {
@@ -360,22 +378,75 @@ final class AppModel {
     private func startBuild(_ game: Game, target: BuildTarget) {
         guard canStartJob, let engine else { return }
         let defaults = UserDefaults.standard
+        var install: InstallOptions?
+        var deviceName = ""
+        var environment: [String: String] = [:]
+        if target == .device {
+            guard let device = devices.selectedDevice else {
+                errorMessage = devices.error ?? String(localized: "Choose the iPhone or iPad to install on in Settings → iPhone & iPad. Connect it with a cable, unlock it and choose Trust if it is not listed.")
+                return
+            }
+            guard device.isReachable else {
+                errorMessage = String(localized: "\(device.name) is not connected now: connect it with a cable, or unlock it on the same network, then install again.")
+                devices.refresh(engine: engine)
+                return
+            }
+            guard let team = devices.selectedTeam else {
+                errorMessage = devices.teams.isEmpty
+                    ? String(localized: "No Apple team to sign with: sign in with your Apple ID in Xcode › Settings › Accounts, or type your team ID in Settings → iPhone & iPad.")
+                    : String(localized: "Choose the team that signs the app in Settings → iPhone & iPad.")
+                return
+            }
+            install = InstallOptions(device: device.udid, team: team, separateFiles: defaults.bool(forKey: Pref.installSeparateFiles),
+                                     launch: defaults.bool(forKey: Pref.installLaunch), iCloudContainer: defaults.string(forKey: Pref.iCloudContainer) ?? "")
+            deviceName = device.name
+            environment = Self.signingEnvironment(keyPath: defaults.string(forKey: Pref.ascKeyPath) ?? "", keyID: defaults.string(forKey: Pref.ascKeyID) ?? "",
+                                                  issuer: defaults.string(forKey: Pref.ascIssuer) ?? "")
+        }
         guard let args = Self.buildArguments(folder: game.folder, target: target, keys: keys.isUsable ? keys.path : nil,
                                              keepExtracted: defaults.bool(forKey: Pref.keepExtracted), language: defaults.string(forKey: Pref.language),
                                              pipelineArchive: defaults.bool(forKey: Pref.pipelineArchive), showFPS: defaults.bool(forKey: Pref.showFPS),
-                                             macSigningIdentity: defaults.string(forKey: Pref.macSigningIdentity), extra: defaults.string(forKey: Pref.extraArguments) ?? "") else {
+                                             macSigningIdentity: defaults.string(forKey: Pref.macSigningIdentity), extra: defaults.string(forKey: Pref.extraArguments) ?? "",
+                                             install: install) else {
             errorMessage = String(localized: "The extra build options in Settings → Building have a quote that is not closed.")
             return
         }
-        let job = Job(title: target.jobTitle, gameID: game.id, target: target)
+        let job = Job(title: target == .device ? String(localized: "Installing on \(deviceName)") : target.jobTitle, gameID: game.id, target: target)
         if defaults.bool(forKey: Pref.notifyBuilds) { Notifier.requestPermission() }
-        startJob(job, executable: engine.appending(path: "aethernx"), arguments: args, directory: engine) { [weak self] ok in
+        startJob(job, executable: engine.appending(path: "aethernx"), arguments: args, directory: engine, environment: environment) { [weak self] ok in
             guard let self else { return }
             if ok, target == .mac { self.log(String(localized: "\(game.name) is ready: press Play."), kind: .info) }
+            if ok, target == .device { self.log(String(localized: "\(game.name) is on \(deviceName)."), kind: .info) }
             if defaults.bool(forKey: Pref.notifyBuilds) && !NSApp.isActive {
-                Notifier.post(title: ok ? String(localized: "\(game.name) is ready") : String(localized: "The build of \(game.name) stopped"),
-                              body: ok ? (target == .mac ? String(localized: "Open AetherNX and press Play.") : target.jobTitle) : (job.failureMessage ?? ""))
+                let ready = target == .device ? String(localized: "\(game.name) is on \(deviceName)") : String(localized: "\(game.name) is ready")
+                Notifier.post(title: ok ? ready : String(localized: "The build of \(game.name) stopped"),
+                              body: ok ? (target == .mac ? String(localized: "Open AetherNX and press Play.") : job.title) : (job.failureMessage ?? ""))
             }
+        }
+    }
+
+    /// A zip for a bug report: the game's logs, versions and settings, and never any game data (scripts/bug_report.py). It is shown in Finder.
+    func makeBugReport(_ game: Game) {
+        guard canStartJob, let engine, game.isBuildable else { return }
+        let stamp = Date.now.formatted(.iso8601.year().month().day().dateSeparator(.dash))
+        let out = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Desktop/AetherNX-report-\(game.titleId ?? "game")-\(stamp).zip").path
+        startJob(Job(title: String(localized: "Making a bug report"), gameID: game.id, target: nil),
+                 executable: engine.appending(path: "aethernx"), arguments: ["report", game.folder, "--out", out], directory: engine) { ok in
+            if ok { Finder.reveal(out) }
+        }
+    }
+
+    // MARK: Cloud saves
+
+    /// The library's cloud folder reaches every built game that has no choice of its own (CloudSaves.applyLibraryFolder).
+    func applyCloudSavesFolder() {
+        let folder = UserDefaults.standard.string(forKey: Pref.cloudSavesFolder) ?? ""
+        let domains = games.filter { $0.macApp != nil }.compactMap(CloudSaves.domain(for:))
+        guard !domains.isEmpty else { return }
+        let changed = CloudSaves.applyLibraryFolder(folder, domains: domains)
+        if changed > 0 {
+            log(folder.isEmpty ? String(localized: "Cloud saves: off for \(changed) game(s) that followed the library's setting.")
+                               : String(localized: "Cloud saves: \(changed) game(s) now sync through \(CloudSaves.displayName(folder))."), kind: .info)
         }
     }
 
@@ -423,11 +494,12 @@ final class AppModel {
         }
     }
 
-    private func startJob(_ job: Job, executable: URL, arguments: [String], directory: URL?, completion: (@MainActor (Bool) -> Void)? = nil) {
+    private func startJob(_ job: Job, executable: URL, arguments: [String], directory: URL?, environment: [String: String] = [:],
+                          completion: (@MainActor (Bool) -> Void)? = nil) {
         guard self.job?.isRunning != true else { return }
         self.job = job
         log("$ \(([executable.lastPathComponent] + arguments).map(Self.quoted).joined(separator: " "))", kind: .command)
-        let runner = CommandRunner(executable: executable, arguments: arguments, directory: directory)
+        let runner = CommandRunner(executable: executable, arguments: arguments, directory: directory, environment: environment)
         job.runner = runner
         do {
             try runner.start(onLine: { [weak self, weak job] line, isError in
@@ -653,17 +725,37 @@ extension JSONDecoder {
 extension AppModel {
     /// `./aethernx build` with the settings of Settings → Building, for one target; nil when the extra options have a quote that is not closed.
     nonisolated static func buildArguments(folder: String, target: BuildTarget, keys: String?, keepExtracted: Bool, language: String?, pipelineArchive: Bool, showFPS: Bool,
-                                           macSigningIdentity: String?, extra: String) -> [String]? {
+                                           macSigningIdentity: String?, extra: String, install: InstallOptions? = nil) -> [String]? {
         guard let extraWords = splitArguments(extra) else { return nil }
-        var args = ["build", folder, "--target", target.rawValue, "--progress", "json"]
-        if let keys { args += ["-k", keys] }
-        // Xcode builds from the extracted files, and a build with the game files separate keeps them for the copy to the phone: the build refuses either without them
-        args.append(keepExtracted || target == .xcode || target == .iosSlim ? "--keep-extracted" : "--no-keep-extracted")
+        var args: [String]
+        if target == .device {
+            // `./aethernx install` builds the game's Xcode project itself, from the extracted files it keeps, then signs and installs it
+            guard let install else { return nil }
+            args = ["install", folder, "--progress", "json", "--device", install.device, "--team", install.team, "--files", install.separateFiles ? "separate" : "bundle"]
+            if install.launch { args.append("--launch") }
+            if !install.iCloudContainer.isEmpty { args += ["--icloud-container", install.iCloudContainer] }
+            if let keys { args += ["-k", keys] }
+        } else {
+            args = ["build", folder, "--target", target.rawValue, "--progress", "json"]
+            if let keys { args += ["-k", keys] }
+            // Xcode builds from the extracted files, and a build with the game files separate keeps them for the copy to the phone: the build refuses either without them
+            args.append(keepExtracted || target == .xcode || target == .iosSlim ? "--keep-extracted" : "--no-keep-extracted")
+        }
         if let language, !language.isEmpty { args += ["--language", language] }
         if !pipelineArchive { args += ["--gpu", "none"] }
-        if target == .ios || target == .iosSlim { args.append(showFPS ? "--show-fps" : "--no-show-fps") }
+        if target == .ios || target == .iosSlim || target == .device { args.append(showFPS ? "--show-fps" : "--no-show-fps") }
         if target == .mac, let macSigningIdentity, !macSigningIdentity.isEmpty { args += ["--mac-sign", macSigningIdentity] }
         return args + extraWords
+    }
+
+    /// The App Store Connect API key of Settings → iPhone & iPad, for `./aethernx install`: in its environment, so that neither the key's path nor the
+    /// account's issuer ID is written to the activity log with the command. Nothing without a key file.
+    nonisolated static func signingEnvironment(keyPath: String, keyID: String, issuer: String) -> [String: String] {
+        guard !keyPath.isEmpty else { return [:] }
+        var env = ["AETHERNX_ASC_KEY": keyPath]
+        if !keyID.isEmpty { env["AETHERNX_ASC_KEY_ID"] = keyID }
+        if !issuer.isEmpty { env["AETHERNX_ASC_ISSUER"] = issuer }
+        return env
     }
 
     /// The words of the extra build options as a shell would split them, without running one: spaces separate them, quotes keep a value with spaces
