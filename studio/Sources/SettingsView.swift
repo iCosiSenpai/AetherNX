@@ -193,7 +193,7 @@ private struct CloudSettings: View {
             } header: {
                 Text("Mods and Cheats")
             } footer: {
-                Text("Both folders sit next to the game's save: in iCloud Drive › AetherNX › the game's name when the cloud is on, so every Mac and device of yours sees the same ones; else on this Mac. Code mods (exefs) and mods that need a loader do not work with the engine.")
+                Text("Both folders sit next to the game's save: in iCloud Drive › AetherNX › the game's name when the cloud is on, so every Mac of yours plays with the same ones (the iPhone and iPad apps do not read them yet); else on this Mac. Code mods (exefs) and mods that need a loader do not work with the engine.")
             }
         }
         .formStyle(.grouped)
