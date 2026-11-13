@@ -40,19 +40,24 @@ size=$(stat -f %z "$img")
 via=${ROMFS_PUSH_VIA:-auto}
 if [ "$via" = auto ]; then if command -v afcclient > /dev/null; then via=afc; else via=devicectl; fi; fi
 if [ "$via" = afc ]; then
-    afc() { afcclient -u "$dev" --container "$id" -- "$@"; }
+    # A device on the network only (Wi-Fi sync): idevice_id -n lists it and afcclient reaches it with -n, at about 8 MB/s against 30 over USB (an iPhone 17 Pro Max
+    # on Wi-Fi 6E: 256 MB in 33 s). Slow once, for a large image; a later push of the same image copies nothing. ROMFS_PUSH_NETWORK=1 / 0 decides instead
+    net=${ROMFS_PUSH_NETWORK:-}
+    if [ -z "$net" ]; then net=0; if command -v idevice_id > /dev/null && ! idevice_id -l 2> /dev/null | grep -qx "$dev" && idevice_id -n 2> /dev/null | grep -qx "$dev"; then net=1; fi; fi
+    afc() { if [ "$net" = 1 ]; then afcclient -u "$dev" --container "$id" -n -- "$@"; else afcclient -u "$dev" --container "$id" -- "$@"; fi; }
     remote_size() { afc info "$1" 2> /dev/null | sed -n 's/^ *"st_size": *\([0-9][0-9]*\).*/\1/p'; }
     remote_type() { afc info "$1" 2> /dev/null | sed -n 's/^ *"st_ifmt": *"\([A-Z_]*\)".*/\1/p'; }
     # afcclient finds a device only by its UDID, over USB (devicectl also takes its own identifier or the device's name, and Wi-Fi): check that it opens the app's
     # Documents before copying, so a wrong ID or a Wi-Fi-only device is named as such instead of ending as an incomplete copy.
-    [ "$(remote_type /Documents)" = S_IFDIR ] || { echo "[RED] afcclient cannot open Documents of $id on device $dev: it needs the device's UDID (idevice_id -l lists the connected ones; devicectl's identifier and the device's name do not work), a USB connection, and the app installed. ROMFS_PUSH_VIA=devicectl copies through devicectl instead" >&2; exit 1; }
+    [ "$(remote_type /Documents)" = S_IFDIR ] || { echo "[RED] afcclient cannot open Documents of $id on device $dev: it needs the device's UDID (idevice_id -l lists the connected ones, idevice_id -n those on the network; devicectl's identifier and the device's name do not work) and the app installed. ROMFS_PUSH_VIA=devicectl copies through devicectl instead" >&2; exit 1; }
     if [ "${ROMFS_PUSH_FORCE:-}" != 1 ] && [ "$(remote_size /Documents/romfs.img)" = "$size" ] && afc get /Documents/romfs.img.id "$have" > /dev/null 2>&1 && [ "$(cat "$have")" = "$ident" ]; then
         echo "the device already has this image ($((size >> 20)) MB): not copied again"
         copied=0
     else
     copied=1
     afc rm /Documents/romfs.img.id > /dev/null 2>&1 || true
-    echo "copying $((size >> 20)) MB over AFC (about 30 MB/s over USB)"
+    if [ "$net" = 1 ]; then echo "copying $((size >> 20)) MB over AFC on the network (about 8 MB/s: $((size / 8000000 / 60 + 1)) minutes; a cable is about four times faster)"
+    else echo "copying $((size >> 20)) MB over AFC (about 30 MB/s over USB)"; fi
     afc put -f "$img" /Documents/romfs.img.part
     got=$(remote_size /Documents/romfs.img.part)
     [ "$got" = "$size" ] || { echo "[RED] the copy is incomplete: Documents/romfs.img.part holds ${got:-nothing} of $size bytes (a full device, or the cable); Documents/romfs.img is unchanged. Run this again" >&2; exit 1; }

@@ -257,6 +257,8 @@ import json, os, shutil, sys
 from pathlib import Path
 args = sys.argv[1:]
 with open(os.environ['AFC_CALLS'], 'a') as f: f.write(' '.join(args) + '\\n')
+if '-n' in args[:6]: args.remove('-n')   # on the network: the same commands
+with open(os.environ['AFC_CALLS'] + '.net', 'a') as f: f.write('1\\n' if len(args) != len(sys.argv[1:]) else '0\\n')
 assert args[0] == '-u' and args[2] == '--container' and args[4] == '--', args
 if os.environ.get('AFC_NO_DEVICE'): print(f'ERROR: Device {args[1]} not found!', file=sys.stderr); sys.exit(1)
 cmd = args[5]; flags = ''.join(a[1:] for a in args[6:] if a.startswith('-')); rest = [a for a in args[6:] if not a.startswith('-')]
@@ -447,6 +449,18 @@ class AfcTransfers(unittest.TestCase):
         (self.device / 'Documents/romfs.img.id').write_text('another image'); self.calls.write_text('')
         result = self.push(); self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(f'put -f {self.img} /Documents/romfs.img.part', self.calls.read_text())
+
+    def test_a_device_on_the_network_is_reached_with_n(self):
+        # idevice_id -n lists it and -l does not: afcclient gets -n, and the copy says it is on the network
+        self.afc()
+        (self.bin / 'idevice_id').write_text('#!/bin/sh\n[ "$1" = -n ] && echo fixture-device\nexit 0\n'); (self.bin / 'idevice_id').chmod(0o755)
+        result = self.push(); self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('on the network', result.stdout)
+        self.assertEqual(set(Path(str(self.calls) + '.net').read_text().split()), {'1'})
+        (self.bin / 'idevice_id').write_text('#!/bin/sh\n[ "$1" = -l ] && echo fixture-device\nexit 0\n')   # on USB: no -n
+        Path(str(self.calls) + '.net').write_text(''); self.env['ROMFS_PUSH_FORCE'] = '1'
+        result = self.push(); self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(set(Path(str(self.calls) + '.net').read_text().split()), {'0'})
 
     def test_cut_off_afc_copy_fails_and_never_replaces_the_image(self):
         self.afc(); old = b'an older image'; (self.device / 'Documents/romfs.img').write_bytes(old)

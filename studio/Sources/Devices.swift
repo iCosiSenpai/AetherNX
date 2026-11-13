@@ -181,7 +181,7 @@ struct DeviceSettings: View {
             } header: {
                 Text("Install")
             } footer: {
-                Text("On the device, the game files are copied once and stay there: installing again (after an engine update, say) copies only the app, minutes less for a large game. Automatic does that when the device is on a cable and afcclient is installed (brew install libimobiledevice), and puts the files inside the app otherwise.")
+                Text("On the device, the game files are copied once and stay there: installing again (after an engine update, say) copies only the app, minutes less for a large game. Automatic does that with afcclient installed (brew install libimobiledevice) when the device is on a cable, or on Wi-Fi once it already holds the files; otherwise the files go inside the app. A first copy over Wi-Fi is slow (about an hour for 27 GB): choose On the device to make it anyway.")
             }
 
             Section {

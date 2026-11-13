@@ -325,13 +325,36 @@ def memory_only_entitlements(folder):
     return path
 
 
-def files_mode(files, dev, afcclient=None):
-    """'auto' as the device allows: the game files kept on the device (separate) when it is on the cable and afcclient can stream them, which makes every
-    later install move only the app (Fire Emblem Fortune's Weave: 2.1 GB instead of 29 GB, push_romfs.sh skips an image the device already has); else in the
-    app (bundle), the one way a large image reaches a device on the network without going through the Mac's memory (devicectl's copy reads it whole)"""
+def files_mode(files, dev, afcclient=None, has_image=False):
+    """'auto' as the device allows. The game files are kept on the device (separate), which makes every later install move only the app (Fire Emblem Fortune's
+    Weave: 2.1 GB instead of 29 GB, push_romfs.sh skips an image the device already has), when afcclient can stream them and either the device is on the cable
+    (about 30 MB/s) or it already holds this game's image (has_image). On the network only, a first copy over AFC runs at about 8 MB/s (an hour for 27 GB) where
+    devicectl installs an app at about 36 MB/s, so a first install there puts the files in the app (bundle); --files separate copies them once all the same"""
     if files != 'auto': return files
     afc = afcclient if afcclient is not None else shutil.which('afcclient')
-    return 'separate' if dev['connection'] == 'cable' and afc else 'bundle'
+    if not afc: return 'bundle'
+    return 'separate' if dev['connection'] == 'cable' or (dev['connection'] == 'network' and has_image) else 'bundle'
+
+
+def local_image(work):
+    """The newest RomFS image a build of this game left (<build>/extract/<version>/RomFS.img), else None"""
+    images = [p for p in Path(work).glob('extract/*/RomFS.img') if p.is_file()]
+    return max(images, key=lambda p: p.stat().st_mtime) if images else None
+
+
+def device_has_image(dev, bundle_id, work, afcclient=None, run=None):
+    """The device holds the image a separate install would copy: Documents/romfs.img.id, which push_romfs.sh writes after a complete copy, is the identity of the
+    image this game's last build made. Read-only: afcclient copies that small file back. False when anything is missing"""
+    run = run or run_text
+    afc = afcclient if afcclient is not None else shutil.which('afcclient')
+    image = local_image(work)
+    if not afc or not image or not bundle_id: return False
+    code, ident, _ = run([sys.executable, str(ROOT / 'dm' / 'tools' / 'romfs_image.py'), '--identity', str(image)], timeout=60)
+    if code or not ident.strip(): return False
+    with tempfile.TemporaryDirectory(prefix='aethernx-romfs-id-') as tmp:
+        out = Path(tmp) / 'romfs.img.id'
+        run([afc, '-u', dev['udid'], '--container', bundle_id, *(['-n'] if dev['connection'] == 'network' else []), '--', 'get', '/Documents/romfs.img.id', str(out)], timeout=60)
+        return out.is_file() and out.read_text(errors='replace').strip() == ident.strip()
 
 
 def install(folder, work, *, build_args, keys=None, device=None, team=None, files='bundle', icloud_container='', launch=False, as_json=False,
@@ -340,13 +363,19 @@ def install(folder, work, *, build_args, keys=None, device=None, team=None, file
     environ = dict(os.environ if environ is None else environ)
     work = Path(work)
     dev = pick_device(list_devices(), device)
-    asked, files = files, files_mode(files, dev)
+    last = remembered(work)
+    has_image = files == 'auto' and dev['connection'] == 'network' and device_has_image(dev, last.get('bundle_id'), work)
+    asked, files = files, files_mode(files, dev, has_image=has_image)
     report = Report(as_json, 3 if files == 'separate' else 2)
     if asked == 'auto':
-        report.say('the game files stay on the device (cable and afcclient): a later install copies only the app' if files == 'separate'
-                   else 'the game files go inside the app' + ('' if dev['connection'] == 'cable' else ' (the device is on the network: a cable and afcclient keep them on the device instead)')
-                   + ('' if shutil.which('afcclient') else ' (brew install libimobiledevice keeps them on the device across installs)'))
-    last = remembered(work)
+        if files == 'separate':
+            report.say('the device already has this game\'s files: only the app is copied' if has_image
+                       else 'the game files stay on the device (copied once over the cable): later installs copy only the app')
+        elif not shutil.which('afcclient'):
+            report.say('the game files go inside the app (brew install libimobiledevice keeps them on the device, so later installs copy only the app)')
+        else:
+            report.say('the game files go inside the app: the device is on the network, where a first copy of them is slow; connect it by cable once (or install with '
+                       '--files separate) to keep them on the device')
     team = pick_team(team or environ.get('AETHERNX_TEAM') or environ.get('DM_TEAM_ID'), saved=last.get('team'))
     auth = api_key_args(api_key or environ.get('AETHERNX_ASC_KEY'), api_key_id or environ.get('AETHERNX_ASC_KEY_ID'), api_issuer or environ.get('AETHERNX_ASC_ISSUER'))
     report.say(f"installing on {dev['name']} ({dev['model'] or dev['kind']}, {dev['os']}; over the {'cable' if dev['connection'] == 'cable' else 'network'}), signed by team {team}")
@@ -412,9 +441,14 @@ def install(folder, work, *, build_args, keys=None, device=None, team=None, file
     if files == 'separate':
         report.stage(COPY)
         env = dict(environ)
-        if dev['connection'] != 'cable': env.setdefault('ROMFS_PUSH_VIA', 'devicectl')   # AFC needs the cable; push_romfs.sh refuses an image devicectl cannot hold in memory
-        code, output = stream(['bash', str(PUSH_SCRIPT), dev['udid'], signed_as, str(project.parent / 'Gen' / 'resources.env')],
-                              lambda ln: report.step(ln.strip()[:120]) if ln.strip() else None, log=logs / 'device_copy.log', env=env)
+        # afcclient streams the image, over the cable or the network (push_romfs.sh adds -n); without it devicectl copies, and refuses an image it cannot hold in memory
+        if not shutil.which('afcclient'): env.setdefault('ROMFS_PUSH_VIA', 'devicectl')
+        def copy_line(ln):
+            frac = percent_in(ln)
+            if frac is not None: report.progress(frac)
+            elif ln.strip(): report.step(ln.strip()[:120])
+        code, output = stream(['bash', str(PUSH_SCRIPT), dev['udid'], signed_as, str(project.parent / 'Gen' / 'resources.env')], copy_line,
+                              log=logs / 'device_copy.log', env=env)
         if code:
             why = next((ln.strip() for ln in reversed(output.splitlines()) if '[RED]' in ln), '') or f'push_romfs.sh stopped with exit code {code}'
             report.end(False, why)

@@ -129,8 +129,27 @@ class Failures(unittest.TestCase):
         self.assertEqual(di.files_mode('auto', cable, afcclient='/opt/homebrew/bin/afcclient'), 'separate')
         self.assertEqual(di.files_mode('auto', cable, afcclient=''), 'bundle')
         self.assertEqual(di.files_mode('auto', network, afcclient='/opt/homebrew/bin/afcclient'), 'bundle')
+        self.assertEqual(di.files_mode('auto', network, afcclient='/opt/homebrew/bin/afcclient', has_image=True), 'separate', 'on the network, when the device has the image')
+        self.assertEqual(di.files_mode('auto', network, afcclient='', has_image=True), 'bundle')
         self.assertEqual(di.files_mode('bundle', cable, afcclient='/x'), 'bundle')
         self.assertEqual(di.files_mode('separate', network, afcclient=''), 'separate')
+
+    def test_the_device_has_the_image_when_its_identity_matches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp); (work / 'extract/v1').mkdir(parents=True); (work / 'extract/v1/RomFS.img').write_bytes(b'x')
+            calls = []
+            def run(cmd, timeout=60, env=None, answer='DMROMFSID1 size=1 index=ab'):
+                calls.append(cmd)
+                if '--identity' in cmd: return 0, answer + '\n', ''
+                Path(cmd[-1]).write_text(answer)   # afcclient get <remote> <local>
+                return 0, '', ''
+            dev = {'udid': UDID, 'connection': 'network'}
+            self.assertTrue(di.device_has_image(dev, 'b.id', work, afcclient='/x/afcclient', run=run))
+            self.assertIn('-n', calls[-1]); self.assertEqual(calls[-1][-4:-1], ['--', 'get', '/Documents/romfs.img.id'])
+            self.assertFalse(di.device_has_image(dev, 'b.id', work, afcclient='/x/afcclient',
+                                                 run=lambda c, timeout=60, env=None: run(c, answer='DMROMFSID1 size=1 index=cd') if 'get' in c else run(c)))
+            self.assertFalse(di.device_has_image(dev, '', work, afcclient='/x/afcclient', run=run), 'no bundle ID: not installed from here yet')
+            self.assertFalse(di.device_has_image(dev, 'b.id', Path(tmp) / 'nothing', afcclient='/x/afcclient', run=run), 'no image built yet')
 
     def test_progress_words(self):
         self.assertEqual(di.xcode_step('CompileC /a/b.o /src/b.c normal arm64'), 'compiling')
@@ -337,11 +356,19 @@ class Install(unittest.TestCase):
         self.assertEqual([(e['k'], e['n']) for e in events if e['ev'] == 'stage'][-1], (5, 5))
         self.assertEqual(self.called('push'), [f'{UDID} {BUNDLE} {self.work / "xcode/Gen/resources.env"} via='])   # by cable: over AFC, the script's default
 
-    def test_over_the_network_the_files_go_through_devicectl(self):
+    def test_over_the_network_the_files_go_through_afc_else_devicectl(self):
+        # afcclient reaches a device on the network too (push_romfs.sh adds -n) and streams the image; without it devicectl copies
         self.environ['FAKE_DEVICES'] = json.dumps({'result': {'devices': [device(transport='localNetwork')]}})
-        with mock.patch.dict(os.environ, self.environ): code, _ = self.install(files='separate')
+        real = di.shutil.which
+        with mock.patch.dict(os.environ, self.environ), mock.patch.object(di.shutil, 'which', lambda n: '/opt/homebrew/bin/afcclient' if n == 'afcclient' else real(n)):
+            code, _ = self.install(files='separate')
         self.assertEqual(code, 0)
-        self.assertTrue(self.called('push')[0].endswith(' via=devicectl'))   # AFC needs the cable
+        self.assertTrue(self.called('push')[0].endswith(' via='), self.called('push'))
+        self.environ['FAKE_CALLS_RESET'] = '1'
+        with mock.patch.dict(os.environ, self.environ), mock.patch.object(di.shutil, 'which', lambda n: None if n == 'afcclient' else real(n)):
+            code, _ = self.install(files='separate')
+        self.assertEqual(code, 0)
+        self.assertTrue(self.called('push')[-1].endswith(' via=devicectl'))
 
     def test_files_that_did_not_reach_the_device_fail_the_install(self):
         self.environ['FAKE_PUSH_FAILS'] = '1'

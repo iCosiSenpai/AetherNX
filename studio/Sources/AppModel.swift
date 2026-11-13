@@ -138,6 +138,8 @@ final class AppModel {
     private(set) var lastSuccess: [Game.ID: JobOutcome] = [:]
     /// Raised when a game's mods or cheats changed, so their sections read their folders again.
     var extrasRevision = 0
+    /// studio/tools/snapshots.swift: the sidebar draws no selection (its translucent highlight cannot be drawn offscreen, and comes out black)
+    @ObservationIgnored var snapshotMode = false
     private(set) var activity: [LogLine] = []
     private var nextLineID = 0
     var showsActivity = false

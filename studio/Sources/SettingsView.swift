@@ -25,7 +25,7 @@ struct SettingsPage: View {
                 }
             } else {
                 HStack(spacing: 0) {
-                    List(selection: $model.settingsPane) {
+                    List(selection: model.snapshotMode ? .constant(nil) : Binding<SettingsPane?>(get: { model.settingsPane }, set: { if let pane = $0 { model.settingsPane = pane } })) {
                         ForEach(SettingsPane.allCases) { pane in
                             Label(pane.title, systemImage: pane.systemImage).tag(pane)
                         }
