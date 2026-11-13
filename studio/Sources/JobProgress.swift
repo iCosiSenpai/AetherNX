@@ -161,6 +161,9 @@ struct JobCard: View {
                 Label("Stopped.", systemImage: "stop.circle")
                     .foregroundStyle(.secondary)
             }
+            if !model.buildQueue.isEmpty {
+                BuildQueueList()
+            }
             if !job.finishedStages.isEmpty {
                 DisclosureGroup(isExpanded: $showsStages) {
                     stageList
@@ -340,6 +343,46 @@ struct JobCard: View {
         case .succeeded: .green.opacity(0.35)
         case .failed: .orange.opacity(0.4)
         default: .clear
+        }
+    }
+}
+
+
+/// The builds waiting their turn: under the running job's card, and on the Activity page while none runs (after a stop, with Continue).
+struct BuildQueueList: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(model.queuePaused ? "Waiting (the queue is paused after a stop)" : "Then")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if model.queuePaused && model.job?.isRunning != true {
+                    Button("Continue") { model.continueQueue() }
+                }
+            }
+            ForEach(model.buildQueue) { item in
+                HStack(spacing: 8) {
+                    Image(systemName: item.target.systemImage)
+                        .frame(width: 18)
+                        .foregroundStyle(.secondary)
+                    Text("\(item.gameName), \(String(localized: item.target.queueTitle))")
+                        .lineLimit(1)
+                    Spacer()
+                    Button {
+                        model.removeFromQueue(item)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help("Remove from the queue")
+                    .accessibilityLabel(Text("Remove \(item.gameName) from the queue"))
+                }
+                .font(.callout)
+            }
         }
     }
 }

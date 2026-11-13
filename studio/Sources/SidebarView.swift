@@ -135,7 +135,7 @@ struct GameContextMenu: View {
         if game.isBuildable {
             ForEach(BuildTarget.menuOrder) { target in
                 Button(target.commandTitle) { model.build(game, target: target) }
-                    .disabled(!model.canStartJob)
+                    .disabled(!model.canQueueBuild)
             }
         } else {
             Button("Unpack") { model.unpack(game) }

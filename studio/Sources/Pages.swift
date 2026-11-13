@@ -10,6 +10,10 @@ struct ActivityPage: View {
                 JobCard(job: job, showsGameName: job.gameID.flatMap { id in model.games.first { $0.id == id }?.name })
                     .padding(16)
                 Divider()
+            } else if !model.buildQueue.isEmpty {
+                BuildQueueList()
+                    .padding(16)
+                Divider()
             }
             ActivityView()
         }
