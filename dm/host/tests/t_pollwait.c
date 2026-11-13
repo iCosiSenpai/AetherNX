@@ -88,7 +88,10 @@ static void *signaller(void *unused) {
     return NULL;
 }
 int main(void) {
-    alarm(20);
+    // A hang guard, not a time limit: the run/gap clock above is the test's own, but the waits and sleeps are real (about 1,400
+    // of them), and under ASan on a shared CI Mac they took over 20 s where a laptop takes 3. Unbuffered, so a hang shows its step.
+    setvbuf(stdout, NULL, _IONBF, 0);
+    alarm(60);
     me_handle = svc_thread_main_init();
     poll_run(500, 0, 0);
     puts("PASS: 500 ns condition variable waits back off at 2 ms, not before");
