@@ -12,6 +12,18 @@ enum StageGuide {
     static func entry(for stage: String) -> Entry? {
         let name = stage.lowercased()
         func starts(_ prefixes: String...) -> Bool { prefixes.contains { name.hasPrefix($0) } }
+        if starts("copy the build") {
+            return Entry(title: String(localized: "Copying the build"),
+                         detail: String(localized: "The build folder and the Mac app go to their new disk, file by file. The originals stay until the copy is checked."))
+        }
+        if starts("check the copy") {
+            return Entry(title: String(localized: "Checking the copy"),
+                         detail: String(localized: "Every file of the copy is compared with the original: names, links and sizes."))
+        }
+        if starts("remove the original") {
+            return Entry(title: String(localized: "Freeing the old disk"),
+                         detail: String(localized: "The original build folder and Mac app are deleted; the game now uses the copy."))
+        }
         if starts("decompress") {
             return Entry(title: String(localized: "Decompressing the packages"),
                          detail: String(localized: "Compressed packages (.nsz, .xcz) are turned into plain ones, once: the next builds reuse them."))

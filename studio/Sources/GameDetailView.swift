@@ -505,9 +505,57 @@ private struct BuildsSection: View {
                 }
                 Divider()
                 DeviceRow(game: game)
+                Divider()
+                BuildFolderRow(game: game)
             }
             .padding(.horizontal, 4)
         }
+    }
+}
+
+/// Where the game's build folder and Mac app are: this Mac or another disk, and the button that moves them where Settings → Library says.
+private struct BuildFolderRow: View {
+    let game: Game
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let work = game.workDir ?? game.folder
+        let volume = Storage.volume(of: work)
+        let built = game.workReachable && FileManager.default.fileExists(atPath: work)
+        HStack(spacing: 12) {
+            Image(systemName: volume.isThisMac ? "internaldrive" : volume.isNetwork ? "server.rack" : "externaldrive")
+                .frame(width: 20)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Build Folder")
+                Group {
+                    if !game.workReachable {
+                        Label("On \(volume.name), which is not connected: connect it to build or play", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    } else if built {
+                        Text(volume.isThisMac ? String(localized: "On this Mac") : String(localized: "On \(volume.name)"))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(volume.isThisMac ? String(localized: "The first build goes beside the game") : String(localized: "The first build goes to \(volume.name)"))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.callout)
+                .lineLimit(1)
+                .help(work)
+            }
+            Spacer()
+            if let target = game.workMovesTo {
+                let to = Storage.volume(of: target)
+                RowButton(to.isThisMac ? "Move to This Mac" : "Move to \(to.name)", systemImage: "arrow.right.circle") { model.moveBuild(game) }
+                    .disabled(!model.canStartJob || !to.isConnected)
+                    .help(Text("Moves the build folder and the Mac app to \(target); the copy is checked before the original is deleted."))
+            }
+            if built {
+                RowButton("Show in Finder", systemImage: "folder") { Finder.reveal(work) }
+            }
+        }
+        .padding(.vertical, 8)
     }
 }
 

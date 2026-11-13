@@ -300,5 +300,20 @@ expect(UpdateCenter.impact(of: ["studio/Sources/App.swift"]) == (false, false, t
 expect(UpdateCenter.impact(of: ["dm/host/hle_fs.c", "dm/gfx/nvn/dmsh_chain.h"]) == (true, true, false), "an engine change and a new shader chain")
 expect(UpdateCenter.impact(of: ["docs/playing.md"]) == (false, false, false), "documentation only")
 
+// MARK: Builds and Mac apps on another disk (Settings → Library, aethernx move-build)
+
+expect(Storage.volume(of: "\(root)/x").isThisMac && Storage.volume(of: "/Users/someone/Games/x_build").isConnected, "a folder of this Mac's own disk")
+let gone = Storage.volume(of: "/Volumes/AetherNX check drive that is not there/Builds/x_build")
+expect(!gone.isThisMac && !gone.isConnected && gone.name == "AetherNX check drive that is not there", "a drive that is not connected, by its name")
+expect(StageGuide.entry(for: "copy the build to /Volumes/NAS/AetherNX/Game") != nil && StageGuide.entry(for: "check the copy") != nil
+       && StageGuide.entry(for: "remove the original") != nil, "move-build's stages are explained")
+let elsewhereJSON = """
+{"id": "\(lib)", "kind": "packages", "title_id": "\(title)", "name": "Stray", "folder": "\(lib)", "work_dir": "/Volumes/NAS/AetherNX/Stray/\(title)_build",
+ "work_reachable": false, "work_moves_to": null}
+"""
+let elsewhere = try JSONDecoder.snakeCase.decode(Game.self, from: Data(elsewhereJSON.utf8))
+expect(!elsewhere.workReachable && elsewhere.workMovesTo == nil, "a build on a disk that is not connected, as the scan tells it")
+expect(game.workReachable && game.workMovesTo == nil, "an older scan without the fields: the build is reachable and stays where it is")
+
 print("studio check: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

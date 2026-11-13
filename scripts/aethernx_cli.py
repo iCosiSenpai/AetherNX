@@ -6,6 +6,7 @@
   build <game folder> [--target T]    build a game: mac (default), ios, ios-slim or xcode; other options go to build_ipa_from_nsp.py
   devices [--json]                    the iPhones and iPads paired with this Mac, and the Apple teams it can sign with
   install <game folder> [--device D]  build a game, sign it with your Apple team and install it on a paired iPhone or iPad
+  move-build <game folder> [--here]   move a game's build folder and Mac apps to the builds folder ($AETHERNX_BUILDS), or back beside the game
   decomp-init <game folder>           function and symbol tables of an extracted game, with a C++ starter project
   lift <game folder>                  translate an extracted module to C with nxrt (vendor/nxrt)
   report <game folder|title ID>       a zip for a bug report: logs, versions and settings, never game data (scripts/bug_report.py)
@@ -25,6 +26,7 @@ import plistlib
 import re
 import shlex
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -125,6 +127,68 @@ def built_apps(folder, tid):
     return out
 
 
+# ---- where builds live ----
+# A game's build folder is <game folder>/<title ID>_build unless a builds folder is set (AETHERNX_BUILDS, Studio's Settings → Storage): there each game gets
+# <builds folder>/<game folder's name>/<title ID>_build, and its Mac app is written beside it, so a drive or a network share holds what a build makes instead of the
+# Mac. Where a game's build is goes into BUILD_POINTER in its folder whenever it is not beside the game, so the scan still finds it after the setting changed and
+# says the build is on a disk that is not connected instead of building again from scratch on the Mac.
+BUILD_POINTER = '.aethernx-build'
+
+
+def builds_root():   # the builds folder, or None: beside each game
+    v = os.environ.get('AETHERNX_BUILDS', '').strip()
+    return Path(v).expanduser().absolute() if v else None
+
+
+def safe_name(name):   # a folder name a network share or an exFAT drive takes too (they refuse : \ * ? " < > | that APFS allows)
+    return re.sub(r'[\x00-\x1f/:\\*?"<>|]', '_', name).strip(' .') or 'game'
+
+
+def volume_of(path):   # the mount point holding path: /Volumes/<name> for a drive or a share, / for the Mac's own disk
+    parts = Path(path).absolute().parts
+    return Path('/', parts[1], parts[2]) if len(parts) > 2 and parts[1] == 'Volumes' else Path('/')
+
+
+def reachable(path):   # whether the disk that holds path is there: an unplugged drive or a share not connected leaves no mount at /Volumes/<name>
+    v = volume_of(path)
+    return v == Path('/') or os.path.ismount(v)
+
+
+def recorded_work(folder):   # the build folder BUILD_POINTER names: one that exists, or one on a disk that is not there now
+    try: text = (folder / BUILD_POINTER).read_text(encoding='utf-8').strip()
+    except (OSError, UnicodeDecodeError): return None
+    p = Path(text) if text else None
+    return p if p and p.is_absolute() and (p.exists() or not reachable(p)) else None
+
+
+def wanted_work(folder, tid, root=None):   # where a new build of the game goes: the builds folder's, else beside the game
+    root = root or builds_root()
+    return root / safe_name(folder.name) / f'{tid}_build' if root else folder / f'{tid}_build'
+
+
+def work_folder(folder, tid):
+    """The game's build folder: the recorded one, else the one beside the game when it is there, else where a new build goes. A build beside the game stays in
+    use after a builds folder is set, until move-build moves it: changing the setting never makes a game build again from the start"""
+    if (w := recorded_work(folder)): return w
+    here = folder / f'{tid}_build'
+    return here if here.exists() else wanted_work(folder, tid)
+
+
+def record_work(folder, tid, work):   # BUILD_POINTER names the build folder when it is not beside the game, and goes away when it is
+    pointer = folder / BUILD_POINTER
+    with contextlib.suppress(OSError):
+        if work == folder / f'{tid}_build': pointer.unlink(missing_ok=True)
+        else: pointer.write_text(f'{work}\n', encoding='utf-8')
+
+
+def prepare_work(folder, tid, work):   # a build folder that is not beside the game: its disk must be there, and its folder made and recorded
+    if work == folder / f'{tid}_build': return
+    if not reachable(work): raise CliError(f'the build folder {work} is on {volume_of(work).name}, which is not connected: connect it, or move the build (aethernx move-build)')
+    try: work.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e: raise CliError(f'cannot make {work.parent}: {e.strerror}') from e
+    record_work(folder, tid, work)
+
+
 def package_contents(paths):
     """A keyless stand-in for the packing script's content-meta reader (package_reader, which needs prod.keys and builds nx_extract), enough to list a library: a package's
     title IDs from its tickets' names (an NSP or NSZ lists `<rights ID>.tik`, whose first 16 digits are the title ID), else from a [<title ID>] tag in its file name; its version
@@ -197,7 +261,9 @@ def scan_game(folder):
     prof = profiles.by_title(app)
     base = fam['base']
     name = (prof.get('name') if prof else None) or (re.sub(r'\s*[\[(].*$', '', base.stem).strip() if base and kind == 'packages' else folder.name)
-    work = folder / f'{tid}_build'
+    work = work_folder(folder, tid)
+    online = reachable(work)
+    wanted = wanted_work(folder, tid)
     extracted = sorted((d.name for d in (work / 'extract').glob('v*') if (d / 'ExeFS').is_dir() and d.name[1:].isdigit()), key=lambda v: int(v[1:])) if (work / 'extract').is_dir() else []
     newest = work / 'extract' / extracted[-1] if extracted else None
     display_version = None
@@ -219,11 +285,13 @@ def scan_game(folder):
         'compressed': [str(p) for p in b.package_files(folder) if p.suffix.lower() in ('.nsz', '.xcz')] if kind == 'packages' else [],
         'archives': [file_entry(p) for p in archives],
         'work_dir': str(work),
+        'work_reachable': online,   # false: the build is on a drive or a share that is not connected now
+        'work_moves_to': str(wanted) if online and work.exists() and wanted != work else None,   # where move-build would put it (the builds folder, or back beside the game)
         'extracted_versions': extracted,
         'display_version': display_version,   # from the newest extraction's control data, once the game was built
         'icon': str(newest / 'icon.jpg') if newest and (newest / 'icon.jpg').is_file() else None,
-        'mac_apps': built_apps(folder, tid),
-        'ipas': [str(p) for p in sorted(folder.glob('*.ipa')) if p.is_file()],
+        'mac_apps': built_apps(folder, tid) + (built_apps(work.parent, tid) if work.parent != folder and online else []),   # a build elsewhere writes its app beside it
+        'ipas': [str(p) for d in dict.fromkeys([folder, work.parent]) if d == folder or online for p in sorted(d.glob('*.ipa')) if p.is_file()],
         'device_install': device_install_record(work),   # the last ./aethernx install: the device, the team and the bundle ID it was signed with
         'save_dir': str(HORIZON_SUPPORT / tid),
         'log_file': str(HORIZON_LOGS / f'{tid}.log'),
@@ -363,12 +431,24 @@ def cmd_unpack(args):
 
 # ---- build ----
 
+def with_work_dir(folder, rest):   # the build script's arguments with --work-dir when the game's build folder is not beside it (a builds folder, a recorded one)
+    if '--work-dir' in rest: return rest
+    with contextlib.redirect_stdout(sys.stderr):
+        try: g = scan_game(folder)
+        except CliError: return rest   # the build script says what is wrong with the folder
+    if not g or not g.get('title_id'): return rest
+    work = Path(g['work_dir'])
+    prepare_work(folder, g['title_id'], work)
+    return rest if work == folder / f"{g['title_id']}_build" else ['--work-dir', str(work), *rest]
+
+
 def cmd_build(args, rest):
     folder = Path(args.folder).expanduser().resolve()
     if not folder.is_dir(): raise CliError(f'no such folder: {folder}')
     keys = []
     if args.keys: keys = ['-k', str(Path(args.keys).expanduser())]
     elif (k := default_keys()) is not None: keys = ['-k', str(k)]
+    rest = with_work_dir(folder, rest)
     cmd = [sys.executable, str(ROOT / 'scripts' / 'build_ipa_from_nsp.py'), str(folder), *keys, *TARGETS[args.target], *rest]
     sys.stdout.flush()
     os.execv(sys.executable, cmd)
@@ -406,6 +486,8 @@ def cmd_install(args, rest):
             g = scan_game(folder)
         if not g or g['kind'] == 'archives': raise CliError(f'no game in {folder}')
         work = Path(g['work_dir'])
+        prepare_work(folder, g['title_id'], work)
+        if work != folder / f"{g['title_id']}_build": rest = ['--work-dir', str(work), *rest]   # device_install hands rest to the build script
     keys = Path(args.keys).expanduser() if args.keys else default_keys()
     try:
         return di.install(folder, work, build_args=rest, keys=keys, device=args.device, team=args.team, files=args.files, icloud_container=args.icloud_container or '',
@@ -413,6 +495,166 @@ def cmd_install(args, rest):
     except di.InstallError as e:
         if args.progress == 'json': print(json.dumps({'ev': 'say', 't': round(time.time(), 3), 'msg': f'[RED] {e}'}, ensure_ascii=False), flush=True)
         raise CliError(str(e)) from e
+
+
+# ---- move-build ----
+
+class MoveReport:   # move-build's events: --progress json as the build script writes them (docs/frontends.md), else plain lines
+    def __init__(self, as_json, n):
+        self.as_json, self.n, self.k, self.name, self.t0, self.last = as_json, n, 0, '', time.time(), 0.0
+
+    def emit(self, ev, **fields): print(json.dumps({'ev': ev, 't': round(time.time(), 3), **fields}, ensure_ascii=False), flush=True)
+
+    def say(self, msg):
+        if self.as_json: self.emit('say', msg=msg)
+        else: print(msg, flush=True)
+
+    def stage(self, name, step=''):
+        self.k += 1; self.name, self.t0, self.last = name, time.time(), 0.0
+        if self.as_json: self.emit('stage', k=self.k, n=self.n, name=name, step=step)
+        else: print(f'[{self.k}/{self.n}] {name}', flush=True)
+
+    def progress(self, done, total, step, force=False):
+        now = time.time()
+        if not force and now - self.last < 0.5: return
+        self.last = now
+        elapsed = now - self.t0
+        eta = (total - done) * elapsed / done if done and total and elapsed > 2 else None
+        if self.as_json:
+            self.emit('progress', k=self.k, name=self.name, step=step, done=done, total=total, unit='B', est=False, note='',
+                      frac=min(done / total, 0.99) if total else None, eta=round(eta) if eta is not None else None, elapsed=round(elapsed, 1))
+
+    def end(self, ok, summary=''):
+        if self.as_json: self.emit('stage_end', k=self.k, name=self.name, ok=ok, summary=summary, elapsed=round(time.time() - self.t0, 1))
+        elif summary: print(f'      {summary}', flush=True)
+
+
+def tree_listing(root):   # {relative path: size of a file, or 'link:<target>', or 'dir'} of a folder, a bundle or one file
+    root = Path(root)
+    if root.is_symlink() or root.is_file(): return {'.': f'link:{os.readlink(root)}' if root.is_symlink() else root.stat().st_size}
+    out: dict[str, int | str] = {'.': 'dir'}
+    for d, dirs, files in os.walk(root):
+        for name in dirs + files:
+            p = Path(d) / name
+            rel = str(p.relative_to(root))
+            if p.is_symlink(): out[rel] = f'link:{os.readlink(p)}'
+            elif p.is_dir(): out[rel] = 'dir'
+            else: out[rel] = p.stat().st_size
+    return out
+
+
+def copy_file(src, dst, on_bytes):   # one file, its data in 8 MB pieces so a large one (a game's RomFS image) reports its progress; then its mode and times
+    with open(src, 'rb') as f, open(dst, 'wb') as g:
+        while chunk := f.read(8 << 20):
+            g.write(chunk); on_bytes(len(chunk))
+    with contextlib.suppress(OSError): shutil.copystat(src, dst)   # a network share may refuse some of it; the data is what counts
+
+
+def copy_tree(src, dst, on_bytes):   # a folder, keeping its links as links
+    if src.is_symlink(): os.symlink(os.readlink(src), dst); return
+    if src.is_file(): copy_file(src, dst, on_bytes); return
+    dst.mkdir()
+    for d, dirs, files in os.walk(src):
+        here = dst / Path(d).relative_to(src)
+        for name in dirs:
+            q = Path(d) / name
+            if q.is_symlink(): os.symlink(os.readlink(q), here / name)
+            else: (here / name).mkdir()
+        for name in files:
+            q = Path(d) / name
+            if q.is_symlink(): os.symlink(os.readlink(q), here / name)
+            else: copy_file(q, here / name, on_bytes)
+        dirs[:] = [n for n in dirs if not (Path(d) / n).is_symlink()]
+
+
+def copy_bundle(src, dst, on_bytes):   # an app with ditto, which keeps all of a signed bundle; its progress from the size copied so far
+    proc = subprocess.Popen(['/usr/bin/ditto', str(src), str(dst)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    seen = 0
+    while proc.poll() is None:
+        time.sleep(1)
+        now = sum(v for v in tree_listing(dst).values() if isinstance(v, int)) if dst.exists() else 0
+        if now > seen: on_bytes(now - seen); seen = now
+    if proc.returncode: raise CliError(f'ditto could not copy {src.name}: {(proc.stderr.read() if proc.stderr else "").strip()[-300:]}')
+    total = sum(v for v in tree_listing(dst).values() if isinstance(v, int))
+    if total > seen: on_bytes(total - seen)
+
+
+def cmd_move_build(args):
+    """Moves a game's build folder, and the Mac apps and IPAs beside it, to the builds folder (--to, else AETHERNX_BUILDS), or back beside the game (--here).
+    Copies, compares the copy with the original file by file, then deletes the original and records where the build is (BUILD_POINTER). Stopped or failed, the
+    copy is removed and the original stays as it was"""
+    rep = MoveReport(args.progress == 'json', 3)
+    folder = Path(args.folder).expanduser().resolve()
+    if not folder.is_dir(): raise CliError(f'no such folder: {folder}')
+    with contextlib.redirect_stdout(sys.stderr): g = scan_game(folder)
+    if not g or not g.get('title_id'): raise CliError(f'no game in {folder}')
+    tid, src = g['title_id'], Path(g['work_dir'])
+    if not g['work_reachable']: raise CliError(f'the build of {g["name"]} is on {volume_of(src).name}, which is not connected')
+    if not src.is_dir(): raise CliError(f'{g["name"]} has no build to move yet: its next build goes to {wanted_work(folder, tid)}')
+    if args.here: dst = folder / f'{tid}_build'
+    else:
+        root = Path(args.to).expanduser().absolute() if args.to else builds_root()
+        if not root: raise CliError('no builds folder: give --to <folder> (or set AETHERNX_BUILDS), or --here to move the build back beside the game')
+        dst = wanted_work(folder, tid, root)
+    if dst == src:
+        rep.say(f'the build of {g["name"]} is in {dst} already'); return 0
+    if not reachable(dst): raise CliError(f'{volume_of(dst).name} is not connected')
+    beside = [Path(a) for a in g['mac_apps'] + g['ipas'] if Path(a).parent == src.parent]
+    moves = [(src, dst)] + [(a, dst.parent / a.name) for a in beside]
+    for a, b in moves:
+        if b.exists() or b.is_symlink(): raise CliError(f'{b} is there already: remove it, or move the build somewhere else')
+    for a in beside:
+        if a.suffix == '.app' and subprocess.run(['/usr/bin/pgrep', '-f', str(a / 'Contents' / 'MacOS')], capture_output=True).returncode == 0:
+            raise CliError(f'{a.name} is open: quit it, then move the build')
+    listings = {a: tree_listing(a) for a, _ in moves}
+    total = sum(v for lst in listings.values() for v in lst.values() if isinstance(v, int))
+    base = dst.parent
+    while not base.exists(): base = base.parent
+    free = shutil.disk_usage(base).free
+    if free < total + (1 << 30): raise CliError(f'{volume_of(dst).name} has {free / 1e9:.1f} GB free; the build and its apps need {total / 1e9:.1f} GB')
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    made = []
+    def stop(signum, frame): raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, stop)
+    where = 'beside the game' if args.here else f'to {dst.parent}'
+    try:
+        rep.stage(f'copy the build {where}', step=f'{total / 1e9:.1f} GB')
+        done = 0
+        def on_bytes(n):
+            nonlocal done
+            done += n; rep.progress(done, total, 'copying')
+        for a, b in moves:
+            made.append(b)
+            (copy_bundle if a.suffix == '.app' else copy_tree)(a, b, on_bytes)
+        rep.progress(total, total, 'copied', force=True)
+        rep.end(True, f'{total / 1e9:.1f} GB')
+        rep.stage('check the copy', step='every file and its size')
+        for a, b in moves:
+            got = tree_listing(b)
+            if got != listings[a]:
+                diff = sorted(set(got.items()) ^ set(listings[a].items()))[:3]
+                raise CliError(f'the copy of {a.name} differs from the original ({", ".join(f"{k}: {v}" for k, v in diff)}); the original is unchanged')
+        rep.end(True, f'{sum(len(lst) for lst in listings.values()):,} items match')
+    except BaseException:
+        for b in made:
+            with contextlib.suppress(OSError):
+                if b.is_dir() and not b.is_symlink(): shutil.rmtree(b)
+                else: b.unlink()
+        raise
+    finally:
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    rep.stage('remove the original')
+    record_work(folder, tid, dst)   # from here the scan finds the copy, whatever the removal leaves
+    left = []
+    for a, _ in moves:
+        try:
+            if a.is_dir() and not a.is_symlink(): shutil.rmtree(a)
+            else: a.unlink()
+        except OSError as e: left.append(f'{a} ({e.strerror})')
+    rep.end(not left, 'removed' if not left else f'not all removed: {"; ".join(left)}')
+    if left: rep.say(f'[RED] the build is now in {dst}, but these could not be removed: {"; ".join(left)}'); return 1
+    rep.say(f'the build of {g["name"]} is now in {dst}')
+    return 0
 
 
 # ---- decomp-init ----
@@ -743,6 +985,11 @@ def main(argv=None):
     p.add_argument('--api-key', help='an App Store Connect API key file (AuthKey_<ID>.p8) for signing, when Xcode has no Apple ID signed in (default: $AETHERNX_ASC_KEY)')
     p.add_argument('--api-key-id', help="the API key's ID (default: from the file's name, else $AETHERNX_ASC_KEY_ID)")
     p.add_argument('--api-issuer', help="the API key's issuer ID (default: $AETHERNX_ASC_ISSUER)")
+    p = sub.add_parser('move-build', help="move a game's build folder and Mac apps to the builds folder ($AETHERNX_BUILDS), or back beside the game", allow_abbrev=False)
+    p.add_argument('folder', help="the game's folder")
+    p.add_argument('--to', help='the builds folder to move it to (default: $AETHERNX_BUILDS)')
+    p.add_argument('--here', action='store_true', help='move it back beside the game')
+    p.add_argument('--progress', choices=('plain', 'json'), default='plain', help='json = one JSON event per line, as the build script writes them (docs/frontends.md)')
     p = sub.add_parser('decomp-init', help='function and symbol tables of an extracted game', allow_abbrev=False)
     p.add_argument('folder')
     p.add_argument('--json', action='store_true')
@@ -772,8 +1019,9 @@ def main(argv=None):
         if args.cmd == 'build': return cmd_build(args, rest)
         if args.cmd == 'install': return cmd_install(args, rest)
         return {'devices': cmd_devices, 'report': cmd_report, 'scan': cmd_scan, 'unpack': cmd_unpack, 'decomp-init': cmd_decomp_init, 'lift': cmd_lift, 'setup': cmd_setup,
-                'doctor': cmd_doctor, 'studio': cmd_studio}[args.cmd](args)
+                'doctor': cmd_doctor, 'studio': cmd_studio, 'move-build': cmd_move_build}[args.cmd](args)
     except CliError as e:
+        if args.cmd == 'move-build' and args.progress == 'json': print(json.dumps({'ev': 'say', 't': round(time.time(), 3), 'msg': f'[RED] {e}'}, ensure_ascii=False), flush=True)
         print(f'aethernx: {e}', file=sys.stderr)
         return 1
     except KeyboardInterrupt:

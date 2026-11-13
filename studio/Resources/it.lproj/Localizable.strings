@@ -667,3 +667,36 @@
 "iPhone or iPad, Installed" = "iPhone o iPad, installato";
 "not connected" = "non collegato";
 "on the network" = "in rete";
+
+/* Builds and Mac apps in a folder on another disk (Settings → Library, game page, move-build) */
+"%@ is not connected" = "%@ non è collegato";
+"%@ is open: quit it, then move its build." = "%@ è aperto: chiudilo, poi sposta la sua build.";
+"%@: %@ free" = "%1$@: %2$@ liberi";
+"%lld game(s) keep their build on this Mac: Move to %@ on each game's page." = "%1$lld giochi tengono la build su questo Mac: Sposta su %2$@ nella pagina di ciascun gioco.";
+"A game's build folder holds its extracted files, shaders and Xcode project, tens of GB for a large game, and its Mac app is written beside it. In a folder on an external drive or a network share they take no room on this Mac; keep the games themselves there too by adding a folder of that disk to the library. A build already on this Mac stays where it is until you move it from the game's page." = "La cartella di build di un gioco contiene i file estratti, gli shader e il progetto Xcode, decine di GB per un gioco grande, e la sua app per Mac viene scritta accanto. In una cartella su un disco esterno o una condivisione di rete non occupano spazio su questo Mac; puoi tenere lì anche i giochi stessi aggiungendo alla libreria una cartella di quel disco. Una build già su questo Mac resta dov'è finché non la sposti dalla pagina del gioco.";
+"A network share: builds take longer there, and a game played from it reads its files over the network." = "Una condivisione di rete: lì le build richiedono più tempo, e un gioco avviato da lì legge i suoi file in rete.";
+"Beside each game" = "Accanto a ogni gioco";
+"Build Folder" = "Cartella di build";
+"Builds and Mac Apps" = "Build e app per Mac";
+"Builds and Mac apps" = "Build e app per Mac";
+"Change…" = "Cambia…";
+"Checking the copy" = "Controllo della copia";
+"Choose a folder for builds and Mac apps, on an external drive or a network share. Each game gets a folder of its own in it." = "Scegli una cartella per le build e le app per Mac, su un disco esterno o una condivisione di rete. Ogni gioco vi avrà una sua cartella.";
+"Copying the build" = "Copia della build";
+"Disk" = "Disco";
+"Every file of the copy is compared with the original: names, links and sizes." = "Ogni file della copia viene confrontato con l'originale: nomi, collegamenti e dimensioni.";
+"Freeing the old disk" = "Liberazione del vecchio disco";
+"In a folder on another disk" = "In una cartella su un altro disco";
+"Move to %@" = "Sposta su %@";
+"Move to This Mac" = "Sposta su questo Mac";
+"Moves the build folder and the Mac app to %@; the copy is checked before the original is deleted." = "Sposta la cartella di build e l'app per Mac in %@; la copia viene controllata prima di eliminare l'originale.";
+"Moving the build of %@ to %@" = "Spostamento della build di %1$@ su %2$@";
+"Moving the build of %@ to this Mac" = "Spostamento della build di %@ su questo Mac";
+"On %@" = "Su %@";
+"On %@, which is not connected: connect it to build or play" = "Su %@, che non è collegato: collegalo per compilare o giocare";
+"The build folder and the Mac app go to their new disk, file by file. The originals stay until the copy is checked." = "La cartella di build e l'app per Mac vanno sul nuovo disco, file per file. Gli originali restano finché la copia non è controllata.";
+"The build of %@ is on %@, which is not connected. Connect it, then build again." = "La build di %1$@ è su %2$@, che non è collegato. Collegalo, poi compila di nuovo.";
+"The first build goes beside the game" = "La prima build va accanto al gioco";
+"The first build goes to %@" = "La prima build va su %@";
+"The original build folder and Mac app are deleted; the game now uses the copy." = "La cartella di build e l'app per Mac originali vengono eliminate; il gioco ora usa la copia.";
+"this Mac" = "questo Mac";

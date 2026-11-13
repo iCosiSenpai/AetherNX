@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Builds and Mac apps on another disk.** Settings → Library → *Builds and Mac apps*: in a folder on an external drive or a network share, each game's build folder (extracted files, shaders, Xcode project: tens of GB for a large game) and its Mac app take no room on this Mac. A game's page shows where its build is and moves it there, or back, with the copy checked file by file before the original is deleted (`./aethernx move-build`). A build on a disk that is not connected says so instead of starting over on the Mac.
+- **Cartridge dumps with No-Intro names.** An XCI without a title ID in its name ("Game (USA, Europe) (En,…).xci") beside its update is the game's base, where the scan said "no base game NSP found"; a bare `v327680` in a name is the version.
+- The game apps on the iPhone and iPad read the game folder's Mods and Cheats, and open with an `aethernx-<title ID>://` link (`…://play` presses Play).
+
 ## 1.0.0
 
 A new Studio: one window for everything, a home for your library, mods and cheats, a setup that explains itself, and installs that move only what changed. The engine is the same as in 0.2.0 (nxnative up to `7479adf`): the next nxnative sync comes as an engine update, without a new app.
