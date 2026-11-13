@@ -104,6 +104,10 @@ class Failures(unittest.TestCase):
             (f"error: No profiles for '{BUNDLE}' were found: Xcode couldn't find any iOS App Development provisioning profiles matching '{BUNDLE}'.", 'bundle'),
             ('error: No Accounts: Add a new account in Accounts settings.', 'account'),
             ('error: No Account for Team "A1B2C3D4E5". Add a new account in Accounts settings', 'account'),
+            # without an account Xcode falls back to the team's wildcard profile: the capability errors after it are its consequence, not the cause
+            ('error: No Accounts: Add a new account in Accounts settings.\nerror: Provisioning profile "iOS Team Provisioning Profile: *" doesn\'t include the Increased Memory Limit capability.', 'account'),
+            ('error: Authentication failed: Make sure a bearer token was provided, it is properly configured and signed, and it has not expired.\n'
+             'error: Provisioning profile "iOS Team Provisioning Profile: *" doesn\'t include the iCloud capability.', 'api_key'),
             ('xcodebuild: error: Unable to find a destination matching the provided destination specifier:\n\t\t{ id:0000 }', 'destination'),
             ('error: Your account already has the maximum number of App IDs. (9120)', 'app_ids'),
             ('error: The maximum number of apps for free development profiles has been reached.', 'free_limit'),
@@ -327,7 +331,8 @@ class Install(unittest.TestCase):
 
     def test_no_account_stops_with_what_to_do(self):
         self.plan.write_text('No Accounts: Add a new account in Accounts settings.\n')
-        code, events = self.install()
+        with mock.patch.object(di, 'screen_locked', return_value=False):
+            code, events = self.install()
         self.assertEqual(code, 1)
         self.assertEqual(len(self.called('xcodebuild')), 1)   # nothing to retry
         self.assertFalse(self.called('xcrun'))
@@ -335,6 +340,13 @@ class Install(unittest.TestCase):
         self.assertTrue(last.startswith('[RED] signing for Fixture iPhone failed: Xcode has no Apple account')); self.assertIn('device_build.log', last)
         self.assertFalse(next(e for e in events if e['ev'] == 'stage_end' and e['name'] == di.SIGN)['ok'])
         self.assertFalse((self.work / 'xcode/install.json').exists())
+        # the Mac's screen locked: Xcode cannot read its Apple ID, and wildcard-profile errors follow; one run, and the words say to unlock it
+        self.environ['FAKE_CALLS_RESET'] = '1'
+        self.plan.write_text("No Accounts: Add a new account in Accounts settings.\nProvisioning profile \"iOS Team Provisioning Profile: *\" doesn't include the Increased Memory Limit capability.\n")
+        with mock.patch.object(di, 'screen_locked', return_value=True):
+            code, events = self.install()
+        self.assertEqual(code, 1)
+        self.assertIn("while this Mac's screen is locked", events[-1]['msg'])
 
     def test_a_failure_it_does_not_know_shows_xcodebuilds_own_line(self):
         self.plan.write_text('use of undeclared identifier\n')

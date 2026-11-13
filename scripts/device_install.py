@@ -182,7 +182,13 @@ def team_variant(bundle_id, team):
 
 
 FAILURES = (
-    # kind, pattern, what to tell the player (None: the caller retries)
+    # kind, pattern, what to tell the player (None: the caller retries). The account comes first: without one Xcode can only use the team's wildcard
+    # profile, so the capability errors that follow are its consequence, and dropping capabilities would only end in the same failure
+    ('api_key', r'Authentication failed: Make sure a bearer token|bearer token was provided',
+     "the App Store Connect API key was refused: it must be a team key with the Admin or App Manager role (a key made for notarization only cannot manage profiles)"),
+    ('account', r"No Accounts?:|No Account for Team|Add a new account in Accounts settings|doesn't have any .*accounts|Unable to log in with account|"
+                r'Authentication failed|authentication credentials are missing or invalid',
+     'Xcode has no Apple account for this team: add your Apple ID in Xcode › Settings › Accounts (or pass an App Store Connect API key: --api-key, --api-issuer), then run this again'),
     ('memory', r"doesn't include the Increased Memory Limit capability|doesn't include the com\.apple\.developer\.kernel\.increased-memory-limit entitlement", None),
     ('icloud', r"doesn't (?:include|support) the iCloud capability|doesn't include the com\.apple\.developer\.(?:icloud-container-identifiers|icloud-services|ubiquity-container-identifiers) entitlement|"
                r"doesn't match the entitlements file's value for the com\.apple\.developer\.(?:icloud|ubiquity)-container-identifiers entitlement|iCloud container .* (?:is not available|cannot be)", None),
@@ -191,15 +197,20 @@ FAILURES = (
      'your Apple ID has no free App ID left: a free account registers ten in seven days. Wait for the oldest to expire, or use a paid team'),
     ('free_limit', r'(?i)maximum number of (?:provisioning profiles|installed apps|apps for free development profiles|provisioned iOS devices)|code -36607',
      'the limit of a free Apple ID is reached (three apps on a device, a few devices): remove an app you sideloaded from the device, or use a paid team'),
-    ('account', r"No Accounts?:|No Account for Team|Add a new account in Accounts settings|doesn't have any .*accounts|Unable to log in with account|"
-                r'Authentication failed|authentication credentials are missing or invalid',
-     'Xcode has no Apple account for this team: add your Apple ID in Xcode › Settings › Accounts (or pass an App Store Connect API key: --api-key, --api-issuer), then run this again'),
     ('agreement', r'(?i)(?:program license agreement|PLA Update available|agreement.*(?:must be|has not been|needs to be) accepted)',
      'Apple wants a new agreement accepted first: sign in at developer.apple.com/account and accept it, then run this again'),
     ('destination', r'Unable to find a destination matching the provided destination specifier',
      'Xcode cannot reach the device: unlock it, keep it connected and trusted (and Developer Mode on), then run this again'),
     ('space', r'No space left on device', 'the disk with the build folder is full: the first device build copies the whole game into the app'),
 )
+
+
+def screen_locked():   # this Mac's login screen is up: Xcode reads its Apple ID only from an unlocked session, and reports "No Accounts" meanwhile
+    try: out = subprocess.run(['/usr/sbin/ioreg', '-n', 'Root', '-d1', '-a'], capture_output=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError): return False
+    try: users = plistlib.loads(out).get('IOConsoleUsers') or []
+    except Exception: return False
+    return any(u.get('CGSSessionScreenIsLocked') for u in users if isinstance(u, dict))
 
 
 def classify(output, bundle_id=''):
@@ -417,6 +428,8 @@ def install(folder, work, *, build_args, keys=None, device=None, team=None, file
             notes.append("signed without the Increased Memory Limit, which this team's profile cannot carry: a large game may be closed by iOS for memory")
             report.say("the team's provisioning profile cannot carry the Increased Memory Limit: signing without it (a large game may run out of memory)")
             continue
+        if kind == 'account' and screen_locked():
+            message = "Xcode cannot read its Apple ID while this Mac's screen is locked: unlock the Mac, then install again"
         report.end(False, message or f'xcodebuild stopped with exit code {code}')
         report.say(f"[RED] signing for {dev['name']} failed: {message or f'xcodebuild stopped with exit code {code}'} (the whole output: {logs / 'device_build.log'})")
         return 1
