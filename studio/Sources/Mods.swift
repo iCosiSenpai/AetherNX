@@ -49,6 +49,52 @@ enum GameExtras {
 
     static func modsFolder(in base: String) -> String { (base as NSString).appendingPathComponent("Mods") }
 
+    // MARK: The order and the mods off, for every device
+
+    static let stateFile = "mods.json"
+
+    /// `Mods/mods.json`: the mods turned off and their order, as the iPhone and iPad companion writes them too (docs/companion.md, Mods/mods.json).
+    struct ModState: Codable, Equatable {
+        var format = 1
+        var order: [String]
+        var off: [String]
+
+        init(order: [String], off: [String]) {
+            self.order = order
+            self.off = off
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            format = try c.decodeIfPresent(Int.self, forKey: .format) ?? 1
+            order = try c.decodeIfPresent([String].self, forKey: .order) ?? []
+            off = try c.decodeIfPresent([String].self, forKey: .off) ?? []
+        }
+    }
+
+    /// The folder's mods.json, or nil when it has none (or one of a later format).
+    static func readState(modsFolder: String) -> ModState? {
+        guard let data = try? Data(contentsOf: URL(filePath: (modsFolder as NSString).appendingPathComponent(stateFile))),
+              let state = try? JSONDecoder().decode(ModState.self, from: data), state.format <= 1 else { return nil }
+        return state
+    }
+
+    /// The order and the mods off: the folder's mods.json when it has one, else the game app's preference keys.
+    static func modState(modsFolder: String, domain: String) -> ModState {
+        readState(modsFolder: modsFolder) ?? ModState(order: strings(ordersKey, domain: domain), off: strings(offKey, domain: domain))
+    }
+
+    /// Saves a change in both: the file, which the other devices read, and the preference keys.
+    static func saveState(_ state: ModState, modsFolder: String, domain: String) {
+        let state = ModState(order: state.order, off: Array(Set(state.off)).sorted())
+        set(state.order.isEmpty ? nil : state.order, for: ordersKey, domain: domain)
+        set(state.off.isEmpty ? nil : state.off, for: offKey, domain: domain)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(state), (try? FileManager.default.createDirectory(atPath: modsFolder, withIntermediateDirectories: true)) != nil else { return }
+        try? (data + Data("\n".utf8)).write(to: URL(filePath: (modsFolder as NSString).appendingPathComponent(stateFile)), options: .atomic)
+    }
+
     /// The engine's own default on this Mac is `<DM_ROOT>/cheats`: a game's local folder keeps that name, so the cheats its Mac menu lists stay.
     static func cheatsFolder(in base: String, home: String = NSHomeDirectory()) -> String {
         (base as NSString).appendingPathComponent(base.hasPrefix(home + "/Library/Application Support/HorizonNative/") ? "cheats" : "Cheats")
@@ -135,9 +181,10 @@ extension AppModel {
     /// Writes what the game's Mac app reads at its next start: its mods on, in order, and its cheats folder.
     func refreshExtras(_ game: Game) {
         guard let id = game.titleId, let domain = CloudSaves.domain(for: game), let base = GameExtras.folder(for: game) else { return }
-        let mods = GameExtras.mods(in: GameExtras.modsFolder(in: base), order: GameExtras.strings(GameExtras.ordersKey, domain: domain), titleID: id)
-        let off = Set(GameExtras.strings(GameExtras.offKey, domain: domain))
-        let overlay = GameExtras.overlay(mods, off: off)
+        let folder = GameExtras.modsFolder(in: base)
+        let state = GameExtras.modState(modsFolder: folder, domain: domain)
+        let mods = GameExtras.mods(in: folder, order: state.order, titleID: id)
+        let overlay = GameExtras.overlay(mods, off: Set(state.off))
         GameExtras.set(overlay.isEmpty ? nil : overlay, for: GameExtras.foldersKey, domain: domain)
         let cheats = GameExtras.cheatsFolder(in: base)
         GameExtras.set(FileManager.default.fileExists(atPath: cheats) ? cheats : nil, for: GameExtras.cheatsKey, domain: domain)
@@ -188,9 +235,9 @@ struct ModsSection: View {
     @ViewBuilder
     private func content(id: String, domain: String, base: String) -> some View {
         let folder = GameExtras.modsFolder(in: base)
-        let order = GameExtras.strings(GameExtras.ordersKey, domain: domain)
-        let off = Set(GameExtras.strings(GameExtras.offKey, domain: domain))
-        let mods = GameExtras.mods(in: folder, order: order, titleID: id)
+        let state = GameExtras.modState(modsFolder: folder, domain: domain)
+        let off = Set(state.off)
+        let mods = GameExtras.mods(in: folder, order: state.order, titleID: id)
         HStack(spacing: 12) {
             Image(systemName: "puzzlepiece.extension")
                 .frame(width: 20)
@@ -215,8 +262,8 @@ struct ModsSection: View {
         ForEach(Array(mods.enumerated()), id: \.element.id) { index, mod in
             Divider()
             ModRow(mod: mod, isOn: !off.contains(mod.name), isFirst: index == 0, isLast: index == mods.count - 1,
-                   toggle: { on in setOn(mod, on, off: off, domain: domain) },
-                   move: { delta in move(mod, by: delta, in: mods, domain: domain) },
+                   toggle: { on in setOn(mod, on, state: state, folder: folder, domain: domain) },
+                   move: { delta in move(mod, by: delta, in: mods, state: state, folder: folder, domain: domain) },
                    remove: { trash(mod) })
         }
         if !mods.isEmpty {
@@ -227,18 +274,18 @@ struct ModsSection: View {
         }
     }
 
-    private func setOn(_ mod: GameExtras.Mod, _ on: Bool, off: Set<String>, domain: String) {
-        var off = off
+    private func setOn(_ mod: GameExtras.Mod, _ on: Bool, state: GameExtras.ModState, folder: String, domain: String) {
+        var off = Set(state.off)
         if on { off.remove(mod.name) } else { off.insert(mod.name) }
-        GameExtras.set(off.isEmpty ? nil : Array(off).sorted(), for: GameExtras.offKey, domain: domain)
+        GameExtras.saveState(.init(order: state.order, off: Array(off)), modsFolder: folder, domain: domain)
         model.refreshExtras(game)
     }
 
-    private func move(_ mod: GameExtras.Mod, by delta: Int, in mods: [GameExtras.Mod], domain: String) {
+    private func move(_ mod: GameExtras.Mod, by delta: Int, in mods: [GameExtras.Mod], state: GameExtras.ModState, folder: String, domain: String) {
         var names = mods.map(\.name)
         guard let i = names.firstIndex(of: mod.name), names.indices.contains(i + delta) else { return }
         names.swapAt(i, i + delta)
-        GameExtras.set(names, for: GameExtras.ordersKey, domain: domain)
+        GameExtras.saveState(.init(order: names, off: state.off), modsFolder: folder, domain: domain)
         model.refreshExtras(game)
     }
 
