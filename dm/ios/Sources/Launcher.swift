@@ -140,6 +140,10 @@ private struct LauncherView: View {
     @StateObject private var controllers = ControllerListModel()
     @StateObject private var cloud = CloudSavesState()
     @State private var memory = os_proc_available_memory()
+    @State private var checking = false
+    @State private var check = 0   // which Play the running check is for: one the player went on from without it is dropped
+    @State private var report: SaveSyncReport?
+    @State private var asking: SaveSyncReport.Step?
     @State private var headerGone = false
     @Environment(\.verticalSizeClass) private var vertical
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -170,20 +174,71 @@ private struct LauncherView: View {
         return o
     }
 
-    private func start() { controllers.merge = m.values["DM_PAD_MERGE"] == "1"; controllers.apply(); play() }
+    /// The game starts with these settings and controller choices
+    private func launch() { controllers.merge = m.values["DM_PAD_MERGE"] == "1"; controllers.apply(); play() }
 
-    private var playButton: some View {
-        Button(action: start) {
-            Label("Play", systemImage: "play.fill").font(.title3.weight(.semibold)).labelStyle(.titleAndIcon)
-                .padding(.horizontal, 18).frame(minHeight: 44)
+    private func isAsking(_ step: SaveSyncReport.Step) -> Binding<Bool> {
+        Binding(get: { asking == step }, set: { if !$0 && asking == step { asking = nil } })
+    }
+
+    /// Play, once the cloud's save is compared with this iPhone's (save_sync_report, SaveSyncReport): a save that changed on both sides is the player's pick, not the
+    /// newer file's, and a cloud save that did not come is said so before the game starts without it.
+    private func start() {
+        check += 1; checking = true; asking = nil
+        let mine = check
+        dm_cloud_saves_env()   // DM_SAVE_SYNC from the picked folder, as the game's mount will read it (front_ios.m calls it again at the start)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let r = Self.compare()
+            DispatchQueue.main.async {
+                guard checking, check == mine else { return }   // the player played without it
+                checking = false
+                switch SaveSyncReport.step(r) {
+                case .play(let choice): go(choice)
+                case let step: report = r; asking = step
+                }
+            }
         }
-        .buttonStyle(.borderedProminent)   // a solid capsule in the game's colour (white text on it passes 4.5:1, GameTint)
-        .buttonBorderShape(.capsule)
-        .tint(tint.fill)
-        .controlSize(.large)
-        .keyboardShortcut(.defaultAction)   // Return on an iPad keyboard, as in the Mac window
-        .focusCapsule(nav.isFocused(.play), tint)
-        .accessibilityHint("Starts the game with these settings")
+    }
+
+    /// Blocks while the cloud's file downloads (SaveSyncReport.waitMs at most). nil: no report (the host then decides as it always did)
+    private static func compare() -> SaveSyncReport? {
+        // getenv, not ProcessInfo.environment: main.m sets DM_SAVE and applies env.txt after that snapshot
+        guard let save = getenv("DM_SAVE") else { fputs("launcher: save sync: no DM_SAVE\n", stderr); return nil }
+        var buf = [CChar](repeating: 0, count: 1024)
+        guard save_sync_report(save, dm_save_title(), nil, SaveSyncReport.waitMs, &buf, buf.count) == 0 else {
+            fputs("launcher: save sync: no report on \(String(cString: save))\n", stderr)
+            return nil
+        }
+        let line = String(cString: buf)
+        fputs("launcher: save sync: \(line)\n", stderr)
+        return SaveSyncReport(line: line)
+    }
+
+    private func go(_ choice: String?) {
+        asking = nil
+        if let choice { setenv("DM_SAVE_SYNC_CHOICE", choice, 1); fputs("launcher: DM_SAVE_SYNC_CHOICE=\(choice)\n", stderr) }
+        launch()
+    }
+
+    @ViewBuilder private var playButton: some View {
+        VStack(spacing: 6) {
+            Button(action: start) {
+                Label("Play", systemImage: "play.fill").font(.title3.weight(.semibold)).labelStyle(.titleAndIcon)
+                    .padding(.horizontal, 18).frame(minHeight: 44)
+            }
+            .buttonStyle(.borderedProminent)   // a solid capsule in the game's colour (white text on it passes 4.5:1, GameTint)
+            .buttonBorderShape(.capsule)
+            .tint(tint.fill)
+            .controlSize(.large)
+            .keyboardShortcut(.defaultAction)   // Return on an iPad keyboard, as in the Mac window
+            .focusCapsule(nav.isFocused(.play), tint)
+            .accessibilityHint("Starts the game with these settings")
+            .disabled(checking)
+            if checking {   // the cloud save is being compared (start)
+                HStack(spacing: 6) { ProgressView(); Text("Checking the cloud save…").font(.callout).foregroundStyle(.secondary) }
+                Button("Play Without It") { checking = false; go("offline") }.font(.callout)
+            }
+        }
     }
 
     var body: some View {
@@ -305,6 +360,16 @@ private struct LauncherView: View {
             while !Task.isCancelled { controllers.refresh(); try? await Task.sleep(for: .seconds(1)) }
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DMCloudContainerResolved"))) { _ in cloud.refresh() }   // automatic iCloud became known
+        .confirmationDialog(SaveSyncReport.chooseTitle, isPresented: isAsking(.choose), titleVisibility: .visible, presenting: report) { r in
+            Button(r.localLabel(here: "iPhone")) { go(r.localChoice) }
+            Button(r.cloudLabel) { go(r.cloudChoice) }
+            Button("Cancel", role: .cancel) {}
+        } message: { r in Text(r.chooseMessage(here: "iPhone")) }
+        .confirmationDialog(SaveSyncReport.unreadableTitle, isPresented: isAsking(.unreadable), titleVisibility: .visible, presenting: report) { r in
+            Button("Play This iPhone's Save") { go("offline") }   // the mount does not wait for the cloud again
+            Button("Try Again") { DispatchQueue.main.async { start() } }
+            Button("Cancel", role: .cancel) {}
+        } message: { r in Text(r.unreadableMessage(here: "iPhone")) }
         .task {
             while !Task.isCancelled {
                 memory = os_proc_available_memory()

@@ -228,7 +228,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
                 }
                 else
                 {
-                    // horizonnative: the descriptor decides between a 1D texture and a texture buffer, so the 2D read below wraps x into rows of 16384 texels (see the TLDS Texture1DLodZero case)
+                    // nxnative: the descriptor decides between a 1D texture and a texture buffer, so the 2D read below wraps x into rows of 16384 texels (see the TLDS Texture1DLodZero case)
                     wrap1D = Sample1DAs2D;
                 }
             }
@@ -512,7 +512,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
                         {
                             if (Sample1DAs2D)
                             {
-                                // horizonnative: Maxwell fetches a 1D texture and a texture buffer with the same instruction, and the descriptor decides. With no type answer the read is
+                                // nxnative: Maxwell fetches a 1D texture and a texture buffer with the same instruction, and the descriptor decides. With no type answer the read is
                                 // 2D at (x & 0x3FFF, x >> 14): a 1D texture (a one-row 2D texture at most 16384 wide on the host) reads (x, 0) as before, and the host binds a texture
                                 // buffer in such a slot as a linear 2D texture of 16384-texel rows over the same memory (nvn_mtl.m tbuf_as_2d)
                                 Operand x = sourcesList[^1];

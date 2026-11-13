@@ -278,9 +278,8 @@ MAPS+=("$P/msl/$MSLDIR=$MSL_IOS/$MSLDIR" "$P=$APP")
   if [ -d "$(dirname "$ROMFS")/jit" ]; then MAPS+=("$P/jit=$(dirname "$ROMFS")/jit"); t "nn::jit image: $(dirname "$ROMFS")/jit"; fi
 fi
 t "pack IPA (already-compressed game files stored, everything else deflated)"
-# The pulling vertex libraries (<key>_bp, dm/gfx/tools/dmsh_pull.py) serve the hybrid pipelines of the Metal 4 path, which the launcher offers for every NVN game (DM_PSO_MTL4):
-# they are always packed (about 10 MB for Fire Emblem: Three Houses), as an Xcode build copies them. Leaving them out made the launcher's Metal 4 choice wait for every
-# pipeline instead of drawing with the stand-ins ("pulling library ... not usable"). IOS_PULL=0 leaves them out of an IPA without a pipeline archive, whose bases are made of them.
+# The device can enable Metal 4/prebuild at run time even when the profile defaults it off. Without an offline archive, its prebuild needs these pulling vertex libraries just as the hybrid pipelines do.
+# IOS_PULL=0 explicitly omits them; an IPA with an offline archive (pso/) always carries them, whatever IOS_PULL says (an Xcode build copies them always).
 # Keep this array nonempty: macOS Bash 3.2 treats an empty array as unset under set -u.
 ZS=$(gp zip_store); [ -z "${PROGRAMS_TSV:-}" ] || ZS=$(for g in $(prog_rows | cut -f2); do python3 "$DM/games/game.py" "$g" zip_store; done | tr ':' '\n' | sort -u | paste -sd: -)   # every program's
 PACK_OPTS=(--store "$ZS"); [ -n "${PSO:-}" ] || [ "${IOS_PULL:-1}" = 1 ] || PACK_OPTS+=(--skip-suffix _bp.metallib)

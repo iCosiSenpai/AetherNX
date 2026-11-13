@@ -1,7 +1,5 @@
 // Assassin's Creed II (The Ezio Collection, iPhone) reads occlusion reports before completion: replay without GPU work, then publish an empty query's real result.
-#include "game_profile.h"
-#undef DM_GAME_RENDER_COND
-#define DM_GAME_RENDER_COND 1   // Exercise the conditional-rendering path even with a profile that leaves it off.
+#include "game_profile.h"   // conditional rendering is evaluated for every game
 #define nvn_game_fps nvn_game_fps_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
@@ -27,7 +25,9 @@ int main(void) { @autoreleasepool {
     const char *e = getenv("DM_NVN_OCC_EARLY"); int early = e && !strcmp(e, "1"), trace = occ_trace();
     static uint64_t rec[2][2]; uint64_t before = gpu_ticks(), v = 0;
     state_reset(); atomic_store(&g_cur_frame, 42); report(rec[0]);
-    CHECK(g_npost == 1 && g_post[0].kind == 3 && g_post[0].frame == 42, "samples-passed completion retains its encode frame");
+    // the reset zeroes the running total (VIS_ZERO), the report writes it (VIS_REPORT): two completions, in submission order
+    CHECK(g_npost == 2 && g_post[0].kind == 3 && g_post[0].mode == VIS_ZERO && g_post[1].kind == 3 && g_post[1].mode == VIS_REPORT && g_post[1].frame == 42,
+          "samples-passed completion retains its encode frame");
     CHECK(early ? rec[0][0] != 0 && rec[0][1] >= before && rec[0][1] <= gpu_ticks() : rec[0][0] == 0 && rec[0][1] == 0, "report is provisional only with DM_NVN_OCC_EARLY=1");
     CHECK(rc_find((uint64_t)rec[0]) && !rc_value((uint64_t)rec[0], &v), "samples-passed stays unknown to conditional rendering");
 
