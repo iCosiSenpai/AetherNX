@@ -350,6 +350,7 @@ class Builds(Base):   # a builds folder (AETHERNX_BUILDS, Studio's Settings → 
             self.assertEqual(code, 0, err)
             self.assertEqual(cli.tree_listing(work), before)
             self.assertFalse((self.folder / cli.BUILD_POINTER).exists())
+            self.assertFalse((self.drive / 'My_ Game').exists())   # the game's folder on the drive goes with the last of it
             self.assertEqual(self.game()['mac_apps'], [str(self.folder / 'My Game.app')])
 
     def test_a_move_that_cannot_finish_leaves_the_original(self):
@@ -359,10 +360,15 @@ class Builds(Base):   # a builds folder (AETHERNX_BUILDS, Studio's Settings → 
         code, _, err = run('move-build', str(self.folder))
         self.assertEqual(code, 1); self.assertIn('is there already', err)
         self.assertTrue(work.is_dir()); self.assertFalse(there.exists())
-        os.rmdir(self.drive / 'My_ Game' / 'My Game.app')
+        shutil.rmtree(self.drive / 'My_ Game')
         with mock.patch.object(cli, 'copy_file', side_effect=OSError(28, 'No space left on device')):
-            with self.assertRaises(OSError): run('move-build', str(self.folder))
+            code, _, err = run('move-build', str(self.folder))
+        self.assertEqual(code, 1); self.assertIn('No space left on device', err); self.assertIn('the original is unchanged', err)
         self.assertTrue(work.is_dir()); self.assertFalse(there.exists())   # the partial copy is removed, the original kept
+        self.assertFalse((self.drive / 'My_ Game').exists())   # and the game's folder the move made there
+        with mock.patch.object(cli, 'keeps_links', return_value=False):   # a share that does not keep the build's link
+            code, _, err = run('move-build', str(self.folder))
+        self.assertEqual(code, 1); self.assertIn('does not keep symbolic links', err); self.assertTrue(work.is_dir())
 
     def test_a_build_on_a_disk_that_is_not_connected(self):
         gone = Path('/Volumes/AetherNX test drive that is not there/My Game/' + f'{self.TID}_build')

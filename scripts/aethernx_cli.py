@@ -19,6 +19,7 @@ The build itself is scripts/build_ipa_from_nsp.py; this tool only finds games, p
 """
 import argparse
 import contextlib
+import errno
 import json
 import os
 import platform
@@ -550,21 +551,62 @@ def copy_file(src, dst, on_bytes):   # one file, its data in 8 MB pieces so a la
     with contextlib.suppress(OSError): shutil.copystat(src, dst)   # a network share may refuse some of it; the data is what counts
 
 
-def copy_tree(src, dst, on_bytes):   # a folder, keeping its links as links
+def network_share(path):   # whether path is on a network share (smbfs, afpfs, nfs, webdav), from mount's list
+    v = str(volume_of(path))
+    if v == '/': return False
+    try: out = subprocess.run(['/sbin/mount'], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError): return False
+    return any(re.search(rf' on {re.escape(v)} \((smbfs|afpfs|nfs|webdav)', line) for line in out.splitlines())
+
+
+def keeps_links(folder):
+    """Whether a disk keeps symbolic links. Not a network share: on an SMB share (macOS smbfs) a link read back right after it was made, and a few seconds
+    later, with other files written beside it, lstat still called it a link and readlink refused it (EINVAL). The builds AetherNX makes have none"""
+    if network_share(folder): return False
+    t = Path(folder) / f'.aethernx-link-test-{os.getpid()}'
+    try:
+        os.symlink('aethernx', t)
+        return os.readlink(t) == 'aethernx'
+    except OSError: return False
+    finally:
+        with contextlib.suppress(OSError): t.unlink()
+
+
+def tree_bytes(root):   # the bytes in a folder being written by another process: a file that goes away while it is counted (ditto's .BC.T_ temporaries) counts 0
+    total = 0
+    for d, _, files in os.walk(root):
+        for name in files:
+            with contextlib.suppress(OSError): total += os.lstat(os.path.join(d, name)).st_size
+    return total
+
+
+def copy_tree(src, dst, on_bytes, jobs=8):
+    """A folder, keeping its links as links: the folders and links first, then the files, several at a time (on a network share each file costs round
+    trips, and a build folder holds thousands: 2,000 shader files one by one took most of five minutes over SMB)"""
     if src.is_symlink(): os.symlink(os.readlink(src), dst); return
     if src.is_file(): copy_file(src, dst, on_bytes); return
+    import concurrent.futures
+    import threading
+    lock = threading.Lock()
+    def counted(n):
+        with lock: on_bytes(n)
     dst.mkdir()
+    todo, links = [], []
     for d, dirs, files in os.walk(src):
         here = dst / Path(d).relative_to(src)
-        for name in dirs:
+        for name in dirs + files:
             q = Path(d) / name
-            if q.is_symlink(): os.symlink(os.readlink(q), here / name)
-            else: (here / name).mkdir()
-        for name in files:
-            q = Path(d) / name
-            if q.is_symlink(): os.symlink(os.readlink(q), here / name)
-            else: copy_file(q, here / name, on_bytes)
+            if q.is_symlink(): links.append((os.readlink(q), here / name))
+            elif q.is_dir(): (here / name).mkdir()
+            else: todo.append((q, here / name))
         dirs[:] = [n for n in dirs if not (Path(d) / n).is_symlink()]
+    with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
+        for f in [pool.submit(copy_file, a, b, counted) for a, b in todo]: f.result()   # the first failure stops the move
+    # The links last, one at a time, each read back: on an SMB share (macOS smbfs) a link made while other writes run stayed a stub that lstat calls a
+    # link and readlink refuses (EINVAL), 2,000 parallel file copies beside it; made alone afterwards, it holds
+    for target, path in links:
+        os.symlink(target, path)
+        if os.readlink(path) != target: raise OSError(errno.EIO, f'the link {path.name} does not read back')
 
 
 def copy_bundle(src, dst, on_bytes):   # an app with ditto, which keeps all of a signed bundle; its progress from the size copied so far
@@ -572,10 +614,10 @@ def copy_bundle(src, dst, on_bytes):   # an app with ditto, which keeps all of a
     seen = 0
     while proc.poll() is None:
         time.sleep(1)
-        now = sum(v for v in tree_listing(dst).values() if isinstance(v, int)) if dst.exists() else 0
+        now = tree_bytes(dst) if dst.exists() else 0
         if now > seen: on_bytes(now - seen); seen = now
     if proc.returncode: raise CliError(f'ditto could not copy {src.name}: {(proc.stderr.read() if proc.stderr else "").strip()[-300:]}')
-    total = sum(v for v in tree_listing(dst).values() if isinstance(v, int))
+    total = tree_bytes(dst)
     if total > seen: on_bytes(total - seen)
 
 
@@ -612,7 +654,13 @@ def cmd_move_build(args):
     while not base.exists(): base = base.parent
     free = shutil.disk_usage(base).free
     if free < total + (1 << 30): raise CliError(f'{volume_of(dst).name} has {free / 1e9:.1f} GB free; the build and its apps need {total / 1e9:.1f} GB')
+    new_parent = not dst.parent.exists()
     dst.parent.mkdir(parents=True, exist_ok=True)
+    links = sum(1 for lst in listings.values() for v in lst.values() if isinstance(v, str) and v.startswith('link:'))
+    if links and not keeps_links(dst.parent):
+        if new_parent:
+            with contextlib.suppress(OSError): dst.parent.rmdir()
+        raise CliError(f'{volume_of(dst).name} does not keep symbolic links reliably (a network share), and the build has {links}: choose a folder on a drive')
     made = []
     def stop(signum, frame): raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, stop)
@@ -635,11 +683,14 @@ def cmd_move_build(args):
                 diff = sorted(set(got.items()) ^ set(listings[a].items()))[:3]
                 raise CliError(f'the copy of {a.name} differs from the original ({", ".join(f"{k}: {v}" for k, v in diff)}); the original is unchanged')
         rep.end(True, f'{sum(len(lst) for lst in listings.values()):,} items match')
-    except BaseException:
+    except BaseException as e:
         for b in made:
             with contextlib.suppress(OSError):
                 if b.is_dir() and not b.is_symlink(): shutil.rmtree(b)
                 else: b.unlink()
+        if new_parent:
+            with contextlib.suppress(OSError): dst.parent.rmdir()   # the game's folder on that disk, made for this move and empty again
+        if isinstance(e, OSError): raise CliError(f'the copy to {volume_of(dst).name} stopped ({e.strerror or e}); the original is unchanged') from e
         raise
     finally:
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
@@ -651,6 +702,8 @@ def cmd_move_build(args):
             if a.is_dir() and not a.is_symlink(): shutil.rmtree(a)
             else: a.unlink()
         except OSError as e: left.append(f'{a} ({e.strerror})')
+    if not left and src.parent != folder:
+        with contextlib.suppress(OSError): src.parent.rmdir()   # the game's folder on the disk it left, empty now
     rep.end(not left, 'removed' if not left else f'not all removed: {"; ".join(left)}')
     if left: rep.say(f'[RED] the build is now in {dst}, but these could not be removed: {"; ".join(left)}'); return 1
     rep.say(f'the build of {g["name"]} is now in {dst}')
