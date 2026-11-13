@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Builds and Mac apps on another disk.** Settings → Library → *Builds and Mac apps*: in a folder on an external drive or a network share, each game's build folder (extracted files, shaders, Xcode project: tens of GB for a large game) and its Mac app take no room on this Mac. A game's page shows where its build is and moves it there, or back, with the copy checked file by file before the original is deleted (`./aethernx move-build`). A build on a disk that is not connected says so instead of starting over on the Mac.
+- **Save backups.** The Saves section of a game's page lists the backups beside the save (the cloud sync's, made before it replaces a save, and yours), with **Back Up Now** and **Restore**: a restore sets this Mac's save aside first, and the game sends the restored save to iCloud Drive at its next start.
 - **Cartridge dumps with No-Intro names.** An XCI without a title ID in its name ("Game (USA, Europe) (En,…).xci") beside its update is the game's base, where the scan said "no base game NSP found"; a bare `v327680` in a name is the version.
 - The game apps on the iPhone and iPad read the game folder's Mods and Cheats, and open with an `aethernx-<title ID>://` link (`…://play` presses Play).
 
