@@ -148,9 +148,21 @@ def package_contents(paths):
             out[p] = f'cannot be read ({e.strerror})'; continue
         if not tids and (m := re.search(r'\[([0-9A-Fa-f]{16})\]', p.name)): tids.append(int(m[1], 16))
         if not tids: out[p] = 'no ticket and no [title ID] in its name; a build reads its content meta with prod.keys'; continue
-        v = int(m[1]) if (m := re.search(r'\[v(\d+)\]', p.name)) else 0
+        m = re.search(r'\[v(\d+)\]', p.name) or re.search(r'(?<![0-9A-Za-z])v(\d{5,}|0)(?![0-9])(?!\.\d)', p.name)   # [v327680], else a bare v327680 (versions are 0 or multiples of 65536)
+        v = int(m[1]) if m else 0
         out[p] = [('Application' if t & 0xFFF == 0 else 'Patch' if t & 0xFFF == 0x800 else 'AddOnContent', t, v) for t in dict.fromkeys(tids)]
+    # A cartridge dump (XCI / XCZ) has no ticket, and No-Intro names ("Game (USA, Europe) (En,Ja,...).xci") carry no title ID. Beside the update or DLC of one game it is
+    # that game's base: the build reads its content meta with prod.keys and stops if it is not (Hyrule Warriors: Age of Calamity, an XCI and its v327680 update NSP)
+    apps = {t & ~0xFFF if t & 0xFFF in (0, 0x800) else (t & ~0xFFF) - 0x1000 for m in out.values() if not isinstance(m, str) for _, t, _ in m}
+    for p, m in out.items():
+        if isinstance(m, str) and len(apps) == 1 and is_cartridge(p): out[p] = [('Application', next(iter(apps)), 0)]
     return out
+
+
+def is_cartridge(path):   # an XCI / XCZ: the card header's magic at 0x100 (is_package in the packing script)
+    try:
+        with open(path, 'rb') as f: f.seek(0x100); return f.read(4) == b'HEAD'
+    except OSError: return False
 
 
 def device_install_record(work):

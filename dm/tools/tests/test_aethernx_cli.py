@@ -71,6 +71,19 @@ class Scan(Base):
         self.assertEqual([e['folder'] for e in errors], [str(lib)])
         self.assertIn('more than one game in the folder', errors[0]['message']); self.assertIn('listed on their own', errors[0]['message'])
 
+    def test_a_cartridge_dump_without_a_title_id_is_the_base_of_the_update_beside_it(self):
+        game = self.root / 'Hyrule'
+        game.mkdir()
+        (game / 'Hyrule Warriors (USA, Europe) (En,Ja).xci').write_bytes(bytes(0x100) + b'HEAD' + os.urandom(60))   # a No-Intro name: no [title ID]
+        nsp(game / 'Hyrule Warriors [01002B00111A2800] v327680.nsp')   # a bare version, as the file it stands for
+        games, errors = scan(game)
+        self.assertEqual(errors, [])
+        g = next(iter(games.values()))
+        self.assertEqual((g['title_id'], [u['version'] for u in g['updates']]), ('01002B00111A2000', [327680]))
+        (game / 'Other [0100000000550800][v65536].nsp').write_bytes(b'PFS0' + struct.pack('<II', 0, 0) + os.urandom(68))   # two games' updates: whose base it is cannot be told
+        games, errors = scan(game)
+        self.assertEqual(len(errors), 1)
+
     def test_a_single_games_folder_with_its_update_in_a_subfolder_is_one_game(self):
         single = self.root / 'Single'
         nsp(single / 'Single [0100000000440000][v0].nsp'); nsp(single / 'Update/Single [0100000000440800][v65536].nsp')
