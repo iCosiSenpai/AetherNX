@@ -149,6 +149,8 @@ final class AppModel {
     private(set) var lastSuccess: [Game.ID: JobOutcome] = [:]
     /// Raised when a game's mods or cheats changed, so their sections read their folders again.
     var extrasRevision = 0
+    /// Raised when Studio changed a save (a backup made or restored), so the Saves section reads it again.
+    var savesRevision = 0
     /// studio/tools/snapshots.swift: the sidebar draws no selection (its translucent highlight cannot be drawn offscreen, and comes out black)
     @ObservationIgnored var snapshotMode = false
     private(set) var activity: [LogLine] = []
@@ -389,6 +391,41 @@ final class AppModel {
     func removeLibraryFolder(_ path: String) {
         libraryFolders.removeAll { $0 == path }
         rescan()
+    }
+
+    /// Back Up Now: a copy of the game's save in its backups (SaveBackups).
+    func backUpSave(_ game: Game) {
+        guard let dir = game.saveDir, !playLog.isRunning(game) else { return }
+        do {
+            let path = try SaveBackups.backUp(saveDir: dir)
+            log(String(localized: "The save of \(game.name) is backed up: \((path as NSString).lastPathComponent)."), kind: .info)
+        } catch {
+            errorMessage = String(localized: "The save of \(game.name) could not be backed up: \(error.localizedDescription)")
+        }
+        savesRevision += 1
+    }
+
+    /// Restore: after a confirmation, the backup becomes the game's save, and the save it replaces goes to the backups.
+    func confirmRestore(_ backup: SaveBackups.Backup, of game: Game) {
+        guard let dir = game.saveDir else { return }
+        let when = SavesSection.label(backup)
+        confirmation = Confirmation(
+            title: String(localized: "Restore this save of \(game.name)?"),
+            message: String(localized: "The save from \(when) takes the place of the one on this Mac, which is kept in the backups (set aside by a restore). With cloud saves on, the game sends it to iCloud Drive at its next start."),
+            actionTitle: String(localized: "Restore")) { [weak self] in
+            guard let self else { return }
+            guard !self.playLog.isRunning(game) else {
+                self.errorMessage = String(localized: "Quit \(game.name), then restore its save.")
+                return
+            }
+            do {
+                try SaveBackups.restore(backup, saveDir: dir)
+                self.log(String(localized: "The save of \(game.name) is now the one from \(when)."), kind: .info)
+            } catch {
+                self.errorMessage = String(localized: "The save of \(game.name) could not be restored: \(error.localizedDescription)")
+            }
+            self.savesRevision += 1
+        }
     }
 
     /// Settings → Library: a folder for builds and Mac apps, on another disk. Nothing changes when the panel is cancelled.
