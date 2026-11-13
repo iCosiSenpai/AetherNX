@@ -33,3 +33,7 @@ dm/build/
 
 # Local plan and context notes for agents (requests, status, decisions); never committed
 /plan-context/
+
+# The website, built by site/tools/build.py (.github/workflows/pages.yml)
+/_site/
+site/tools/__pycache__/
