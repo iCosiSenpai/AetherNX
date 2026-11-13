@@ -6,6 +6,9 @@
 #    or: push_romfs.sh <device UDID> <bundle ID> <RomFS.img>   (the image build_ipa_from_nsp.py --romfs separate prints: <game>_build/extract/<version>/RomFS.img)
 # A build made with DM_COPY_ROMFS=NO carries the identity of its image (romfs.id); the app uses only a Documents/romfs.img with that identity, so push again whenever the game or its version changed.
 # Run it while the app (any build with that bundle ID) is installed. Rerun after a failure, before launching the game. A direct image push leaves DLC unchanged.
+# The whole body is one { …; exit; } block: bash reads a script while it runs it, and a copy of an hour (a large image over Wi-Fi) outlasts an engine update that rewrites
+# this file; read whole first, the run is the one that started (a rewrite mid-copy gave "syntax error near unexpected token `fi'" after the copy, and exit 0).
+{
 set -eu
 [ "$#" = 3 ] || { [ "$#" = 4 ] && [ "$4" = --repack ]; } || { echo "usage: $0 <device UDID> <bundle ID> <resources.env> [--repack]" >&2; exit 1; }
 dev=$1 id=$2 sync_aoc=0
@@ -106,3 +109,5 @@ if [ "$sync_aoc" = 1 ]; then
     else echo "no DLC in this build; Documents/aoc left as it is (afcclient would empty it)"; fi
 fi
 echo "game files on the phone: $id"
+exit
+}
