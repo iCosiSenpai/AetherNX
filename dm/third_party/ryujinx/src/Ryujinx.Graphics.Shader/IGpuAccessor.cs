@@ -39,6 +39,15 @@ namespace Ryujinx.Graphics.Shader
         }
 
         /// <summary>
+        /// NVN2 (Switch 2) graphics stages: the stage's own constant bank, c[25 + stage index], which holds the buffer entries the game pushes into graphics push block
+        /// 1 + stage index; the translator maps it onto that block of c[24] (AStageBlock). -1 for other shaders.
+        /// </summary>
+        int QueryAmpereStageBank()
+        {
+            return -1;
+        }
+
+        /// <summary>
         /// NVN2 (Switch 2) task and mesh shaders, translated as compute: the byte offsets in shared memory of the stage memory the build reads back (dmsh_meshstage.py): the
         /// workgroup's number, the stage input (a task's payload), the outputs (a payload, or a mesh shader's attributes) and a mesh shader's primitive bytes; null for other shaders.
         /// </summary>
@@ -451,7 +460,7 @@ namespace Ryujinx.Graphics.Shader
         }
 
         /// <summary>
-        /// horizonnative: a 1D integer-coordinate fetch (TLD / TLDS 1D) of the bound texture handle was translated as a 2D read at (x &amp; 0x3FFF, x &gt;&gt; 14),
+        /// nxnative: a 1D integer-coordinate fetch (TLD / TLDS 1D) of the bound texture handle was translated as a 2D read at (x &amp; 0x3FFF, x &gt;&gt; 14),
         /// because the texture type query did not say it is a texture buffer.
         /// </summary>
         /// <param name="handle">Texture handle</param>

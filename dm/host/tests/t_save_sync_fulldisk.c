@@ -5,7 +5,7 @@
 // device's whole or not at all, and with room again the next start does what this one could not.
 //   (1) the cloud folder's volume is full: the game's save is committed on the device; the send fails and says so; the cloud keeps the save it had, whole, with nothing
 //       left beside it; the Mac launcher's send after the game fails the same way; with room again the next start sends it
-//   (2) the device's volume is full, the cloud has a newer save: the start brings nothing in and leaves the device's save as it was, with no <save>.sync-stuck;
+//   (2) the device's volume is full, the cloud has a newer save: the start brings nothing in and leaves the device's save as it was, with no <save>.pull (journal);
 //       the cloud's newer save is not replaced by the older one; a save the game writes then is whole, the old one or the new one; with room again the next start
 //       brings the cloud's save in and keeps the device's in its backups
 // usage: t_save_sync_fulldisk <a folder on the small volume> <a folder on another volume>; it refuses a first volume of 1 GB or more, or the second one's volume
@@ -144,7 +144,7 @@ int main(int argc, char **argv) {
     CHECK(cloud_has(cf, roomy, "game.dat", "v1"), "the cloud keeps the save it had, whole and readable");
     CHECK(entries(cdir) == 1, "nothing is left beside it (%d names in the game's cloud folder)", entries(cdir));
     CHECK(after_exit(A, cloud, id) == 0 && cloud_has(cf, roomy, "game.dat", "v1") && entries(cdir) == 1, "the launcher's send after the game fails the same way");
-    snprintf(q, sizeof q, "%s.sync-stuck", A); CHECK(!exists(q), "no pull was under way: no %s.sync-stuck", "save");
+    snprintf(q, sizeof q, "%s.pull", A); CHECK(!exists(q), "no pull was under way: no %s.pull", "save");
     unfill();
     CHECK(session(A, cloud, NULL, NULL) == 0 && cloud_has(cf, roomy, "game.dat", "v2"), "with room again, the next start sends it");
 
@@ -163,7 +163,7 @@ int main(int argc, char **argv) {
     r = session(B, cloud2, NULL, NULL);
     snprintf(q, sizeof q, "%s/world.bin", B);
     CHECK(same(p, "b1") && !exists(q), "the start brings nothing in: the device's save is as it was, no part of the cloud's in it (session %d)", r);
-    snprintf(q, sizeof q, "%s.sync-stuck", B); CHECK(!exists(q), "no move was begun: no save.sync-stuck");
+    snprintf(q, sizeof q, "%s.pull", B); CHECK(!exists(q), "no move was begun: no save.pull left pending");
     CHECK(cloud_has(cf2, roomy, "game.dat", "a2"), "the cloud's newer save is not replaced by the device's older one");
     r = session(B, NULL, "game.dat", "b2");
     CHECK(same(p, "b1") || same(p, "b2"), "a save the game writes on the full volume is whole: the old one or the new one (%s, session %d)", same(p, "b2") ? "new" : "old", r);

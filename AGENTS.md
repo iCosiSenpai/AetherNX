@@ -37,7 +37,7 @@ The NSO rewriter adapts AArch64 game modules to Apple's process and memory rules
 
 ## Shader chain and shipped tools
 
-`DMSH_CHAIN` in `dm/gfx/nvn/dmsh_chain.h` identifies the shared translation chain. `dm/gfx/tools/dmsh_chain.py` lists its inputs; `dmsh_chain.lock` pins the translator assemblies, embedded source digest, SPIRV-Cross and Metal compilers. Ship artifacts matching source and lock. Release assemblies must not contain personal build-machine paths or debug symbols.
+`DMSH_CHAIN` in `dm/gfx/nvn/dmsh_chain.h` identifies the shared translation chain. `dm/gfx/tools/dmsh_chain.py` lists its inputs; `dmsh_chain.lock` pins the native translator, its embedded source digest, SPIRV-Cross and Metal compilers. Ship artifacts matching source and lock. Shipped binaries must not contain personal build-machine paths or debug symbols.
 
 1. After changing a chain input or rebuilding a pinned tool, update the tool lock as needed, run `python3 dm/gfx/tools/dmsh_chain.py --header`, and commit the resulting lock/header with the change.
 2. Rebuild affected games' shader libraries in separate output directories, including iOS libraries when applicable. Profile inputs stamp the libraries; generated `c1_full.tsv` and `cb_extent.tsv` must match that stamp.

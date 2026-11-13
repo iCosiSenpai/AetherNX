@@ -6,18 +6,19 @@
 // seconds after a Commit, on a thread of its own (the game never waits), when the iPhone app goes to the background, and from the Mac launcher once the host has exited.
 // Which way: <DM_SAVE>.sync keeps the hash of the save last known to be the same here and in the cloud, and the cloud file it was (another folder chosen: a first sync with it).
 // Only the cloud's changed: it comes in; only this one changed: it goes out; both changed (played on both without syncing in between, or the first sync of a device that has a
-// save of its own): the start decides. A front end that asks the player sets DM_SAVE_SYNC_CHOICE (save_sync.c, read_choice): with no choice, neither replaces the other, the
-// game plays on with this device's and nothing is sent; with one, the chosen save wins. Without DM_SAVE_SYNC_CHOICE the newer one wins. Only the start decides: a send replaces
-// a cloud save only when it is no save, the one last synced, damaged, or the one the start chose against. A cloud that changed since (or that the start could not read) waits
-// for the next start.
+// save of its own): the start decides. A front end that asks the player (the Mac and iPhone launchers, from save_sync_report below) sets DM_SAVE_SYNC_CHOICE (save_sync.c,
+// read_choice): with no choice, neither replaces the other, the game plays on with this device's and nothing is sent; with one, the chosen save wins. Without
+// DM_SAVE_SYNC_CHOICE the newer one wins. Only the start decides: a send replaces a cloud save only when it is no save, the one last synced, damaged, or the one the start
+// chose against. A cloud that changed since (or that the start could not read) waits for the next start.
 // Every save this replaces, here or in the cloud, is kept first in <DM_SAVE>-backups/<date> <side>; the newest 10 of each side stay (pruned only once the backup is whole and,
 // when the send replaces the save, once the replacement went through).
-// A save folder that cannot be read is an error, never "no save": the mount turns sync off and a send sends nothing. A pull moves this device's folders to the backup and the
-// cloud's in, putting back every move when one fails; this device's save never passes through <DM_SAVE>.sync-tmp. <DM_SAVE>.sync-stuck is on disk before the first move and
-// goes once the save is whole again: after a stop between the moves, or a failure that could not be put back, it names the backup holding this device's save, and nothing is
-// synced until it is deleted. A fetch downloads to a file of its own, so one abandoned at
+// A save folder that cannot be read is an error, never "no save": the mount turns sync off, a pull moves nothing and a send sends nothing. A pull writes its journal,
+// <DM_SAVE>.pull, before the first of this device's folders moves, and removes it once the cloud's save is wholly in place; this device's save never passes through
+// <DM_SAVE>.sync-tmp. A pull that fails, or one the app was killed in, is put back from the journal (at once, or by the next start's first mount, whatever DM_SAVE_SYNC
+// says); while it is pending nothing is sent, and a journal that cannot be put back refuses the mount. A fetch downloads to a file of its own, so one abandoned at
 // its time limit never removes a later fetch's file (dm/host/tests/t_save_sync_faults.c).
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 
 #define SS_HASH 32   // hex digits of a save's hash: the first 16 bytes of a SHA-256
@@ -27,6 +28,7 @@ typedef struct {
     int64_t saved;            // the newest file's modification time (seconds since 1970): which of two changed saves is newer
     char title[24], device[64];
     int files;                // regular files; 0 = no save
+    int64_t bytes;            // their contents' size: tells the player a new game's save from one with progress (save_sync_report)
 } ss_meta;
 
 // ---- the parts (dm/host/tests/t_save_sync.c calls them) ----
@@ -42,8 +44,24 @@ typedef enum { SS_KEEP, SS_PULL, SS_PUSH, SS_ASK } ss_way;
 // player (`ask`), else the newer one by the times (the same time: this device's)
 ss_way ss_decide(const char *local, const char *base, const char *remote, int64_t local_saved, int64_t remote_saved, int ask, int *both);
 
+// ---- what a front end asks the player with (docs/frontends.md, The cloud saves folder) ----
+// Before the start, the two saves as the game's first mount will compare them, in one line of key=value pairs (no newline):
+//   sync=<0 off | 1 on> cloud=<1 read | 0 no save there (or a damaged file, which the mount replaces) | -1 not read within wait_ms>
+//   local=<hash|-> saved=<secs> files=<n> size=<bytes> chash=<hash|-> csaved=<secs> cfiles=<n> csize=<bytes> cdevice=<model, e.g. iPhone17,1|-> sametitle=<0|1> conflict=<0|1> pull=<0|1>
+// pull = a pull of the cloud's save did not finish (<save>.pull): what is in place may be half the cloud's, so conflict is 0; the start's mount puts this device's save back first
+// conflict = both changed since the last sync (or this device has never synced and both have a save): the case the front end shows both saves for and answers with
+// DM_SAVE_SYNC_CHOICE=local:<local> or cloud:<chash>; with no conflict it passes `ask`, and with cloud=-1 `offline` (the mount does not wait again).
+// `save` is the committed save folder (DM_SAVE), `title` the title ID, `folder` the cloud folder as DM_SAVE_SYNC would name it (NULL: DM_SAVE_SYNC itself), and
+// `wait_ms` how long the cloud's file may take to come (<= 0: as long as the mount waits). Blocks that long at most: call it off the main thread.
+// 0 on success, -1 when the arguments do not fit or this device's save cannot be read
+int save_sync_report(const char *save, const char *title, const char *folder, int wait_ms, char *out, size_t n);
+
 // ---- the host ----
-void save_sync_mount(const char *save, const char *title);   // the game's first save mount (hle_fs.c): brings the cloud's save in when it is the one to keep, starts the sender
+const char *dm_save_title(void);          // the title ID the cloud file is named after (hle_fs.c, from the game's profile): for a front end in the host's process (the iPhone launcher)
+// The game's first save mount (hle_fs.c): puts back this device's save from a pull of the cloud's that did not finish (<save>.pull, whatever DM_SAVE_SYNC says), then
+// brings the cloud's save in when it is the one to keep, and starts the sender. 0: the save may be mounted (whether or not the cloud's came in); -1: it may not, as this
+// device's save could not be put back whole (the log says where it is; the next start tries again). A second mount gets the first's answer
+int save_sync_mount(const char *save, const char *title);
 void save_sync_committed(void);           // a Commit went through (hle_fs.c, under its locks: it only wakes the sender)
 int save_sync_flush(int timeout_ms);      // sends now what was committed and not sent (the iPhone app going to the background): 1 = in step with the cloud, 0 = not (yet)
 int save_sync_after_exit(const char *save, const char *title);   // the Mac launcher once the host has exited (a crash included): 1 = in step, 0 = not

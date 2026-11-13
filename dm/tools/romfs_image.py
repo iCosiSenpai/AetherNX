@@ -21,6 +21,10 @@ MAGIC = b'DMROMFS1'
 HEAD = struct.Struct('<8sQQQ')
 ENT = struct.Struct('<QQIHBB')
 GUEST_NAME = 'org.d2rmobile.guest-name'
+# Files a dump tool leaves in every folder of the game's tree, which are not game files: an FTP dump keeps the server's listing as .listing (as the NUP spec's §6.3 says a producer
+# may). Packed, a game that lists a folder sees one more entry: Nintendo Switch Sports Resort cuts each name at its first '.', loaded "Parameter/<folder>/" with an empty name, got
+# no resource and crashed at main+0x9d7c60. A folder's artifacts are left out of the image (and out of a NUP's, pack_nup.py), as they are of the survey's file list
+ARTIFACTS = {b'.listing'}
 
 
 def guest(parent, name):
@@ -37,7 +41,8 @@ def children(path):
         for e in it:
             if e.is_symlink() or not (e.is_dir(follow_symlinks=False) or e.is_file(follow_symlinks=False)):
                 raise ValueError(f'{e.path}: a link or special file in a RomFS folder; it holds folders and plain files only')
-            out.append((guest(path, e.name).encode(), e.path, e.is_dir(follow_symlinks=False)))
+            name, isdir = guest(path, e.name).encode(), e.is_dir(follow_symlinks=False)
+            if isdir or name not in ARTIFACTS: out.append((name, e.path, isdir))
     out.sort()
     return out
 

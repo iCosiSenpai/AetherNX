@@ -40,6 +40,7 @@ int dm_detclock_enabled(void) { return 0; }
 void dm_audio_suspend(int on) { (void)on; }
 void guest_clock_freeze_for(int reason, int on) { (void)reason; (void)on; }
 void dm_gfx_suspend(int on) { (void)on; }
+void dm_hid_opmode_changed(void) {}   // hle_oe.c dm_set_opmode: the npads follow the console mode (hle_hid.c); not exercised here
 __thread uint64_t dm_clock_reads;   // guest clock reads per thread (hle_os.c in the host; thr_yield reads it)
 void dm_host_shutdown_then(const char *why, void (*then)(void *), void *arg) { (void)why; (void)then; (void)arg; abort(); }   // ExecuteProgram of another packed program: none here
 void dm_host_shutdown(const char *why) { (void)why; abort(); }

@@ -49,7 +49,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                 }
             }
 
-            // horizonnative: the reads whose handle merges several c[2] handles, once every other read has registered its texture (BindlessElimination.TryTableHandle)
+            // nxnative: the reads whose handle merges several c[2] handles, once every other read has registered its texture (BindlessElimination.TryTableHandle)
             for (int blkIndex = 0; blkIndex < context.Blocks.Length; blkIndex++)
             {
                 BindlessElimination.RunPass(context.Blocks[blkIndex], context.ResourceManager, context.GpuAccessor);
@@ -391,7 +391,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                     {
                         Debug.Assert(src.AsgOp != null);
 
-                        // horizonnative (from MacNativeGames' translator patch 0002, after Ryujinx_Optime 01a1e37f): follow only into a producer that will be removed
+                        // nxnative (from MacNativeGames' translator patch 0002, after Ryujinx_Optime 01a1e37f): follow only into a producer that will be removed
                         // itself. One with side effects (an atomic, a call) stays in the block when its result is unused, so its sources are still live; dropping
                         // their uses here let the next dead-code pass delete the chain that feeds it, and the atomic then read undefined values.
                         // The same holds for a producer with another destination still in use: an image read whose .x is dead but whose .y is not stays, and following it
