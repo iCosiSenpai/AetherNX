@@ -30,6 +30,7 @@ ident=$(python3 -I "$(dirname "$0")/../dm/tools/romfs_image.py" --identity "$img
 echo "identity: $ident"
 # Documents/romfs.img.id holds the identity of the image after its last complete copy: when it is this image's (and, over AFC, the image on the device has its
 # size), the copy is skipped, so installing the app again (an engine update, a setting) moves only the app. ROMFS_PUSH_FORCE=1 copies all the same.
+# afcclient's get refuses to overwrite a file without -f, and $have is one mktemp already made: without -f the check never matched and every push copied the image again.
 have=$(mktemp "${TMPDIR:-/tmp}/romfs-id.XXXXXX"); idfile=$(mktemp "${TMPDIR:-/tmp}/romfs-id.XXXXXX"); trap 'rm -f "$have" "$idfile"' EXIT
 printf '%s' "$ident" > "$idfile"
 # The image goes over AFC (house_arrest, the channel of Finder's file sharing; libimobiledevice's afcclient), which streams it. devicectl's copy has the Mac's CoreDeviceService read
@@ -50,7 +51,7 @@ if [ "$via" = afc ]; then
     # afcclient finds a device only by its UDID, over USB (devicectl also takes its own identifier or the device's name, and Wi-Fi): check that it opens the app's
     # Documents before copying, so a wrong ID or a Wi-Fi-only device is named as such instead of ending as an incomplete copy.
     [ "$(remote_type /Documents)" = S_IFDIR ] || { echo "[RED] afcclient cannot open Documents of $id on device $dev: it needs the device's UDID (idevice_id -l lists the connected ones, idevice_id -n those on the network; devicectl's identifier and the device's name do not work) and the app installed. ROMFS_PUSH_VIA=devicectl copies through devicectl instead" >&2; exit 1; }
-    if [ "${ROMFS_PUSH_FORCE:-}" != 1 ] && [ "$(remote_size /Documents/romfs.img)" = "$size" ] && afc get /Documents/romfs.img.id "$have" > /dev/null 2>&1 && [ "$(cat "$have")" = "$ident" ]; then
+    if [ "${ROMFS_PUSH_FORCE:-}" != 1 ] && [ "$(remote_size /Documents/romfs.img)" = "$size" ] && afc get -f /Documents/romfs.img.id "$have" > /dev/null 2>&1 && [ "$(cat "$have")" = "$ident" ]; then
         echo "the device already has this image ($((size >> 20)) MB): not copied again"
         copied=0
     else

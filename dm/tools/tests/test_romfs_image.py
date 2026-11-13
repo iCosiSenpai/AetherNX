@@ -278,6 +278,7 @@ if cmd == 'put':
 elif cmd == 'get':
     src, dst = at(rest[0]), Path(rest[1])
     if not src.is_file(): fail('Failed to open remote file: Not found (8)')
+    if dst.exists() and 'f' not in flags: fail(f"Failed to overwrite existing file without '-f' option: {dst}")   # the real one, into a mktemp file
     dst.write_bytes(src.read_bytes())
 elif cmd == 'info':
     p = at(rest[0])
