@@ -244,6 +244,53 @@ try? fm.createDirectory(atPath: "\(root)/mods-check/Cheats", withIntermediateDir
 try? "[Infinite HP]\n04000000 00000000 00000063\n{Master}\n[Max Gold]\n".write(toFile: "\(root)/mods-check/Cheats/0123456789ABCDEF.txt", atomically: true, encoding: .utf8)
 expect(GameExtras.cheatFiles(in: "\(root)/mods-check/Cheats", titleID: title).map(\.cheats) == [3], "a cheat file and how many cheats it has")
 
+// Mods/mods.json: the order and the mods off for every device, written by Studio and the companion (docs/companion.md)
+let modDomain = "io.github.icosisenpai.aethernx.studio-check.mods.\(UUID().uuidString)"
+GameExtras.set(["A Skin"], for: GameExtras.ordersKey, domain: modDomain)
+expect(GameExtras.modState(modsFolder: modsRoot, domain: modDomain) == .init(order: ["A Skin"], off: []), "without mods.json, the preference keys")
+GameExtras.saveState(.init(order: ["D Both", "B Music"], off: ["B Music", "B Music"]), modsFolder: modsRoot, domain: modDomain)
+expect(GameExtras.readState(modsFolder: modsRoot) == .init(order: ["D Both", "B Music"], off: ["B Music"]), "a change goes into mods.json")
+expect(GameExtras.strings(GameExtras.offKey, domain: modDomain) == ["B Music"] && GameExtras.strings(GameExtras.ordersKey, domain: modDomain) == ["D Both", "B Music"],
+       "and into the preference keys")
+try? #"{"format": 1, "order": ["C Code"], "off": ["A Skin"], "from": "the companion"}"#.write(toFile: "\(modsRoot)/mods.json", atomically: true, encoding: .utf8)
+expect(GameExtras.modState(modsFolder: modsRoot, domain: modDomain) == .init(order: ["C Code"], off: ["A Skin"]), "a mods.json the companion wrote wins over the keys")
+expect(GameExtras.mods(in: modsRoot, order: ["C Code"], titleID: title).map(\.name) == ["C Code", "A Skin", "B Music", "D Both"], "mods.json is no mod")
+try? #"{"format": 2, "order": []}"#.write(toFile: "\(modsRoot)/mods.json", atomically: true, encoding: .utf8)
+expect(GameExtras.readState(modsFolder: modsRoot) == nil, "a later format is not read")
+CFPreferencesSetAppValue(GameExtras.ordersKey as CFString, nil, modDomain as CFString)
+CFPreferencesSetAppValue(GameExtras.offKey as CFString, nil, modDomain as CFString)
+CFPreferencesAppSynchronize(modDomain as CFString)
+
+// game.json: what the companion lists a game by (docs/companion.md)
+let fireFolder = aether + "/Fire Emblem- Fortune's Weave"
+expect(GameManifest.folder(macSetting: nil, libraryFolder: aether, gameName: "Fire Emblem: Fortune's Weave", home: cloudHome) == fireFolder,
+       "a game with no Mac app takes the library's game folder")
+expect(GameManifest.folder(macSetting: .folder(fireFolder, inherited: false), libraryFolder: "", gameName: "X", home: cloudHome) == fireFolder,
+       "a Mac app's own game folder of AetherNX")
+expect(GameManifest.folder(macSetting: .folder("\(drive)/HorizonNative Saves", inherited: true), libraryFolder: aether, gameName: "X", home: cloudHome) == nil
+       && GameManifest.folder(macSetting: .off, libraryFolder: aether, gameName: "X", home: cloudHome) == nil
+       && GameManifest.folder(macSetting: nil, libraryFolder: "\(drive)/HorizonNative Saves", gameName: "X", home: cloudHome) == nil
+       && GameManifest.folder(macSetting: .folder(aether, inherited: false), libraryFolder: "", gameName: "X", home: cloudHome) == nil,
+       "no game.json outside a game folder of iCloud Drive › AetherNX, nor in the AetherNX folder itself")
+let manifestFolder = "\(root)/manifest-check/AetherNX/Starfall Tactics"
+let iconSource = "\(root)/manifest-check/icon-source.png"
+try? fm.createDirectory(atPath: "\(root)/manifest-check", withIntermediateDirectories: true)
+try? Data([0x89, 0x50, 0x4E, 0x47, 1, 2, 3]).write(to: URL(filePath: iconSource))
+let manifestItem = GameManifest.Item(folder: manifestFolder, contents: .init(format: 1, name: "Starfall Tactics", titleId: title, version: "1.2.0", icon: nil,
+                                                                            bundleId: "io.github.icosisenpai.horizonnative.\(title.lowercased())"), iconSource: iconSource)
+expect(GameManifest.write(manifestItem), "the first write makes the folder, game.json and the icon")
+let written = (try? JSONSerialization.jsonObject(with: Data(contentsOf: URL(filePath: "\(manifestFolder)/game.json")))) as? [String: Any]
+expect(written?["name"] as? String == "Starfall Tactics" && written?["titleId"] as? String == title && written?["version"] as? String == "1.2.0"
+       && written?["icon"] as? String == "icon.png" && written?["format"] as? Int == 1 && fm.fileExists(atPath: "\(manifestFolder)/icon.png"),
+       "game.json names the game, its title ID, version and the icon beside it")
+expect(!GameManifest.write(manifestItem), "the same game writes nothing again")
+var noIcon = manifestItem
+noIcon.iconSource = nil
+expect(GameManifest.write(noIcon) && ((try? JSONSerialization.jsonObject(with: Data(contentsOf: URL(filePath: "\(manifestFolder)/game.json")))) as? [String: Any])?["icon"] == nil,
+       "without a picture, no icon key")
+expect(String(decoding: GameManifest.encode(manifestItem.contents), as: UTF8.self).contains("\"bundleId\" : \"io.github.icosisenpai.horizonnative."),
+       "sorted keys, slashes as they are")
+
 // MARK: What a build stage does, and what an engine update means
 
 expect(StageGuide.entry(for: "extract base") != nil && StageGuide.entry(for: "iOS shaders") != nil && StageGuide.entry(for: "Pipeline archive") != nil

@@ -347,6 +347,7 @@ struct SavesSection: View {
         }
         CloudSaves.choose(folder, domain: domain)
         model.refreshExtras(game)
+        model.publishManifests([game])
         revision += 1
     }
 

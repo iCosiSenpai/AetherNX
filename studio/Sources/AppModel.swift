@@ -508,6 +508,7 @@ final class AppModel {
             }
             targets[domain] = target
         }
+        defer { publishManifests() }   // after the folders changed: each game folder of iCloud Drive › AetherNX says what the game is (docs/companion.md)
         guard !targets.isEmpty else { return }
         let changed = CloudSaves.applyLibraryFolders(targets)
         for game in games where game.macApp != nil { refreshExtras(game) }
