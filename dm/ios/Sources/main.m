@@ -24,6 +24,7 @@ extern char **environ;
 int dm_main(int argc, char **argv);   // dm/host/main.c compiled in with -Dmain=dm_main
 UIViewController *front_ios_root(void);
 void front_ios_focus_event(int ev);
+void front_ios_open_url(NSURL *url);   // front_ios.m: aethernx-<title ID>:// links
 
 static char *g_argv[4]; static int g_argc;
 
@@ -263,7 +264,9 @@ int front_ios_boot_ok(void) { return g_boot_ok; }
     self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
     self.window.rootViewController = front_ios_root();
     [self.window makeKeyAndVisible];
+    for (UIOpenURLContext *c in o.URLContexts) front_ios_open_url(c.URL);   // started by a link (the launcher shows later, in the root's viewDidAppear)
 }
+- (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)contexts { for (UIOpenURLContext *c in contexts) front_ios_open_url(c.URL); }   // a link while the app runs
 - (void)sceneWillResignActive:(UIScene *)s { front_ios_focus_event(0); }
 - (void)sceneDidEnterBackground:(UIScene *)s { front_ios_focus_event(1); }
 - (void)sceneWillEnterForeground:(UIScene *)s { front_ios_focus_event(2); }

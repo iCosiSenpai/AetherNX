@@ -454,3 +454,16 @@ public func dmMacLauncher() -> Int32 {
     model.apply()
     return 1
 }
+
+// The mods of the game folder's Mods/mods.json (GameExtras.swift macOverlay), which AetherNX Studio and AetherNX Companion write: launcher.c mods_and_cheats takes them
+// before Studio's mods.folders, so a change made on the iPhone applies at the next start without Studio opened. The game folder is the one beside the cloud save
+// (DM_SAVE_SYNC, set before this from cloudSaves.folder), or the app's own in Application Support. Writes the RomFS folders, ':'-separated, into out: 1 (an empty string
+// when every mod is off), 0 when the folder has no mods.json it can use (launcher.c then takes mods.folders), -1 when they do not fit
+@_cdecl("dm_mac_game_mods")
+public func dmMacGameMods(_ titleID: UnsafePointer<CChar>, _ out: UnsafeMutablePointer<CChar>, _ cap: Int) -> Int32 {
+    guard let overlay = GameExtras.macOverlay(saveSync: getenv("DM_SAVE_SYNC").map { String(cString: $0) }, titleID: String(cString: titleID)) else { return 0 }
+    let bytes = Array(overlay.joined(separator: ":").utf8CString)
+    guard bytes.count <= cap else { return -1 }
+    bytes.withUnsafeBufferPointer { out.update(from: $0.baseAddress!, count: bytes.count) }
+    return 1
+}

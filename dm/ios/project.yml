@@ -49,7 +49,11 @@ targets:
         DMShowFPS: ${DM_SHOW_FPS}           # YES = the frame-rate counter is on (front_ios.m; set by build_ipa.sh)
         DMLanguage: ${DM_LANG}              # the game language code (main.m sets DM_LANG from it; set by build_ipa.sh)
         LSSupportsGameMode: true
-        NSUbiquitousContainers:             # automatic iCloud saves (CloudSaves.h): the container a build signed with DM_ICLOUD_CONTAINER uses, in iCloud Drive as "HorizonNative"
+        CFBundleURLTypes:                   # aethernx-<title ID in lower case>:// opens the app, …://play starts the game (front_ios.m front_ios_open_url; AetherNX Companion's Play, docs/companion.md)
+          - CFBundleURLName: ${DM_BUNDLE_ID}
+            CFBundleURLSchemes:
+              - ${DM_URL_SCHEME}            # set by build_ipa.sh from the base game's title ID
+        NSUbiquitousContainers:            # automatic iCloud saves (CloudSaves.h): the container a build signed with DM_ICLOUD_CONTAINER uses, in iCloud Drive as "HorizonNative"
           iCloud.io.github.icosisenpai.horizonnative:
             NSUbiquitousContainerIsDocumentScopePublic: true
             NSUbiquitousContainerName: HorizonNative

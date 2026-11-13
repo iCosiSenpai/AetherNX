@@ -55,7 +55,7 @@ def main():
                DM_BUNDLE_ID='io.github.icosisenpai.horizonnative.ci', DM_DISPLAY_NAME='CI build fixture',
                DM_APP_VERSION='1.0', DM_APP_CATEGORY=profile.get('app_category'),
                DM_TEAM_ID='', DM_SCHEME_NAME='DmIOS', DM_APPICON='',
-               DM_SHOW_FPS='NO', DM_LANG='en-US')
+               DM_SHOW_FPS='NO', DM_LANG='en-US', DM_URL_SCHEME=f'aethernx-{profile.id.lower()}')
 
     def run(*command, capture=False):
         return subprocess.run([str(c) for c in command], cwd=project, env=env,
@@ -96,6 +96,9 @@ def main():
                            (shaders / marker, app / 'msl' / f'b-{chain}' / marker)):
         if source.read_bytes() != packed.read_bytes():
             raise RuntimeError(f'Resource staging failed: {packed}')
+    schemes = [s for t in info.get('CFBundleURLTypes', []) for s in t.get('CFBundleURLSchemes', [])]
+    if schemes != [env['DM_URL_SCHEME']]:   # the link AetherNX Companion's Play opens (docs/companion.md)
+        raise RuntimeError(f'The app should declare the URL scheme {env["DM_URL_SCHEME"]}, not {schemes}')
     if (app / '_CodeSignature').exists() or (app / 'embedded.mobileprovision').exists():
         raise RuntimeError('The smoke-test app must be unsigned')
     print(f'iOS smoke build passed: {executable}', flush=True)

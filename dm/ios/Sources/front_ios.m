@@ -26,6 +26,8 @@ const char *front_ios_boot_message(void);   // main.m: why a build that keeps th
 const char *front_ios_device_check(void);   // main.m: why this device cannot run the games (its GPU has no BC textures; NULL = supported); makes the first Metal device
 bool dm_show_launcher(void *view_controller, void (*done)(void));   // Launcher.swift: false = no launcher (no dm/launcher.json, or DM_LAUNCHER=0)
 bool dm_show_ingame_menu(void *view_controller, void (*closed)(void));   // InGameMenu.swift: false = not shown
+void dm_game_extras_env(void);   // Launcher.swift: DM_ROMFS_OVERLAY and DM_CHEATS from the game's folder beside the cloud save (GameExtras.swift)
+bool dm_link_plays(const char *link);   // Launcher.swift: aethernx-<title ID>://play
 void dm_gamepad_menu_open(int on);   // DmGamepad.m: nothing reaches the game while the menu is up
 void dm_pad_edit_begin(void (*done)(void));   // DmGamepad.m: the layout editor
 
@@ -154,6 +156,7 @@ static void launcher_done(void) { [g_root startGame]; }
 - (void)startGame {
     if (self.game) return;
     dm_cloud_saves_env();   // DM_SAVE_SYNC from the launcher's Cloud saves pick, before the game's first save mount reads it (CloudSaves.m, save_sync.h)
+    dm_game_extras_env();   // the mods and cheats of the game's folder beside it, before the host's cheats (main.c, after the loading) and the RomFS mount read them
     front_hud_env();   // before the process's first Metal device, which reads MTL_HUD_ENABLED (an env file's DM_METAL_HUD sets it in main.m already; GitHub issue #840)
     const char *dev = front_ios_device_check();   // that first device: a GPU without BC textures is refused here, not at launch, so the launcher's HUD switch counts
     if (dev) { [self showHint:[NSString stringWithFormat:@"This device is not supported.\n%s", dev]]; return; }   // the host does not start
@@ -239,6 +242,19 @@ static void launcher_done(void) { [g_root startGame]; }
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskAll; }
 @end
 UIViewController *front_ios_root(void) { return [DmRootVC new]; }
+
+// aethernx-<title ID in lower case>:// (CFBundleURLTypes in Info.plist, project.yml; AetherNX Companion's Play, docs/companion.md) opens the app: main.m's SceneDelegate
+// passes each link here, at a start by the link and while the app runs. …://play also presses Play: Launcher.swift takes the request with dm_take_play_link when it
+// shows, or at once when it is up (DMPlayLink). A game already running is only brought to the front; an app without a launcher starts the game at once anyway
+static BOOL g_play_link;
+void front_ios_open_url(NSURL *url) {
+    const char *s = url.absoluteString.UTF8String ?: "";
+    if (!dm_link_plays(s)) { LOG("front end: opened by %s", s); return; }
+    if (g_root.game) { LOG("front end: opened by %s while the game runs: nothing to start", s); return; }
+    g_play_link = YES; LOG("front end: opened by %s: Play", s);
+    [NSNotificationCenter.defaultCenter postNotificationName:@"DMPlayLink" object:nil];
+}
+bool dm_take_play_link(void) { BOOL p = g_play_link; g_play_link = NO; return p; }
 
 // A TV (cable or AirPlay): iOS gives the app the TV as a scene of its own instead of mirroring the phone. The game's view moves there, 16:9 fills the TV, and the game is
 // docked as a Switch on its dock (1080p, the operation mode change notification); the phone keeps the pad. Unplugging puts the view back and the mode the game had before

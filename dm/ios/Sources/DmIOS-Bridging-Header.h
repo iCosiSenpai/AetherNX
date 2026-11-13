@@ -3,3 +3,6 @@
 #import "CloudSaves.h"
 #import "ingame.h"
 #include "save_sync.h"
+#include <stdbool.h>
+
+bool dm_take_play_link(void);   // front_ios.m: the app was opened by aethernx-<title ID>://play and the game has not started yet (taken once)
