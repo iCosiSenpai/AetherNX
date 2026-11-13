@@ -1,74 +1,101 @@
 <p align="center">
-  <img src="assets/aethernx-logo.png" width="128" alt="AetherNX icon">
+  <a href="https://icosisenpai.github.io/AetherNX/"><img src="assets/aethernx-logo.png" width="140" alt="AetherNX"></a>
 </p>
 
 <h1 align="center">AetherNX</h1>
 
 <p align="center">
-  <b>Turn the Switch games you own into native apps for Mac, iPhone and iPad.</b><br>
-  A Mac app and a command-line tool for the HorizonNative engine. No emulator, no JIT.
+  <b>Your Switch games. Native on your Mac, iPhone and iPad.</b><br>
+  AetherNX rewrites the code of the games you own, once, on your Mac, so Apple silicon runs it directly.<br>
+  No emulator, no JIT: what comes out is an app of that game.
 </p>
 
 <p align="center">
-  <a href="https://github.com/iCosiSenpai/AetherNX/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/iCosiSenpai/AetherNX?include_prereleases&label=release"></a>
+  <a href="https://github.com/iCosiSenpai/AetherNX/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/iCosiSenpai/AetherNX?include_prereleases&label=release&color=0A84FF"></a>
   <img alt="macOS 26.6 or later" src="https://img.shields.io/badge/macOS-26.6%2B-000000?logo=apple&logoColor=white">
+  <img alt="iOS and iPadOS 26" src="https://img.shields.io/badge/iOS%20%26%20iPadOS-26-000000?logo=apple&logoColor=white">
   <img alt="Apple silicon" src="https://img.shields.io/badge/Apple%20silicon-native-0A84FF">
+  <a href="https://icosisenpai.github.io/AetherNX/"><img alt="Website" src="https://img.shields.io/badge/website-icosisenpai.github.io-79F2CF"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2EA043"></a>
 </p>
 
 <p align="center">
+  <a href="https://icosisenpai.github.io/AetherNX/"><b>Website</b></a> ·
+  <a href="https://github.com/iCosiSenpai/AetherNX/releases/latest"><b>Download</b></a> ·
   <a href="#get-started"><b>Get started</b></a> ·
   <a href="#the-app"><b>The app</b></a> ·
-  <a href="#console-mode"><b>Console Mode</b></a> ·
-  <a href="#command-line"><b>Command line</b></a> ·
+  <a href="#mods-and-cheats"><b>Mods and cheats</b></a> ·
   <a href="#iphone-and-ipad"><b>iPhone and iPad</b></a> ·
   <a href="#games"><b>Games</b></a> ·
-  <a href="#credits-and-legal"><b>Credits and legal</b></a>
+  <a href="#thank-you"><b>Thank you</b></a>
 </p>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/studio-dark.png">
-  <img src="docs/images/studio-light.png" alt="AetherNX: a game's page with its files, its builds and the Play button">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/studio/home-dark.png">
+  <img src="docs/images/studio/home-light.png" alt="AetherNX Studio's home: the game played last, large, with Play; tiles for the engine, the keys, the devices and the cloud; every game in a grid">
 </picture>
 
 ## What it is
 
-The Switch and Apple silicon run the same kind of processor code (64-bit ARM). The engine in this repository, **HorizonNative**, rewrites a game's own code once, on your Mac, so Apple's processor runs it directly; it stands in for the Switch's system services and draws the game's graphics with Metal. The result is an ordinary app of that game: a Mac app, or an IPA you install on an iPhone or iPad.
+The Switch and Apple silicon speak the same processor language, 64-bit ARM. So a game's code does not need to be translated, instruction by instruction, while you play: it needs a few changes, made once. The engine in this repository, **HorizonNative**, makes them on your Mac:
 
-**AetherNX** puts a library and one-click builds on top of it:
+1. **It rewrites the game's code once.** The few instructions that break Apple's rules (a Switch game uses the register `x18` freely; on Apple platforms it belongs to the system) move into small stubs beside the code.
+2. **It stands in for the console's system.** When the game asks for a file, a thread, a save or a frame on screen, HorizonNative answers in place of Horizon OS, with the Mac's own services.
+3. **It draws with Metal.** The game's graphics API, NVN (or Vulkan, or OpenGL), is implemented on Metal, and its shaders are translated to Metal ahead of time.
 
-- **AetherNX Studio**, a Mac app: your games with their files and builds, a Build button with live progress, Play, and settings in one place.
+The result is an ordinary app of that game: a Mac app, or an app for your iPhone or iPad. **AetherNX** puts a home for your whole library on top of it:
+
+- **AetherNX Studio**, a Mac app: your games with their files, builds, saves, mods and cheats, a Build button that says what it is doing, Play, and installs on your iPhone and iPad, in one window.
 - **Console Mode**: the library full screen, driven by a game controller, so the Mac plays like a console from the couch.
-- **`./aethernx`**, a command-line tool: scan a library, unpack archives, build, check your setup.
+- **`./aethernx`**, a command-line tool that does everything the app does.
 - **Developer tools** for reverse engineering your own copy: function and symbol tables, and a C translation with [nxrt](https://github.com/fedebuonco/nxrt).
 
-HorizonNative is a fork of [**nxnative**](https://github.com/seedds/nxnative) by seedds, which did the hard part. AetherNX bundles it with its game profiles; see [Credits](#credits-and-legal).
+HorizonNative is a fork of [**nxnative**](https://github.com/seedds/nxnative) by seedds, which did the hard part. AetherNX bundles it with its game profiles; see [Thank you](#thank-you).
 
 Nothing from any game is in this repository: you need **your own game files and the `prod.keys` dumped from your own Switch**.
 
+<table>
+<tr>
+<td width="50%" valign="top">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/studio/game-dark.png">
+  <img src="docs/images/studio/game-light.png" alt="A game's page: play time, files, builds, saves, mods, cheats and the Danger Zone">
+</picture>
+<p><b>A page for every game.</b> Its play time, its files and updates, what was built from them and for which device, its saves on the Mac and in iCloud, its mods and cheats, and a Danger Zone that removes exactly what you tick.</p>
+</td>
+<td width="50%" valign="top">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/studio/progress-dark.png">
+  <img src="docs/images/studio/progress-light.png" alt="An install in progress: Step 5 of 9, prebuilding the graphics pipelines, with what the step does and the time left">
+</picture>
+<p><b>Builds that say what they are doing.</b> "Step 5 of 9", what that step does and why, the work within it and the time left. A finished build hands the window back by itself; one that fails says what went wrong, with Try Again.</p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/studio/updates-dark.png">
+  <img src="docs/images/studio/updates-light.png" alt="The Updates page: the app, the engine and nxnative, each with what changed">
+</picture>
+<p><b>Updates you can read.</b> The app and the engine update apart, each saying what changed in plain words; nxnative's newest work arrives as an engine update, without a new app.</p>
+</td>
+<td width="50%" valign="top">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/studio/settings-dark.png">
+  <img src="docs/images/studio/settings-light.png" alt="Settings as a page of the window: saves, mods and cheats">
+</picture>
+<p><b>Settings in the same window.</b> General, Library, Keys, Building, and Saves, Mods &amp; Cheats: a page of the window, like everything else, no extra windows.</p>
+</td>
+</tr>
+</table>
+
 ## Get started
 
-You need a Mac with Apple silicon and macOS 26.6 or later, [Xcode](https://developer.apple.com/download/all/?q=Xcode%2027.2) 27.2 (select it with `sudo xcode-select -s /Applications/Xcode.app`), [Homebrew](https://brew.sh) and Python 3.12 or later. Building for iPhone also needs Xcode's iOS platform (Xcode → Settings → Components). The shaders are built with Xcode 27.2's Metal compiler: with several Xcode versions installed, select that one.
+You need a Mac with Apple silicon and macOS 26.6 or later. Everything else the builds use (Xcode 27.2 and its Metal toolchain, Homebrew, Python 3.12 or later and a few command-line tools) the app checks on its first launch: it says what each piece is for and why the builds need it, and installs what it can for you.
 
-**1. Install the tools**, once:
+**1. Download AetherNX.app** from the [latest release](https://github.com/iCosiSenpai/AetherNX/releases/latest), move it to Applications and open it. The **Setup Assistant** finds or downloads the build tools into `~/AetherNX`, checks your Mac, takes your `prod.keys` and your library folder, and asks a few choices. Help → Setup Assistant opens it again.
 
-```bash
-xcodebuild -downloadComponent MetalToolchain
-brew install xcodegen zstd glslang sevenzip
-brew install --cask dotnet-sdk
-```
-
-**2. Get AetherNX.** Either download **AetherNX.app** from the [latest release](https://github.com/iCosiSenpai/AetherNX/releases/latest) and let it download the build tools into `~/AetherNX` on first launch, or clone the repository yourself:
-
-```bash
-git clone https://github.com/iCosiSenpai/AetherNX.git ~/AetherNX
-cd ~/AetherNX
-./aethernx setup      # a Python environment with the packages the build needs
-./aethernx doctor     # checks Xcode, the tools and your keys
-./aethernx studio     # builds and opens the app
-```
-
-**3. Put each game in its own folder**, with the base game, its update and its DLC (`.nsp`, `.xci`, `.nsz` or `.xcz`; subfolders such as `DLC/` are fine):
+**2. Put each game in its own folder**, with the base game, its update and its DLC (`.nsp`, `.xci`, `.nsz` or `.xcz`; subfolders such as `DLC/` are fine):
 
 ```
 ~/Games/
@@ -79,20 +106,48 @@ cd ~/AetherNX
 
 Use the newest update you have: the game profiles are made for it. A game still in a `.zip`, `.rar` or `.7z` archive shows up too, with an **Unpack** button.
 
-**4. Build.** In the app: add `~/Games` as a library folder, choose your `prod.keys` in Settings → Keys (or put it in `~/.switch/prod.keys`), select a game and press **Build**. The first build of a game takes 30 to 60 minutes and needs free space of about twice the game plus 10 GB; later builds reuse most of the work. Then press **Play**.
+**3. Build, then Play.** Select a game and press **Build**. The first build of a game takes 30 to 60 minutes and needs free space of about twice the game plus 10 GB; later builds reuse most of the work. Then press **Play**, or **Install** to put it on your iPhone or iPad.
+
+<details>
+<summary><b>From a terminal, or installing the tools by hand</b></summary>
+
+The tools the Setup Assistant installs, if you prefer to do it yourself ([Xcode 27.2](https://developer.apple.com/download/all/?q=Xcode%2027.2) first, selected with `sudo xcode-select -s /Applications/Xcode.app`; building for iPhone also needs its iOS platform, in Xcode → Settings → Components; with several Xcode versions installed, select 27.2, whose Metal compiler builds the shaders):
+
+```bash
+xcodebuild -downloadComponent MetalToolchain
+brew install xcodegen zstd glslang sevenzip libimobiledevice
+brew install --cask dotnet-sdk
+```
+
+Then the repository itself, instead of the app's download:
+
+```bash
+git clone https://github.com/iCosiSenpai/AetherNX.git ~/AetherNX
+cd ~/AetherNX
+./aethernx setup      # a Python environment with the packages the build needs
+./aethernx doctor     # checks Xcode, the tools and your keys, saying why each one matters
+./aethernx studio     # builds and opens the app
+```
+
+`prod.keys` goes in Settings → Keys, or in `~/.switch/prod.keys`.
+</details>
 
 ## The app
 
-The first launch opens the **Setup Assistant**: it finds or downloads the build tools, runs the setup check, takes your `prod.keys` and your library folder, and asks a few choices. Help → Setup Assistant opens it again.
+One window holds everything, and it follows its width: grids take as many columns as fit, two columns become one, and buttons fold into icons when the window narrows, so it works on a laptop and on a large display alike.
 
-The sidebar lists your games, with the free space on their disk at the bottom; a game's page shows its files, what was built from them, and the actions. Everything else lives in the menus and in Settings.
-
+- **Home.** The game you played last, large, with Play; tiles for the engine, your keys, your devices and the cloud, each opening its page; and every game in a grid.
+- **A game's page.** Play time and the last session, its files, updates and DLC, what was built from them, its saves, mods and cheats, and the actions. At the bottom, the **Danger Zone**: what the game takes on the Mac (game files, build folder, apps, saves, log and settings), with **Remove…** for each part and **Remove Everything…**, to the Trash or deleted for good. iCloud saves are only removed when you tick them.
+- **Activity, Devices, Updates and Settings** are pages of the same window, in the sidebar: the running build and the full log; the iPhones and iPads paired with this Mac and how a game's files travel to them; what is new for the app and the engine; and the settings.
+- **The Setup Assistant** checks Xcode, its license and Metal toolchain, Homebrew, Git, Python and its packages, the command-line tools, `afcclient` and the signing identities, says what each is for, and installs what is missing.
 - **Game artwork from the internet.** Icons and banners of Switch games come from [nlib.cc](https://api.nlib.cc) by title ID; a game it does not list, Switch 2 games among them, gets its box art from Wikipedia by name. Only the title ID or the name is sent, the pictures are kept on the Mac, and the icon in the game's own files is the fallback. Nothing is looked up before the Setup Assistant is done or skipped; Settings → General turns it off.
-- **Danger Zone.** At the bottom of each game's page, in red: what the game takes on the Mac (game files, build folder, apps, saves, log and settings), with **Remove…** for each part and **Remove Everything…** for all of it, to the Trash or deleted for good. The confirmation lists what goes; the game's apps are only those built from it, and nothing is removed while the game is open. iCloud saves are only removed when you tick them.
 - **Room for the first build.** Before a first build the app checks the free space the build needs. When it is short only because macOS keeps it in local Time Machine snapshots of files you deleted, it offers to remove those snapshots and start the build.
-- **Play time.** Time played and the last session of each game, counted whenever its Mac app runs while AetherNX is open, also when opened from Finder; Console Mode puts the last played game first.
-- **Notifications** when a build ends while the app is in the background.
-- **Updates**, checked at launch, from AetherNX → Check for Updates, and from the AetherNX item in the menu bar: a new release of the app (downloaded, checked against the release's checksum, its archive checked to hold only the app, unpacked, checked for its Developer ID signature, installed and reopened; a copy you built yourself, or one that runs from a place it cannot replace itself in (its disk image, or a download not yet moved with Finder), opens the release page instead), new changes of the tools' Git checkout (**Update** pulls them), and how many changes nxnative has made since AetherNX's engine was last synced with it, with a link to them. The menu bar item also shows a running build. Both can be turned off in Settings → General.
+- **Play time.** Time played and the last session of each game, counted whenever its Mac app runs while AetherNX is open, also when opened from Finder; Home and Console Mode put the last played game first.
+- **Updates**, checked at launch and from AetherNX → Check for Updates: a new release of the app (downloaded, checked against the release's checksum and for its Developer ID signature, installed and reopened; a copy you built yourself opens the release page instead), new changes of the engine (**Update** pulls them), and how far nxnative has moved since AetherNX's engine last synced with it. The menu bar item shows them, and a running build.
+- **Saves.** Each game's page shows its save on this Mac and its **cloud saves**: the folder its Mac app syncs through (iCloud Drive › AetherNX, which gives each game a folder with its name; iCloud Drive › HorizonNative; another folder; or off), when the cloud's copy last changed and what the last session said about the sync. One folder for the whole library is in Settings → Saves, Mods & Cheats; a game with a choice of its own keeps it ([Cloud saves](docs/settings.md#cloud-saves)).
+- **Notifications** when a build ends while the app is in the background, and **bug reports**: More → **Make Bug Report…** writes a zip with the game's logs, versions and settings to the Desktop, never any game data.
+
+The app is in English and Italian.
 
 | Shortcut | Action |
 |---|---|
@@ -100,8 +155,10 @@ The sidebar lists your games, with the free space on their disk at the bottom; a
 | <kbd>⌘</kbd> <kbd>B</kbd> | Build the Mac app |
 | <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>I</kbd> | Build, sign and install on your iPhone or iPad |
 | <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>B</kbd> | Build for iPhone and iPad |
+| <kbd>⌥</kbd> <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>B</kbd> | Build for iPhone and iPad, game files separate |
 | <kbd>⌥</kbd> <kbd>⌘</kbd> <kbd>B</kbd> | Prepare an Xcode project |
 | <kbd>⌘</kbd> <kbd>.</kbd> | Stop the running build |
+| <kbd>⌘</kbd> <kbd>1</kbd> … <kbd>⌘</kbd> <kbd>4</kbd> | Home, Activity, Devices, Updates |
 | <kbd>⌘</kbd> <kbd>O</kbd> | Add a library folder |
 | <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>O</kbd> | Unpack an archive |
 | <kbd>⌘</kbd> <kbd>I</kbd> | Add an update or DLC to the selected game |
@@ -112,10 +169,14 @@ The sidebar lists your games, with the free space on their disk at the bottom; a
 | <kbd>⌘</kbd> <kbd>F</kbd> | Search the library |
 | <kbd>⌘</kbd> <kbd>,</kbd> | Settings |
 
-- **Saves.** Each game's page shows its save on this Mac and its **cloud saves**: the folder its Mac app syncs through (iCloud Drive › HorizonNative, another iCloud Drive folder, or off), when the cloud's copy last changed and what the last session said about the sync. Settings → General sets one folder for the whole library; a game with a choice of its own keeps it ([Cloud saves](docs/settings.md#cloud-saves)).
-- **Bug reports.** More → **Make Bug Report…** (also in the Help menu) writes a zip with the game's logs, versions and settings to the Desktop, and never any game data.
+## Mods and cheats
 
-**Settings** has four panes: **General** (library folders, the AetherNX folder, setup check, game artwork, cloud saves, notifications), **Keys** (your `prod.keys`, checked without ever showing a key), **Building** (what the Build button makes, the game's language, kept files, pre-built shader pipelines, a signing identity for the Mac app) and **iPhone & iPad** (the device to install on, your Apple team, how the game files travel, the frame-rate counter). The app is in English and Italian.
+Each game has a **Mods** folder and a **Cheats** folder next to its save. With its cloud saves in iCloud Drive (iCloud Drive › AetherNX › the game's name), every Mac of yours plays with the same ones; with cloud saves off, they stay on this Mac. The game's page lists them, with **Add…** and **Show in Finder**.
+
+- **Mods** replace the game's files: one folder per mod, with a `romfs` folder inside (Atmosphère's `atmosphere/contents/<title ID>/romfs` layout works too). Turn them on and off and put them in order on the game's page; the first mod that has a file wins. They apply at the game's next start, with no rebuild. **Find Mods on GameBanana** searches for the game there. Code mods (`exefs`) and mods that need a loader do not run.
+- **Cheats** are Atmosphère cheat files, named after the game's build ID. Turn single cheats on and off while you play, from the game's Cheats menu.
+
+The iPhone and iPad apps do not read mods and cheats yet; the format is in [Mods and cheats from a front end](docs/frontends.md#mods-and-cheats-from-a-front-end-mac).
 
 ## Console Mode
 
@@ -131,10 +192,10 @@ Pick up a controller and press **≡** (Menu), or choose View → Console Mode (
 |---|---|
 | `./aethernx scan [folders] [--json]` | List the games in your library folders (default: `$AETHERNX_LIBRARY`, else `~/Games`) |
 | `./aethernx build <game folder> [--target mac\|ios\|ios-slim\|xcode]` | Build a game; other options go to the packing script (`-k` for the keys, `--language it`, `--progress json`, …) |
-| `./aethernx devices [--json]` | List the iPhones and iPads paired with this Mac, and the Apple teams it can sign with |
-| `./aethernx install <game folder> [--device <UDID or name>] [--team <team ID>]` | Build a game, sign it with your Apple team and install it on a paired iPhone or iPad (`--files separate` keeps the game files out of the app and copies them once) |
+| `./aethernx devices [--json]` | List the iPhones and iPads paired with this Mac, over the cable or Wi-Fi, and the Apple teams it can sign with |
+| `./aethernx install <game folder> [--device <UDID or name>] [--team <team ID>] [--files auto\|bundle\|separate]` | Build a game, sign it with your Apple team and install it on an iPhone or iPad; `auto` keeps large game files on the device, so the next install copies only the app |
 | `./aethernx unpack <archive or folder>` | Extract `.zip`, `.rar`, `.7z` and `.tar` archives of game packages |
-| `./aethernx doctor` | Check Xcode, the tools, the Python packages and your keys, with the command that fixes each missing piece |
+| `./aethernx doctor [--json]` | Check Xcode, the tools, the Python packages and your keys: what each is for, and the command that fixes each missing piece |
 | `./aethernx report <game folder>` | Collect a game's logs, versions and settings into one zip for a bug report (no game data) |
 | `./aethernx setup [--tools]` | Create `.venv` with the Python packages (`--tools` adds the developer tools' ones) |
 | `./aethernx decomp-init <game folder>` | Function and symbol tables of a built game, with a C++ starter project |
@@ -147,22 +208,24 @@ Pick up a controller and press **≡** (Menu), or choose View → Console Mode (
 
 There are two ways to get a game onto the device.
 
-**Install from the Mac.** Connect the iPhone or iPad with a cable, unlock it, choose Trust and turn on Developer Mode (Settings › Privacy & Security). In AetherNX, pick the device and your Apple team in Settings → iPhone & iPad, then press **Install** on the game's page (or Build → **Install on iPhone or iPad**, <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>I</kbd>): the app builds the game, has Xcode sign it with your own team, free or paid, installs it and, for a build with the game files separate, copies them. Installing again keeps the saves and the game files already on the device. From a terminal it is `./aethernx install <game folder>`. Your team comes from the Apple ID you add in Xcode › Settings › Accounts ([Install on a device from the Mac](docs/development.md#install-on-a-device-from-the-mac)).
+**Install from the Mac.** The first time, connect the iPhone or iPad with a cable, unlock it, choose Trust and turn on Developer Mode (Settings › Privacy & Security). In AetherNX, pick the device and your Apple team on the Devices page, then press **Install** on the game's page (or Game → **Install on iPhone or iPad**, <kbd>⇧</kbd> <kbd>⌘</kbd> <kbd>I</kbd>): the app builds the game, has Xcode sign it with your own team, free or paid, and installs it, saying at every step what it is doing. Installing again keeps the saves. Once paired, a device on the same Wi-Fi network works too (in Finder, turn on *Show this iPhone when on Wi-Fi*). From a terminal it is `./aethernx install <game folder>`. Your team comes from the Apple ID you add in Xcode › Settings › Accounts ([Install on a device from the Mac](docs/development.md#install-on-a-device-from-the-mac)).
+
+**The game files stay on the device.** With **Game files: Automatic** (the Devices page; `--files auto`) and `afcclient` installed (`brew install libimobiledevice`), a game's files are copied once, next to the app instead of inside it, and the next install copies only the app: Fire Emblem Fortune's Weave copies its 27 GB of data once, then only the app, after an engine update say. The copy runs at about 30 MB/s over the cable and 8 MB/s over Wi-Fi, so over Wi-Fi Automatic copies them only once the device already has them; choose **On the device, copied once** to make the first copy there anyway.
 
 **Sideload an IPA.** **Build for iPhone & iPad** makes an unsigned IPA next to the game files. Install it with a sideloading tool such as AltStore, SideStore, Sideloadly or LiveContainer. To sign in Xcode yourself, **Prepare Xcode Project** makes the project the install uses ([Build and run on a device with Xcode](docs/development.md#build-and-run-on-a-device-with-xcode)).
 
 - **Big games need the Increased Memory Limit.** Without it iOS gives an app about 3.4 GB and closes a game that needs more, with no message. The app asks for it; an install from the Mac or from Xcode carries it, a sideloading tool may drop it ([which keep it, and how to check](docs/playing.md#the-increased-memory-limit)).
 - **No JIT.** The game's code is rewritten and compiled into the app on the Mac, so iOS runs it like any other app: no JIT, no debugger, no second device.
-- **Free Apple ID.** Sideloaded apps signed with a free account expire after 7 days; SideStore and AltStore can sign them again from the phone.
-- **Game too big to install?** Keep the game files out of the app: for an install from the Mac, turn on **Keep the game files out of the app** in Settings → iPhone & iPad (`--files separate`); for an IPA, build with **Game Files Separate** (`--target ios-slim`) and copy them once with `scripts/push_romfs.sh` ([Quick reinstalls](docs/development.md#quick-reinstalls)).
+- **Free Apple ID.** Apps signed with a free account expire after 7 days; install again from the Mac (the game files stay), or let SideStore or AltStore sign a sideloaded IPA again from the phone.
 - **Saves on both.** The Mac app and the iPhone app of a game share a save through iCloud Drive ([Cloud saves](docs/settings.md#cloud-saves)).
+- **A companion app** that lists the games you installed from your Macs, with their saves, mods and cheats, is in the works ([AetherNX Companion](docs/companion.md)).
 - It needs iOS or iPadOS 26 on an iPhone 15 Pro or later, or an iPad with an M1 chip or later.
 
 Controls, saves and in-game settings: [Playing](docs/playing.md) and [Settings](docs/settings.md).
 
 ## Games
 
-The engine has profiles for 130 games: their patches, shaders and tested settings. A game without a profile still gets a best-effort build and a survey, which may not start. The results below come from the nxnative project and its contributors; see each game's note for the platforms and known issues ([all game notes](dm/games/README.md#games)). Under a game, "60 fps with 1.2.0" means it runs at 60 fps (30 on the Switch) with that update.
+The engine has profiles for 154 games: their patches, shaders and tested settings. The [website](https://icosisenpai.github.io/AetherNX/#games) puts the ones below on a shelf. A game without a profile still gets a best-effort build and a survey, which may not start. The results below come from the nxnative project and its contributors; see each game's note for the platforms and known issues ([all game notes](dm/games/README.md#games)). Under a game, "60 fps with 1.2.0" means it runs at 60 fps (30 on the Switch) with that update.
 
 <details>
 <summary><b>Show the games reported working</b></summary>
@@ -435,14 +498,30 @@ git submodule update --init --depth 1 vendor/nxrt vendor/nnheaders vendor/sead
 
 More: [How the engine works](docs/development.md#how-it-works) · [Game notes](dm/games/README.md#games) · [Bring-up and debugging](docs/agents/README.md) · [Front-end contract](docs/frontends.md) · [Contributing](CONTRIBUTING.md)
 
+## Thank you
+
+AetherNX exists because many people did years of careful work and gave it away. To every one of them: thank you.
+
+- **[seedds](https://github.com/seedds)** and everyone who contributed to **[nxnative](https://github.com/seedds/nxnative)**: the engine at the heart of AetherNX, from the rewriter and the Horizon host to NVN on Metal and the profile of every game listed above. HorizonNative carries their work forward, and every sync brings their newest in.
+- **[d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile)**, where the approach began, for Diablo II: Resurrected.
+- **The Ryujinx team**, whose shader translator is inside the engine, and **[Atmosphère](https://github.com/Atmosphere-NX/Atmosphere)**, **[switchbrew](https://switchbrew.org)**, **[LibHac](https://github.com/Thealexbarney/LibHac)**, **hactool** and **yuzu**, for what everyone knows today about Horizon OS, its services and its file formats. Atmosphère's mod and cheat formats are the ones AetherNX reads.
+- **Khronos** ([SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross), [glslang](https://github.com/KhronosGroup/glslang), the Vulkan headers), **libvpx**, **dav1d**, **stb_vorbis**, **deko3d** and **NVIDIA FLIP**, inside the engine.
+- The front ends that showed the way: **[NX2Apple](https://github.com/LNPANDY/NX2Apple)** by LNPANDY, whose device install and cloud saves AetherNX follows; **[NX Library](https://github.com/Bium23/NxLibrary)** by Bium23, for its mods, cheats and build progress; **[LumaNX](https://github.com/Xc1Ym/LumaNX)** by Xc1Ym and **[NX OS](https://github.com/tripathishubham1/nx-os)** by tripathishubham1.
+- **[nxrt](https://github.com/fedebuonco/nxrt)** by fedebuonco, and the decompilation community: [open-ead](https://github.com/open-ead) (nnheaders, sead), [zeldaret](https://github.com/zeldaret), MonsterDruide1 and every project in `vendor/`.
+- **[libimobiledevice](https://libimobiledevice.org)**, whose `afcclient` carries the game files to the device; **[Homebrew](https://brew.sh)**; **[XcodeGen](https://github.com/yonaskolb/XcodeGen)**; **Capstone**, **lz4** and **fontTools** in the build; **[Pillow](https://python-pillow.org)** for the website's pictures; **[Mona Sans](https://github.com/github/mona-sans)** by GitHub, the website's type.
+- **[nlib.cc](https://nlib.cc)** and **Wikipedia**, for the game artwork.
+- Every player who reported a game that stopped, with a log: the game notes are made of those reports.
+
+Each project, with its authors and its license, is in [CREDITS.md](CREDITS.md).
+
 ## Credits and legal
 
-**Engine.** HorizonNative is iCosiSenpai's fork of [nxnative](https://github.com/seedds/nxnative) by **seedds** and its contributors (MIT). nxnative traces back to [d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile) (MIT), which developed the approach for Diablo II: Resurrected: the NSO rewriter, the Horizon host, NVN on Metal and the iOS app shell. It builds on **Ryujinx** (MIT; its shader translator, in `dm/third_party/ryujinx`), **[Atmosphère](https://github.com/Atmosphere-NX/Atmosphere)**, **yuzu**, **[LibHac](https://github.com/Thealexbarney/LibHac)**, **hactool**, **[SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross)**, **[glslang](https://github.com/KhronosGroup/glslang)**, **deko3d**, **libvpx**, **stb_vorbis**, the **Vulkan headers** and **NVIDIA FLIP** ([licenses](dm/third_party/README.md)), and on **Capstone**, **lz4**, **fontTools** and **XcodeGen** in the build.
+**AetherNX** (the Studio app, the `aethernx` tool, the website and this packaging) is created by **Alessio Cosi** ([iCosiSenpai](https://github.com/iCosiSenpai)). **HorizonNative** is iCosiSenpai's fork of [nxnative](https://github.com/seedds/nxnative) by **seedds** and its contributors (MIT), which traces back to d2r-mobile (MIT). Third-party code in the engine keeps its own license ([dm/third_party](dm/third_party/README.md)).
 
-**AetherNX** (the Studio app, the `aethernx` tool and this packaging) is by [iCosiSenpai](https://github.com/iCosiSenpai). Every project in `vendor/`, with its authors and license, is listed in [CREDITS.md](CREDITS.md).
+**License.** MIT ([LICENSE](LICENSE)), © 2026 Alessio Cosi (iCosiSenpai) and © 2026 seedds. Code in `dm/third_party/` and in each `vendor/` submodule keeps its own license; the website's fonts are under the SIL Open Font License ([site/fonts/OFL.txt](site/fonts/OFL.txt)). Copies and forks keep [LICENSE](LICENSE), [NOTICE](NOTICE) and [CREDITS.md](CREDITS.md). Contributions are welcome under the same terms ([Contributing](CONTRIBUTING.md)).
 
 **Legal.** AetherNX is not affiliated with, endorsed or sponsored by Nintendo or any game publisher. Nintendo Switch is a trademark of Nintendo; game names and images belong to their owners and appear only to identify the games. The repository contains no game, no game data, no keys and no system firmware, and it does not tell you where to find them: use games you own and keys dumped from your own console, as the law where you live allows. You are responsible for how you use it.
 
-**License.** MIT ([LICENSE](LICENSE)), © Alessio Cosi (iCosiSenpai) and seedds. Code in `dm/third_party/` and in each `vendor/` submodule keeps its own license. Contributions are welcome under the same terms ([Contributing](CONTRIBUTING.md)).
-
 **Support.** AetherNX is free. If it lets you play your games, you can support it on [PayPal](https://paypal.me/AlessioCosi) or [Buy Me a Coffee](https://buymeacoffee.com/icosisenpai).
+
+<p align="center"><sub>© 2026 Alessio Cosi (iCosiSenpai) · Made on a Mac, for the games you own.</sub></p>

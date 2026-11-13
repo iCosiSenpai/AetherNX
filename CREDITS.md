@@ -12,6 +12,16 @@ The Studio app, the command-line tool and the release packaging are by Alessio C
 
 Two parts follow **[NX2Apple](https://github.com/LNPANDY/NX2Apple)** by LNPANDY and its contributors (MIT), a launcher for the same engine, rewritten here for AetherNX's one app per game: the install on a device (`scripts/device_install.py`: signing with the player's own team through `xcodebuild -allowProvisioningUpdates`, `devicectl device install app`, the retry under the team's own bundle ID and the retry without a capability the team's profile cannot carry, from its `ShellInstall.swift`), and a library-wide cloud saves folder that a game's own choice overrides (`studio/Sources/CloudSaves.swift`, from its save setup). The page on the Increased Memory Limit ([playing.md](docs/playing.md#the-increased-memory-limit)) summarizes its `ENTITLEMENTS.md`.
 
+**[NX Library](https://github.com/Bium23/NxLibrary)** by Bium23 (MIT) showed what AetherNX 1.0 took up in its own way: mods and cheats managed per game, and build progress a person can read. No code was copied from it.
+
+## The website (`site/`)
+
+The website is part of AetherNX, under the MIT License. It is set in **[Mona Sans and Mona Sans Mono](https://github.com/github/mona-sans)** by GitHub, under the SIL Open Font License 1.1 ([site/fonts/OFL.txt](site/fonts/OFL.txt)). Its game pictures are the captures of the README's gallery; `site/tools/build.py` makes them with **[Pillow](https://python-pillow.org)** (MIT-CMU), which is not shipped.
+
+## Tools the app uses (not shipped)
+
+**[libimobiledevice](https://libimobiledevice.org)** (its library LGPL-2.1, its tools GPL-2.0): `afcclient` copies a game's files to an iPhone or iPad. **[Homebrew](https://brew.sh)** installs it and the other build tools; **[XcodeGen](https://github.com/yonaskolb/XcodeGen)** (MIT) makes the iPhone projects. They are installed on the player's Mac, never bundled.
+
 ## Submodules (`vendor/`)
 
 Related projects are included as Git submodules, not copied: each stays a separate repository with its own history, authors and license, pinned to a fork under [iCosiSenpai](https://github.com/iCosiSenpai) so the pinned commit stays available. The engine and the Studio app do not need them; `./aethernx lift` uses `nxrt`, and the C++ project of `./aethernx decomp-init` uses `nnheaders` and `sead`.

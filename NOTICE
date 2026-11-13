@@ -11,6 +11,8 @@ Third-party code keeps its own license:
 - dm/third_party/: see dm/third_party/README.md
 - vendor/: Git submodules of separate projects, each under its own license;
   see CREDITS.md
+- site/fonts/: Mona Sans and Mona Sans Mono, Copyright GitHub, SIL Open Font
+  License 1.1 (site/fonts/OFL.txt)
 
 Copies and forks must keep LICENSE with its copyright lines. Please keep this
 NOTICE and CREDITS.md too.
