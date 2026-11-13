@@ -350,7 +350,9 @@ class Install(unittest.TestCase):
         self.assertFalse((self.work / 'xcode/install.json').exists())
 
     def test_separate_game_files_are_copied_after_the_install(self):
-        code, events = self.install(files='separate')
+        real = di.shutil.which   # afcclient installed (CI's runner has none: devicectl would copy, the next test)
+        with mock.patch.object(di.shutil, 'which', lambda n: '/opt/homebrew/bin/afcclient' if n == 'afcclient' else real(n)):
+            code, events = self.install(files='separate')
         self.assertEqual(code, 0)
         self.assertIn('--romfs', json.loads(self.called('build')[0].rsplit(' icloud=', 1)[0]))
         self.assertEqual([(e['k'], e['n']) for e in events if e['ev'] == 'stage'][-1], (5, 5))
