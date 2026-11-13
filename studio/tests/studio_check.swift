@@ -315,5 +315,30 @@ let elsewhere = try JSONDecoder.snakeCase.decode(Game.self, from: Data(elsewhere
 expect(!elsewhere.workReachable && elsewhere.workMovesTo == nil, "a build on a disk that is not connected, as the scan tells it")
 expect(game.workReachable && game.workMovesTo == nil, "an older scan without the fields: the build is reachable and stays where it is")
 
+// MARK: Save backups (Back Up Now, Restore)
+
+let saves = "\(root)/sb/\(title)"
+func put(_ path: String, _ text: String) { try? fm.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true); try? text.write(toFile: path, atomically: true, encoding: .utf8) }
+func read(_ path: String) -> String { (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
+try? fm.createDirectory(atPath: "\(saves)/save", withIntermediateDirectories: true)
+expect(!SaveBackups.hasSave(saveDir: saves) && (try? SaveBackups.backUp(saveDir: saves)) == nil, "an empty save folder is no save: nothing to back up")
+put("\(saves)/save/slot.bin", "v2"); put("\(saves)/save_device/device.bin", "d2")
+let made = try SaveBackups.backUp(saveDir: saves, now: Date(timeIntervalSince1970: 1_900_000_000))
+expect(read("\(made)/save/slot.bin") == "v2" && read("\(made)/save_device/device.bin") == "d2" && read("\(saves)/save/slot.bin") == "v2", "Back Up Now copies both save folders and leaves the save")
+put("\(saves)/save-backups/2026-01-01 10.00.00 local/save/slot.bin", "v0")   // one of the engine's, from a sync
+put("\(saves)/save-backups/notes/readme.txt", "mine")   // a folder of the player's: not a backup
+let listed = SaveBackups.list(saveDir: saves)
+expect(listed.map(\.kind) == [.manual, .local], "the backups newest first, by kind, and nothing else \(listed.map(\.name))")
+try? fm.createDirectory(atPath: "\(saves)/save.pull", withIntermediateDirectories: true)
+expect((try? SaveBackups.restore(listed[1], saveDir: saves)) == nil && read("\(saves)/save/slot.bin") == "v2", "no restore while a cut-off sync waits for the next start")
+try? fm.removeItem(atPath: "\(saves)/save.pull")
+let now = Date()
+let kept = try SaveBackups.restore(listed[1], saveDir: saves, now: now)
+expect(read("\(saves)/save/slot.bin") == "v0" && !fm.fileExists(atPath: "\(saves)/save_device"), "the backup is the save now, both folders as the backup had them")
+expect(kept.map { read("\($0)/save/slot.bin") == "v2" && read("\($0)/save_device/device.bin") == "d2" } == true, "the save it replaced is in the backups")
+let date = (try? fm.attributesOfItem(atPath: "\(saves)/save/slot.bin"))?[.modificationDate] as? Date
+expect(date.map { abs($0.timeIntervalSince(now)) < 2 } == true, "the restored save is dated now, so the cloud sync takes it for the newer")
+expect(SaveBackups.list(saveDir: saves).map(\.kind).contains(.beforeRestore), "the set-aside save is listed")
+
 print("studio check: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

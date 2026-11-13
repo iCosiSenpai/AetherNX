@@ -700,3 +700,28 @@
 "The first build goes to %@" = "La prima build va su %@";
 "The original build folder and Mac app are deleted; the game now uses the copy." = "La cartella di build e l'app per Mac originali vengono eliminate; il gioco ora usa la copia.";
 "this Mac" = "questo Mac";
+
+/* Save backups (the Saves section of a game page) */
+"%@, iCloud Drive's, before a sync" = "%@, di iCloud Drive, prima di una sincronizzazione";
+"%@, made with Back Up Now" = "%@, fatto con Backup ora";
+"%@, set aside by a restore" = "%@, messo da parte da un ripristino";
+"%@, this Mac's, before a sync" = "%@, di questo Mac, prima di una sincronizzazione";
+"%lld backup(s), the newest %@" = "%1$lld backup, il più recente %2$@";
+"A cloud sync of this save was cut off: start the game once, so it puts the save back, then try again." = "Una sincronizzazione cloud di questo salvataggio si è interrotta: avvia il gioco una volta, così rimette a posto il salvataggio, poi riprova.";
+"Back Up Now" = "Backup ora";
+"Backups" = "Backup";
+"Copies the save into its backups; the save itself is not touched." = "Copia il salvataggio nei suoi backup; il salvataggio stesso non viene toccato.";
+"None yet. Cloud saves keep one before they replace a save." = "Ancora nessuno. I salvataggi nel cloud ne tengono uno prima di sostituire un salvataggio.";
+"Puts a backup back as the save; the save it replaces is kept in the backups." = "Rimette un backup come salvataggio; il salvataggio che sostituisce resta nei backup.";
+"Quit %@, then restore its save." = "Chiudi %@, poi ripristina il suo salvataggio.";
+"Quit the game first." = "Prima chiudi il gioco.";
+"Restore" = "Ripristina";
+"Restore this save of %@?" = "Ripristinare questo salvataggio di %@?";
+"Show Backups in Finder" = "Mostra i backup nel Finder";
+"That backup holds no save." = "Quel backup non contiene un salvataggio.";
+"The save from %@ takes the place of the one on this Mac, which is kept in the backups (set aside by a restore). With cloud saves on, the game sends it to iCloud Drive at its next start." = "Il salvataggio del %@ prende il posto di quello su questo Mac, che resta nei backup (messo da parte da un ripristino). Con i salvataggi nel cloud attivi, il gioco lo invia a iCloud Drive al prossimo avvio.";
+"The save of %@ could not be backed up: %@" = "Non è stato possibile fare il backup del salvataggio di %1$@: %2$@";
+"The save of %@ could not be restored: %@" = "Non è stato possibile ripristinare il salvataggio di %1$@: %2$@";
+"The save of %@ is backed up: %@." = "Il backup del salvataggio di %1$@ è fatto: %2$@.";
+"The save of %@ is now the one from %@." = "Il salvataggio di %1$@ ora è quello del %2$@.";
+"There is no save to back up yet." = "Non c'è ancora un salvataggio di cui fare il backup.";

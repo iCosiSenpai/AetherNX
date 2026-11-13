@@ -210,10 +210,15 @@ struct SavesSection: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 8)
                 }
+                if game.saveDir != nil {
+                    Divider()
+                    backupsRow
+                }
             }
             .padding(.horizontal, 4)
         }
         .onChange(of: model.playLog.isRunning(game)) { revision += 1 }
+        .onChange(of: model.savesRevision) { revision += 1 }
         .onChange(of: model.job?.isRunning) { revision += 1 }
         .onChange(of: libraryFolder) { revision += 1 }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in revision += 1 }
@@ -242,6 +247,61 @@ struct SavesSection: View {
             }
         }
         .padding(.vertical, 8)
+    }
+
+    /// The save backups beside the save: the cloud sync's and the player's, Back Up Now, and Restore (SaveBackups).
+    @ViewBuilder
+    private var backupsRow: some View {
+        if let dir = game.saveDir {
+            let backups = SaveBackups.list(saveDir: dir)
+            let running = model.playLog.isRunning(game)
+            HStack(spacing: 12) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .frame(width: 20)
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Backups")
+                    Group {
+                        if let newest = backups.first {
+                            Text("\(backups.count) backup(s), the newest \(Self.label(newest))")
+                        } else {
+                            Text("None yet. Cloud saves keep one before they replace a save.")
+                        }
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                }
+                Spacer()
+                Button("Back Up Now") { model.backUpSave(game) }
+                    .disabled(running || !SaveBackups.hasSave(saveDir: dir))
+                    .help(running ? Text("Quit the game first.") : Text("Copies the save into its backups; the save itself is not touched."))
+                if !backups.isEmpty {
+                    Menu("Restore") {
+                        ForEach(backups.prefix(20)) { backup in
+                            Button(Self.label(backup)) { model.confirmRestore(backup, of: game) }
+                        }
+                        Divider()
+                        Button("Show Backups in Finder") { Finder.reveal(SaveBackups.folder(saveDir: dir)) }
+                    }
+                    .fixedSize()
+                    .disabled(running)
+                    .help(running ? Text("Quit the game first.") : Text("Puts a backup back as the save; the save it replaces is kept in the backups."))
+                }
+            }
+            .padding(.vertical, 8)
+        }
+    }
+
+    static func label(_ backup: SaveBackups.Backup) -> String {
+        let when = backup.date?.formatted(date: .abbreviated, time: .shortened) ?? backup.name
+        switch backup.kind {
+        case .local: return String(localized: "\(when), this Mac's, before a sync")
+        case .cloud: return String(localized: "\(when), iCloud Drive's, before a sync")
+        case .manual: return String(localized: "\(when), made with Back Up Now")
+        case .beforeRestore: return String(localized: "\(when), set aside by a restore")
+        case .other: return backup.name
+        }
     }
 
     private var saveFolder: String? {
