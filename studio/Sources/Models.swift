@@ -164,6 +164,17 @@ enum BuildTarget: String, CaseIterable, Identifiable {
         }
     }
 
+    /// What the queue says the build makes, in a sentence ("Fire Emblem, for iPhone and iPad").
+    var queueTitle: String.LocalizationValue {
+        switch self {
+        case .mac: "the Mac app"
+        case .device: "install on iPhone or iPad"
+        case .ios: "for iPhone and iPad"
+        case .iosSlim: "for iPhone and iPad, game files separate"
+        case .xcode: "an Xcode project"
+        }
+    }
+
     var commandTitle: LocalizedStringKey {
         switch self {
         case .mac: "Build Mac App"

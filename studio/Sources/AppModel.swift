@@ -212,6 +212,40 @@ final class AppModel {
     }
 
     var canStartJob: Bool { engine != nil && job?.isRunning != true }
+    /// Build and Install: start now, or wait in the build queue behind the running job.
+    var canQueueBuild: Bool { engine != nil }
+
+    /// Builds and installs waiting for the running job, in order (build: a Build or Install while a job runs).
+    struct QueuedBuild: Identifiable, Hashable {
+        let id = UUID()
+        let gameID: String
+        let gameName: String
+        let target: BuildTarget
+    }
+    private(set) var buildQueue: [QueuedBuild] = []
+    /// The queue waits after a job was stopped: the player stopped the work, so the next does not start by itself.
+    private(set) var queuePaused = false
+
+    func removeFromQueue(_ item: QueuedBuild) { buildQueue.removeAll { $0.id == item.id } }
+
+    /// Continue: the queue runs again after a stop.
+    func continueQueue() {
+        queuePaused = false
+        startNextQueued()
+    }
+
+    /// The next queued build that can start: one whose game is still in the library, and that build() accepts (keys, room, its disk). One it refuses
+    /// says why, as a Build button would, and the queue goes on.
+    private func startNextQueued() {
+        while !queuePaused, job?.isRunning != true, !buildQueue.isEmpty {
+            let next = buildQueue.removeFirst()
+            guard let game = games.first(where: { $0.id == next.gameID }) else {
+                log(String(localized: "\(next.gameName) is not in the library any more: its queued build is skipped."), kind: .error)
+                continue
+            }
+            build(game, target: next.target)
+        }
+    }
 
     /// The selection of the sidebar, as the page it shows.
     var sidebarSelection: SidebarItem? {
@@ -468,7 +502,13 @@ final class AppModel {
     // MARK: Jobs
 
     func build(_ game: Game, target: BuildTarget) {
-        guard canStartJob, engine != nil, game.isBuildable else { return }
+        guard engine != nil, game.isBuildable else { return }
+        if job?.isRunning == true {   // a job runs: this one waits its turn
+            guard !buildQueue.contains(where: { $0.gameID == game.id && $0.target == target }) else { return }
+            buildQueue.append(QueuedBuild(gameID: game.id, gameName: game.name, target: target))
+            log(String(localized: "Queued: \(game.name), \(String(localized: target.queueTitle)). It starts when the running job ends."), kind: .info)
+            return
+        }
         if target == .device, !devices.hasLoaded {   // the devices are read when first needed: an install started before Settings was ever opened
             devices.refresh(engine: engine) { [weak self] in
                 guard let self, devices.hasLoaded else { return }
@@ -665,6 +705,8 @@ final class AppModel {
                     self.outcomes[gameID] = job.state == .failed ? JobOutcome(title: job.title, succeeded: false, message: job.failureMessage ?? "", date: .now) : nil
                     if ok { self.lastSuccess[gameID] = JobOutcome(title: job.title, succeeded: true, message: job.lastMessage, date: .now) }
                 }
+                if job.state == .cancelled, !self.buildQueue.isEmpty { self.queuePaused = true }
+                defer { Task { @MainActor [weak self] in self?.startNextQueued() } }   // after this job's own completion and its rescan request
                 switch job.state {
                 case .cancelled: if self.job === job { self.job = nil }
                 case .succeeded:

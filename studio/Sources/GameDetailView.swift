@@ -301,8 +301,8 @@ private struct BuildMenu: View {
         .menuStyle(.button)
         .fixedSize()
         .controlSize(.large)
-        .disabled(!model.canStartJob)
-        .help(Text(target.detail))
+        .disabled(!model.canQueueBuild)
+        .help(model.canStartJob ? Text(target.detail) : Text("A job is running: this build waits in the queue and starts after it."))
 
         if prominent {
             menu.buttonStyle(.borderedProminent)
@@ -580,7 +580,7 @@ private struct DeviceRow: View {
             Spacer()
             RowButton("Devices", systemImage: "iphone.gen3") { model.sidebarSelection = .page(.devices) }
             RowButton(game.deviceInstall == nil ? "Install" : "Install Again", systemImage: "arrow.down.app") { model.build(game, target: .device) }
-                .disabled(!model.canStartJob)
+                .disabled(!model.canQueueBuild)
                 .help("Builds the game, signs it with your Apple team and installs it on the device chosen in Devices.")
         }
         .padding(.vertical, 8)
