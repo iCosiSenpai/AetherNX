@@ -19,6 +19,26 @@ enum Storage {
         return Space(free: Int64(free), withPurgeable: max(Int64(free), values.volumeAvailableCapacityForImportantUsage ?? Int64(free)))
     }
 
+    /// The disk a path is on: the Mac's own, or a drive or network share mounted at /Volumes/<name>.
+    struct Volume: Equatable {
+        var name: String
+        var isThisMac: Bool
+        var isConnected: Bool
+        var isNetwork: Bool
+    }
+
+    /// The disk holding `path`, as `aethernx` tells it (volume_of): /Volumes/<name> is a drive or a share, anything else is this Mac.
+    static func volume(of path: String) -> Volume {
+        let parts = URL(filePath: path).standardizedFileURL.pathComponents
+        guard parts.count > 2, parts[1] == "Volumes" else {
+            return Volume(name: String(localized: "this Mac"), isThisMac: true, isConnected: true, isNetwork: false)
+        }
+        let mount = URL(filePath: "/Volumes/\(parts[2])", directoryHint: .isDirectory)
+        let values = try? mount.resourceValues(forKeys: [.volumeURLKey, .volumeIsLocalKey])
+        let connected = values?.volume?.standardizedFileURL.path == mount.standardizedFileURL.path
+        return Volume(name: parts[2], isThisMac: false, isConnected: connected, isNetwork: connected && values?.volumeIsLocal == false)
+    }
+
     /// The space a file or folder takes on disk; 0 when it is not there. Walks the whole tree: call it off the main thread.
     nonisolated static func size(of path: String) -> Int64 {
         let url = URL(filePath: path)

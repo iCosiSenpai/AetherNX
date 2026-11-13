@@ -65,6 +65,10 @@ struct Game: Decodable, Hashable, Identifiable {
     var compressed: [String]
     var archives: [PackageFile]
     var workDir: String?
+    /// The disk that holds the build folder is there (a drive or a share holding the builds may be unplugged).
+    var workReachable: Bool
+    /// Where `aethernx move-build` would put the build: the builds folder of Settings → Library, or back beside the game; nil when it is there already.
+    var workMovesTo: String?
     var extractedVersions: [String]
     var displayVersion: String?
     var icon: String?
@@ -91,6 +95,8 @@ struct Game: Decodable, Hashable, Identifiable {
         compressed = try c.decodeIfPresent([String].self, forKey: .compressed) ?? []
         archives = try c.decodeIfPresent([PackageFile].self, forKey: .archives) ?? []
         workDir = try c.decodeIfPresent(String.self, forKey: .workDir)
+        workReachable = try c.decodeIfPresent(Bool.self, forKey: .workReachable) ?? true
+        workMovesTo = try c.decodeIfPresent(String.self, forKey: .workMovesTo)
         extractedVersions = try c.decodeIfPresent([String].self, forKey: .extractedVersions) ?? []
         displayVersion = try c.decodeIfPresent(String.self, forKey: .displayVersion)
         icon = try c.decodeIfPresent(String.self, forKey: .icon)
@@ -105,7 +111,7 @@ struct Game: Decodable, Hashable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, kind, titleId, name, folder, profile, base, updates, dlc, compressed, archives, workDir, extractedVersions
+        case id, kind, titleId, name, folder, profile, base, updates, dlc, compressed, archives, workDir, workReachable, workMovesTo, extractedVersions
         case displayVersion, icon, macApps, ipas, deviceInstall, saveDir, logFile, decompDir, liftedFiles, notes
     }
 

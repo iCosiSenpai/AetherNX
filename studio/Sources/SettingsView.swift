@@ -159,6 +159,8 @@ private struct LibrarySettings: View {
                 Text("One folder per game, with its base game, update and DLC (.nsp, .xci, .nsz, .xcz), or an archive of them.")
             }
 
+            BuildsFolderSection()
+
             Section {
                 Toggle("Download game artwork", isOn: $downloadArtwork)
                 HStack {
@@ -176,6 +178,57 @@ private struct LibrarySettings: View {
 
         }
         .formStyle(.grouped)
+    }
+}
+
+/// Where builds and Mac apps go: beside each game, or in a folder on another disk, so they take no room on this Mac.
+private struct BuildsFolderSection: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let elsewhere = Binding(get: { !model.buildsFolder.isEmpty },
+                                set: { on in if on { model.chooseBuildsFolder() } else { model.buildsFolder = "" } })
+        Section {
+            Picker("Builds and Mac apps", selection: elsewhere) {
+                Text("Beside each game").tag(false)
+                Text("In a folder on another disk").tag(true)
+            }
+            if !model.buildsFolder.isEmpty {
+                let volume = Storage.volume(of: model.buildsFolder)
+                LabeledContent("Folder") {
+                    HStack {
+                        Text(abbreviated(model.buildsFolder))
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                            .help(model.buildsFolder)
+                        Button("Change…") { model.chooseBuildsFolder() }
+                    }
+                }
+                LabeledContent("Disk") {
+                    if !volume.isConnected {
+                        Label("\(volume.name) is not connected", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    } else if let space = Storage.space(at: model.buildsFolder) {
+                        Text("\(volume.name): \(space.free.fileSize) free")
+                    } else {
+                        Text(volume.name)
+                    }
+                }
+                if volume.isNetwork {
+                    Label("A network share: builds take longer there, and a game played from it reads its files over the network.", systemImage: "network")
+                        .foregroundStyle(.secondary)
+                }
+                let movable = model.games.filter { $0.workMovesTo != nil }
+                if !movable.isEmpty {
+                    Label("\(movable.count) game(s) keep their build on this Mac: Move to \(volume.name) on each game's page.", systemImage: "info.circle")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("Builds and Mac Apps")
+        } footer: {
+            Text("A game's build folder holds its extracted files, shaders and Xcode project, tens of GB for a large game, and its Mac app is written beside it. In a folder on an external drive or a network share they take no room on this Mac; keep the games themselves there too by adding a folder of that disk to the library. A build already on this Mac stays where it is until you move it from the game's page.")
+        }
     }
 }
 

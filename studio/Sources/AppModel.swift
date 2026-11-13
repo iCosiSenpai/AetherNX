@@ -8,6 +8,7 @@ import UserNotifications
 enum Pref {
     static let enginePath = "enginePath"
     static let libraryFolders = "libraryFolders"
+    static let buildsFolder = "buildsFolder"
     static let keysPath = "keysPath"
     static let defaultTarget = "defaultTarget"
     static let language = "language"
@@ -119,6 +120,16 @@ final class AppModel {
     var libraryFolders: [String] {
         didSet { UserDefaults.standard.set(libraryFolders, forKey: Pref.libraryFolders) }
     }
+    /// Where new builds and their Mac apps go (Settings → Library): empty beside each game, else a folder, on an external drive or a network share,
+    /// handed to every `aethernx` run as AETHERNX_BUILDS (docs/frontends.md, Builds in another folder).
+    var buildsFolder: String {
+        didSet {
+            guard buildsFolder != oldValue else { return }
+            UserDefaults.standard.set(buildsFolder, forKey: Pref.buildsFolder)
+            rescan()
+        }
+    }
+    var toolEnvironment: [String: String] { buildsFolder.isEmpty ? [:] : ["AETHERNX_BUILDS": buildsFolder] }
     private(set) var games: [Game] = []
     private(set) var scanErrors: [ScanError] = []
     private(set) var scanFailure: String?
@@ -178,6 +189,7 @@ final class AppModel {
         Pref.register()
         showsSetupAssistant = !UserDefaults.standard.bool(forKey: Pref.setupCompleted)
         libraryFolders = UserDefaults.standard.stringArray(forKey: Pref.libraryFolders) ?? []
+        buildsFolder = UserDefaults.standard.string(forKey: Pref.buildsFolder) ?? ""
         engine = Engine.locate(saved: UserDefaults.standard.string(forKey: Pref.enginePath) ?? "")
         readEngineVersion()
         rescan()
@@ -332,7 +344,8 @@ final class AppModel {
         isScanning = true
         let folders = libraryFolders
         Task {
-            let result = await CommandRunner.capture(executable: engine.appending(path: "aethernx"), arguments: ["scan", "--json"] + folders, directory: engine)
+            let result = await CommandRunner.capture(executable: engine.appending(path: "aethernx"), arguments: ["scan", "--json"] + folders, directory: engine,
+                                                     environment: toolEnvironment)
             isScanning = false
             hasScanned = true
             defer {
@@ -378,6 +391,33 @@ final class AppModel {
         rescan()
     }
 
+    /// Settings → Library: a folder for builds and Mac apps, on another disk. Nothing changes when the panel is cancelled.
+    func chooseBuildsFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = String(localized: "Choose a folder for builds and Mac apps, on an external drive or a network share. Each game gets a folder of its own in it.")
+        panel.prompt = String(localized: "Use Folder")
+        if panel.runModal() == .OK, let url = panel.url { buildsFolder = url.standardizedFileURL.path }
+    }
+
+    /// `aethernx move-build`: the game's build folder and the Mac apps beside it go to the builds folder, or back beside the game when none is set.
+    func moveBuild(_ game: Game) {
+        guard canStartJob, let engine, let target = game.workMovesTo else { return }
+        if let app = game.macApp, NSWorkspace.shared.runningApplications.contains(where: { $0.bundleURL?.standardizedFileURL.path == app }) {
+            errorMessage = String(localized: "\(game.name) is open: quit it, then move its build.")
+            return
+        }
+        let here = URL(filePath: target).deletingLastPathComponent().standardizedFileURL == URL(filePath: game.folder).standardizedFileURL   // back beside the game
+        let volume = Storage.volume(of: target)
+        startJob(Job(title: volume.isThisMac ? String(localized: "Moving the build of \(game.name) to this Mac") : String(localized: "Moving the build of \(game.name) to \(volume.name)"),
+                     gameID: game.id, target: nil),
+                 executable: engine.appending(path: "aethernx"), arguments: ["move-build", game.folder, "--progress", "json"] + (here ? ["--here"] : []),
+                 directory: engine) { [weak self] _ in self?.rescan() }
+    }
+
     func chooseLibraryFolder() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -399,6 +439,10 @@ final class AppModel {
             }
             return
         }
+        if !game.workReachable, let work = game.workDir {
+            errorMessage = String(localized: "The build of \(game.name) is on \(Storage.volume(of: work).name), which is not connected. Connect it, then build again.")
+            return
+        }
         keys = KeysStatus.current()
         // A dump holds the game's files already decrypted: only packages need the keys
         guard keys.isUsable || game.kind == .dump else {
@@ -406,7 +450,7 @@ final class AppModel {
             return
         }
         // The build stops at once without room for the game's image; say so here, with what can be done about it
-        if !game.isExtracted, let space = Storage.space(at: game.folder), space.free < game.firstBuildSpace {
+        if !game.isExtracted, let space = Storage.space(at: game.workDir ?? game.folder), space.free < game.firstBuildSpace {
             let need = game.firstBuildSpace.fileSize, free = space.free.fileSize
             if space.withPurgeable >= game.firstBuildSpace {
                 confirmation = Confirmation(
@@ -417,7 +461,7 @@ final class AppModel {
                         guard let self else { return }
                         self.log(String(localized: "Removing local Time Machine snapshots…"), kind: .info)
                         let ok = await Storage.thinLocalSnapshots()
-                        let after = Storage.space(at: game.folder)?.free ?? 0
+                        let after = Storage.space(at: game.workDir ?? game.folder)?.free ?? 0
                         self.log(String(localized: "\(after.fileSize) free now."), kind: ok ? .info : .error)
                         if after >= game.firstBuildSpace { self.startBuild(game, target: target) } else {
                             self.errorMessage = String(localized: "There is still not enough room: \(after.fileSize) free of about \(need) needed.")
@@ -569,7 +613,7 @@ final class AppModel {
         guard self.job?.isRunning != true else { return }
         self.job = job
         log("$ \(([executable.lastPathComponent] + arguments).map(Self.quoted).joined(separator: " "))", kind: .command)
-        let runner = CommandRunner(executable: executable, arguments: arguments, directory: directory, environment: environment)
+        let runner = CommandRunner(executable: executable, arguments: arguments, directory: directory, environment: environment.merging(toolEnvironment) { own, _ in own })
         job.runner = runner
         do {
             try runner.start(onLine: { [weak self, weak job] line, isError in

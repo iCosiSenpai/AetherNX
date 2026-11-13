@@ -6,6 +6,7 @@ encrypted archive fails at once. doctor checks the Metal compiler the shaders we
 import contextlib
 import importlib
 import io
+import json
 import os
 import plistlib
 import re
@@ -286,3 +287,89 @@ class Devices(Base):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class Builds(Base):   # a builds folder (AETHERNX_BUILDS, Studio's Settings → Storage): where builds go, the record of where each is, move-build
+    TID = '0100000000990000'
+
+    def setUp(self):
+        super().setUp()
+        self.folder = self.root / 'Games' / 'My: Game'   # a name with a character a network share refuses
+        nsp(self.folder / f'My Game [{self.TID}][v0].nsp')
+        self.drive = self.root / 'Drive' / 'AetherNX'
+        self.env = mock.patch.dict(os.environ, {'AETHERNX_BUILDS': str(self.drive)}); self.env.start(); self.addCleanup(self.env.stop)
+
+    def game(self):
+        games, errors = scan(self.folder)
+        self.assertEqual(errors, [])
+        return next(iter(games.values()))
+
+    def built_here(self):   # a build beside the game, and its Mac app
+        work = self.folder / f'{self.TID}_build'
+        (work / 'extract/v0').mkdir(parents=True); (work / 'extract/v0/RomFS.img').write_bytes(os.urandom(300_000))
+        (work / 'logs').mkdir(); os.symlink('../extract', work / 'logs/link')
+        app(self.folder / 'My Game.app', self.TID); (self.folder / 'My Game.app/Contents/MacOS').mkdir(); (self.folder / 'My Game.app/Contents/MacOS/host').write_bytes(b'x' * 5000)
+        return work
+
+    def test_a_new_build_goes_to_the_builds_folder(self):
+        g = self.game()
+        self.assertEqual(g['work_dir'], str(self.drive / 'My_ Game' / f'{self.TID}_build'))
+        self.assertEqual((g['work_reachable'], g['work_moves_to']), (True, None))
+        with mock.patch.object(cli.os, 'execv') as execv:   # the build script is told where
+            cli.main(['build', str(self.folder)])
+        cmd = execv.call_args.args[1]
+        self.assertEqual(cmd[cmd.index('--work-dir') + 1], g['work_dir'])
+        self.assertEqual((self.folder / cli.BUILD_POINTER).read_text().strip(), g['work_dir'])   # recorded, so a later change of the setting keeps finding it
+
+    def test_a_build_beside_the_game_stays_in_use_until_it_is_moved(self):
+        work = self.built_here()
+        g = self.game()
+        self.assertEqual((g['work_dir'], g['work_moves_to']), (str(work), str(self.drive / 'My_ Game' / f'{self.TID}_build')))
+        with mock.patch.object(device_install, 'install', return_value=0) as install:
+            run('install', str(self.folder))
+        self.assertEqual(install.call_args.args[1], work)
+        self.assertNotIn('--work-dir', install.call_args.kwargs['build_args'])
+
+    def test_move_build_takes_the_build_and_its_app_to_the_drive_and_back(self):
+        work = self.built_here()
+        before = cli.tree_listing(work)
+        code, out, err = run('move-build', str(self.folder), '--progress', 'json')
+        self.assertEqual(code, 0, err)
+        events = [json.loads(line) for line in out.splitlines()]
+        self.assertEqual([e['name'] for e in events if e['ev'] == 'stage'], ['copy the build to ' + str(self.drive / 'My_ Game'), 'check the copy', 'remove the original'])
+        there = self.drive / 'My_ Game' / f'{self.TID}_build'
+        self.assertFalse(work.exists()); self.assertFalse((self.folder / 'My Game.app').exists())
+        self.assertEqual(cli.tree_listing(there), before)
+        self.assertTrue(os.path.islink(there / 'logs/link'))
+        g = self.game()
+        self.assertEqual((g['work_dir'], g['mac_apps'], g['work_moves_to']), (str(there), [str(self.drive / 'My_ Game' / 'My Game.app')], None))
+        with mock.patch.dict(os.environ, {'AETHERNX_BUILDS': ''}):   # the setting off: the recorded build is still the game's, and can come back
+            g = self.game()
+            self.assertEqual((g['work_dir'], g['work_moves_to']), (str(there), str(work)))
+            code, _, err = run('move-build', str(self.folder), '--here')
+            self.assertEqual(code, 0, err)
+            self.assertEqual(cli.tree_listing(work), before)
+            self.assertFalse((self.folder / cli.BUILD_POINTER).exists())
+            self.assertEqual(self.game()['mac_apps'], [str(self.folder / 'My Game.app')])
+
+    def test_a_move_that_cannot_finish_leaves_the_original(self):
+        work = self.built_here()
+        there = self.drive / 'My_ Game' / f'{self.TID}_build'
+        (self.drive / 'My_ Game' / 'My Game.app').mkdir(parents=True)   # something in the way
+        code, _, err = run('move-build', str(self.folder))
+        self.assertEqual(code, 1); self.assertIn('is there already', err)
+        self.assertTrue(work.is_dir()); self.assertFalse(there.exists())
+        os.rmdir(self.drive / 'My_ Game' / 'My Game.app')
+        with mock.patch.object(cli, 'copy_file', side_effect=OSError(28, 'No space left on device')):
+            with self.assertRaises(OSError): run('move-build', str(self.folder))
+        self.assertTrue(work.is_dir()); self.assertFalse(there.exists())   # the partial copy is removed, the original kept
+
+    def test_a_build_on_a_disk_that_is_not_connected(self):
+        gone = Path('/Volumes/AetherNX test drive that is not there/My Game/' + f'{self.TID}_build')
+        (self.folder / cli.BUILD_POINTER).write_text(f'{gone}\n')
+        g = self.game()
+        self.assertEqual((g['work_dir'], g['work_reachable'], g['work_moves_to']), (str(gone), False, None))
+        code, _, err = run('install', str(self.folder))
+        self.assertEqual(code, 1); self.assertIn('which is not connected', err)
+        (self.folder / cli.BUILD_POINTER).write_text(f'{self.drive}/deleted/{self.TID}_build\n')   # a recorded build that was deleted: the next one goes where the setting says
+        self.assertEqual(self.game()['work_dir'], str(self.drive / 'My_ Game' / f'{self.TID}_build'))
