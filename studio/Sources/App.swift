@@ -104,7 +104,7 @@ struct AppCommands: Commands {
             ForEach(BuildTarget.menuOrder) { target in
                 Button(target.commandTitle) { if let game { model.build(game, target: target) } }
                     .keyboardShortcut(target.shortcut.key, modifiers: target.shortcut.modifiers)
-                    .disabled(game?.isBuildable != true || !model.canStartJob)
+                    .disabled(game?.isBuildable != true || !model.canQueueBuild)
             }
             Button("Unpack") { if let game { model.unpack(game) } }
                 .disabled(game?.kind != .archives || !model.canStartJob)

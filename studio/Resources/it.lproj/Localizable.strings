@@ -725,3 +725,18 @@
 "The save of %@ is backed up: %@." = "Il backup del salvataggio di %1$@ è fatto: %2$@.";
 "The save of %@ is now the one from %@." = "Il salvataggio di %1$@ ora è quello del %2$@.";
 "There is no save to back up yet." = "Non c'è ancora un salvataggio di cui fare il backup.";
+
+/* The build queue */
+"%@ is not in the library any more: its queued build is skipped." = "%@ non è più nella libreria: la sua build in coda viene saltata.";
+"%@, %@" = "%1$@, %2$@";
+"A job is running: this build waits in the queue and starts after it." = "È in corso un lavoro: questa build aspetta in coda e parte dopo.";
+"Queued: %@, %@. It starts when the running job ends." = "In coda: %1$@, %2$@. Parte quando finisce il lavoro in corso.";
+"Remove %@ from the queue" = "Togli %@ dalla coda";
+"Remove from the queue" = "Togli dalla coda";
+"Then" = "Poi";
+"Waiting (the queue is paused after a stop)" = "In attesa (la coda è in pausa dopo uno stop)";
+"an Xcode project" = "un progetto Xcode";
+"for iPhone and iPad" = "per iPhone e iPad";
+"for iPhone and iPad, game files separate" = "per iPhone e iPad, file di gioco separati";
+"install on iPhone or iPad" = "installazione su iPhone o iPad";
+"the Mac app" = "l'app per Mac";
