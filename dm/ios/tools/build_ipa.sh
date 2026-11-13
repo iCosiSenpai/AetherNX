@@ -187,10 +187,11 @@ if [ "$PREPARE_XCODE" = YES ] && [ -n "${DM_ENTITLEMENTS-default}" ]; then
     '<plist version="1.0"><dict><key>com.apple.developer.kernel.increased-memory-limit</key><true/></dict></plist>' > Gen/DmIOS.entitlements || die "entitlements"; fi
   # DM_ICLOUD_CONTAINER=<iCloud container ID> (the maintainer's: iCloud.io.github.icosisenpai.horizonnative, as Info.plist's NSUbiquitousContainers names it): automatic iCloud saves
   # (CloudSaves.h). Only for a project signed with a team that owns the container; Xcode registers it on the App ID. An unsigned IPA never asks for it: a sideloader cannot grant it
+  # plutil reads a key as a key path, its dots as separators: each dot of a key's name is escaped, or "Key path not found com.apple.developer…" (macOS 27)
   if [ -n "${DM_ICLOUD_CONTAINER:-}" ]; then
-    plutil -insert com.apple.developer.icloud-container-identifiers -json "[\"$DM_ICLOUD_CONTAINER\"]" Gen/DmIOS.entitlements &&
-    plutil -insert com.apple.developer.ubiquity-container-identifiers -json "[\"$DM_ICLOUD_CONTAINER\"]" Gen/DmIOS.entitlements &&
-    plutil -insert com.apple.developer.icloud-services -json '["CloudDocuments"]' Gen/DmIOS.entitlements || die "iCloud entitlements ($DM_ICLOUD_CONTAINER)"
+    plutil -insert 'com\.apple\.developer\.icloud-container-identifiers' -json "[\"$DM_ICLOUD_CONTAINER\"]" Gen/DmIOS.entitlements &&
+    plutil -insert 'com\.apple\.developer\.ubiquity-container-identifiers' -json "[\"$DM_ICLOUD_CONTAINER\"]" Gen/DmIOS.entitlements &&
+    plutil -insert 'com\.apple\.developer\.icloud-services' -json '["CloudDocuments"]' Gen/DmIOS.entitlements || die "iCloud entitlements ($DM_ICLOUD_CONTAINER)"
   fi
   echo "CODE_SIGN_ENTITLEMENTS = Gen/DmIOS.entitlements" >> Gen/dm.xcconfig
   t "entitlements: $(plutil -convert json -o - Gen/DmIOS.entitlements)"
