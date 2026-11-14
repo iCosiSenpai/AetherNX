@@ -3,7 +3,15 @@ import Foundation
 import Combine
 
 struct Setting: Decodable, Identifiable {
-    let env, kind, label, note, def: String
+    let env, kind, label, note: String
+    private let rawDefault: String
+    /// The default, with a device-dependent one resolved: mem>=<GB>?<a>:<b> (dm/games/settings.py MEMORY_DEFAULTS) is <a> on a device with at least that much memory, else <b>
+    var def: String { Setting.resolve(rawDefault) }
+    static func resolve(_ d: String, memory: UInt64 = ProcessInfo.processInfo.physicalMemory) -> String {
+        guard d.hasPrefix("mem>="), let q = d.firstIndex(of: "?"), let c = d[q...].firstIndex(of: ":"),
+              let gb = UInt64(d[d.index(d.startIndex, offsetBy: 5)..<q]) else { return d }
+        return memory >= gb << 30 ? String(d[d.index(after: q)..<c]) : String(d[d.index(after: c)...])
+    }
     let section: String?   // heading on the settings screen; absent in older bundles
     let needs: String?     // "<VAR>=<value>": a sub-setting, drawn only while that setting has that value
     let level: String?     // "basic": shown first (the Mac window's Basic settings); any other or none: Advanced settings. The iPhone keeps one list
@@ -30,7 +38,7 @@ struct Setting: Decodable, Identifiable {
         default: return true
         }
     }
-    enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", section, needs, level, base, options, min, max, step, on, off }
+    enum CodingKeys: String, CodingKey { case env, kind, label, note, rawDefault = "default", section, needs, level, base, options, min, max, step, on, off }
 }
 struct SettingsFile: Decodable { let settings: [Setting] }
 

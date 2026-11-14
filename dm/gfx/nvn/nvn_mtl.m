@@ -8378,7 +8378,11 @@ static int pso4_on(void) {
     if (v < 0) {
         const char *e = getenv("DM_PSO_MTL4");
 #if TARGET_OS_IPHONE
-        v = e ? !strcmp(e, "1") : DM_GAME_PSO_MTL4;   // the profile's pso_mtl4
+        // the profile's pso_mtl4: on (1), off (0), or auto (2): on a device with 10 GB of memory or more, the rule the launcher applies to its default (LauncherSettings.swift
+        // Setting.resolve, settings.py MEMORY_DEFAULTS); the archive's footprint (about 300 MB for Hyrule Warriors: Age of Calamity) is what an 8 GB device is spared
+        unsigned long long mem = NSProcessInfo.processInfo.physicalMemory;
+        v = e ? !strcmp(e, "1") : DM_GAME_PSO_MTL4 == 2 ? mem >= (10ull << 30) : DM_GAME_PSO_MTL4;
+        if (!e && DM_GAME_PSO_MTL4 == 2) MLOG("Metal 4 pipelines %s: this device has %.1f GB of memory (pso_mtl4 auto: on from 10 GB)", v ? "on" : "off", mem / 1073741824.0);
         if (!v) MLOG("render pipelines through the MTLDevice (iOS: DM_PSO_MTL4=1 or the profile key pso_mtl4 on turns on the Metal 4 bases, the pipeline archive and the hybrid pipelines)");
 #else
         v = !(e && !strcmp(e, "0"));
