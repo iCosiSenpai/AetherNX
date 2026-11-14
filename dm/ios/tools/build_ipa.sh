@@ -144,7 +144,7 @@ else TD=Gen/dm; program_tables; LJ=Gen/dm/launcher.json; fi
 # architectures the profile's pso_gpu key names (whitespace-separated, joined for pso_offline.py's --gpu), else g18p; with it a player who turns Metal 4 on gets the stand-ins at
 # once instead of a first start that builds them. It goes into the app as pso/ (main.m hands it to the host as DM_PSO_BUNDLE), with the pulling vertex libraries the bases are made of.
 # Each architecture adds about 650 MB to the app (Breath of the Wild; 220 MB in the IPA) and 4 minutes to the first build; made again only when its inputs change (the libraries, the pairs,
-# the profile's depth_mode, metal-tt). DM_PSO_GPUS=none leaves it out
+# the profile's depth_mode, or DM_PSO_DEPTH: the mode the NSP script learned from a run of the game, metal-tt). DM_PSO_GPUS=none leaves it out
 PSO=; PG=$(python3 "$DM/games/game.py" "$GAME" pso_gpu '') || die "game profile $GD: pso_gpu"
 PGK=g18p; N=0; for w in $PG; do case $w in none) N=9; break ;; esac; case ${w#applegpu_} in '' | *[!A-Za-z0-9]*) N=9; break ;; esac; N=$((N+1)); done
 if [ "$PG" ]; then case $N in 1 | 2 | 3 | 4) PGK=$(echo "$PG" | tr -s ' \t' ',') ;; *) t "profile $GD: pso_gpu '$PG' is not 1-4 whitespace-separated GPU architectures (each one such as g18p or applegpu_g19p, with or without the applegpu_ prefix; there is no none: DM_PSO_GPUS=none leaves the archive out) - taking g18p" ;; esac; fi
@@ -152,7 +152,7 @@ if [ -n "${DM_PSO_GPUS+set}" ]; then GPUS=$DM_PSO_GPUS; else GPUS=$PGK; fi
 if [ "$GFXAPI" = nvn ] && [ -n "$GPUS" ] && [ "$GPUS" != none ] && [ -f "$GD/shader_pairs.tsv" ]; then
   PSO=$W/build/ios/pso/bundle
   t "pipeline archive for $GPUS (metal-tt; minutes when its inputs changed)"
-  python3 "$DM/gfx/tools/pso_offline.py" --game "$GAME" --msl "$MSL_IOS/b-$V" --out "$PSO" --work "$W/build/ios/pso/work" --gpu "$GPUS" ${DM_PSO_IOS_MIN:+--os-min "$DM_PSO_IOS_MIN"} \
+  python3 "$DM/gfx/tools/pso_offline.py" --game "$GAME" --msl "$MSL_IOS/b-$V" --out "$PSO" --work "$W/build/ios/pso/work" --gpu "$GPUS" ${DM_PSO_IOS_MIN:+--os-min "$DM_PSO_IOS_MIN"} ${DM_PSO_DEPTH:+--depth "$DM_PSO_DEPTH"} \
     | while IFS= read -r ln; do t "$ln"; done
   if [ "${PIPESTATUS[0]}" != 0 ]; then   # an optimization: the device builds the bases on its first start without it
     t "[RED] pipeline archive: pso_offline.py failed (its output is above); the app is built without one and the device builds its pipeline bases on its first start (DM_PSO_GPUS=none skips this step)"

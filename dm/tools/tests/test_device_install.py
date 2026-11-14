@@ -155,6 +155,24 @@ class Failures(unittest.TestCase):
             self.assertFalse(di.device_has_image(dev, '', work, afcclient='/x/afcclient', run=run), 'no bundle ID: not installed from here yet')
             self.assertFalse(di.device_has_image(dev, 'b.id', Path(tmp) / 'nothing', afcclient='/x/afcclient', run=run), 'no image built yet')
 
+    def test_the_depth_mode_comes_from_the_devices_log(self):   # for the build that follows: its offline pipeline archive takes the game's mode
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            logs = {'/Documents/log.txt': 'boot: game language en-US\n', '/Documents/log.prev.txt': '[dm] [nvn] depth mode near=0 (as D3D / Metal)\n'}
+            calls = []
+            def run(cmd, timeout=60, env=None):
+                calls.append(cmd)
+                if cmd[-2] in logs: Path(cmd[-1]).write_text(logs[cmd[-2]])
+                return 0, '', ''
+            dev = {'udid': UDID, 'connection': 'cable', 'name': 'Fixture iPhone'}
+            self.assertEqual(di.learn_depth_mode(dev, 'b.id', work, afcclient='/x/afcclient', run=run), 'zero')
+            self.assertEqual((work / 'depth_mode').read_text(), "zero\tFixture iPhone's log of the game\n")
+            self.assertNotIn('-n', calls[0]); self.assertEqual(calls[0][-4:-1], ['get', '-f', '/Documents/log.txt'])
+            (work / 'depth_mode').unlink()
+            self.assertIsNone(di.learn_depth_mode(dev, 'b.id', work, afcclient='/x/afcclient', run=lambda c, timeout=60, env=None: (0, '', '')), 'no log on the device')
+            self.assertFalse((work / 'depth_mode').exists())
+            self.assertIsNone(di.learn_depth_mode(dev, '', work, afcclient='/x/afcclient', run=run), 'not installed from here yet')
+
     def test_progress_words(self):
         self.assertEqual(di.xcode_step('CompileC /a/b.o /src/b.c normal arm64'), 'compiling')
         self.assertEqual(di.xcode_step('PhaseScriptExecution Copy\\ game\\ resources /x.sh'), 'copying the game files into the app')

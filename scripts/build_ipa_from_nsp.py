@@ -2758,7 +2758,7 @@ def mac_run(work, game, patched, host, font, msl, aoc, gfx, lang, env, logs, g, 
         # step finds them in the archive (seconds once they are there). It takes the depth mode from the profile's depth_mode key (default gl, NVN's); with a wrong one the game builds its bases again in the app
         PROG.add(1); PROG.stage('Pipeline prebuild', step='building')
         penv = run_saves.cloud_off(dict(env, **{k: str(v) for k, v in renv.items()}, DM_PSO_PREBUILD='tool'))   # the environment file's DM_SAVE_SYNC is for the player's runs
-        if g.get('depth_mode', 'gl') == 'zero': penv['DM_PSO_PREBUILD_DEPTH'] = 'zero'   # a game that sets the near = 0 depth mode (the profile says so: the host learns it only at run time, which for a provisional or derived profile includes its check boots)
+        if depth_mode(g, work)[0] == 'zero': penv['DM_PSO_PREBUILD_DEPTH'] = 'zero'   # a game that sets the near = 0 depth mode (the profile says so: the host learns it only at run time, which for a provisional or derived profile includes its check boots)
         run([host], logs / 'pso_prebuild.log', env=penv, cwd=rd)
         PROG.end()
     q = lambda v: shlex.quote(str(v))
@@ -2812,6 +2812,39 @@ def mac_gpu_arch(work, env, logs):
     return arch
 
 
+# The NVN depth mode a game sets (nvnDeviceSetDepthMode) decides which vertex entry its pipeline bases take: main0 for NVN's near = -w (gl), main0_z for near = 0 (zero).
+# Bases made before the game runs (the offline archive, the Mac prewarm, the run folder's prebuild) need it in advance; made for the wrong one, the app refuses them all and
+# builds every base itself at its first start (Hyrule Warriors: Age of Calamity on an iPhone 17 Pro Max: 3,176 bases, 170 s on every core). The host logs the mode when the game
+# sets it ("[nvn] depth mode near=0 (as D3D / Metal)"), so a run anywhere tells it: a profile without depth_mode learns it from the build folder's record (depth_mode, written
+# here and by ./aethernx install from a device's log), this Mac's log of the game, or the build's own check boots.
+DEPTH_LOG = re.compile(r'\[nvn\] depth mode (near=0|near=-w)')
+
+
+def depth_in_log(path):   # 'zero' / 'gl' as the last such line of a host log says, else None (no file, or a run that never got to the device's creation)
+    try: text = Path(path).read_text(errors='replace')
+    except OSError: return None
+    found = DEPTH_LOG.findall(text)
+    return ('zero' if found[-1] == 'near=0' else 'gl') if found else None
+
+
+def depth_mode(g, work, report=False):
+    """(mode, where) of the game's depth mode for bases made before it runs: the profile's depth_mode, else the build folder's record, else this Mac's log of the game
+    (~/Library/Logs/HorizonNative/<title ID>.log), else the build's own logs, else ('gl', None), NVN's default. A mode learned from a log is recorded in the build folder"""
+    if g.get('depth_mode'): return g.get('depth_mode'), 'the profile'
+    rec = Path(work) / 'depth_mode'
+    try: mode, _, where = rec.read_text().strip().partition('\t')
+    except OSError: mode, where = '', ''
+    if mode not in ('gl', 'zero'):
+        mode = where = ''
+        for log in [Path.home() / 'Library/Logs/HorizonNative' / f'{g.id}.log', *sorted((Path(work) / 'logs').glob('*.log'))]:
+            if (m := depth_in_log(log)): mode, where = m, str(log); break
+        if mode:
+            with contextlib.suppress(OSError): rec.write_text(f'{mode}\t{where}\n')
+    if not mode: return 'gl', None
+    if report and mode == 'zero': say(f'depth mode near=0, as a run of the game logged ({where}): the pipeline bases made before it runs are made for it (its profile could say depth_mode zero)')
+    return mode, where
+
+
 def mac_pso(py, repo, work, lib, g, gpus, env, logs):
     """PLATFORM 'mac-app', an NVN game with shader pairs: its pipeline archive made offline for this Mac's GPU (dm/gfx/tools/pso_offline.py --platform macos, metal-tt), which the app carries as
     Resources/pso and the launcher hands to the host as DM_PSO_BUNDLE, as the iOS app does (docs/development.md, The pipeline archive made offline): the app's first start builds no base,
@@ -2828,7 +2861,7 @@ def mac_pso(py, repo, work, lib, g, gpus, env, logs):
     arch = gpus or here
     PROG.add(1); PROG.stage('Pipeline archive', step=f'{arch} (metal-tt, minutes when its inputs changed)')
     out = work / 'pso/mac'
-    cmd = [py, repo / 'dm/gfx/tools/pso_offline.py', '--game', g.id, '--msl', lib, '--out', out, '--work', work / 'pso/mac-work', '--gpu', arch, '--platform', 'macos']
+    cmd = [py, repo / 'dm/gfx/tools/pso_offline.py', '--game', g.id, '--msl', lib, '--out', out, '--work', work / 'pso/mac-work', '--gpu', arch, '--platform', 'macos', '--depth', depth_mode(g, work, report=True)[0]]
     if not g.table('pso_pairs.tsv').is_file() and (work / 'shader/pso_pairs.tsv').is_file():   # the split's copy, as the app gets it (--pso-pairs)
         cmd += ['--pairs', g.table('shader_pairs.tsv'), '--pairs', work / 'shader/pso_pairs.tsv']
     if run(cmd, logs / 'pso_offline_mac.log', env=env, fatal=False):   # an optimization: the app builds the bases on its first start without it
@@ -2862,7 +2895,7 @@ def mac_prebake(py, repo, work, msl, g, host, pso, env, logs):
     if not (pso / f'{arch}.mtl4a').is_file(): say(f'prewarm pipelines: the pipeline archive is not for this Mac\'s GPU ({arch}): the app builds them on its first start'); return pso
     PROG.add(1); PROG.stage('Prewarm pipelines', step=f'{arch}, {rows:,} rows (host, minutes to hours when its inputs changed)')
     out, stage = work / 'pso/mac-prewarm', work / 'pso/mac-prewarm-work'
-    zero = g.get('depth_mode', 'gl') == 'zero'
+    zero = depth_mode(g, work)[0] == 'zero'
     others = sorted(f.stem for f in pso.glob('applegpu_*.mtl4a') if '-prewarm-' not in f.name and f.stem != arch)   # the other GPUs --gpu named: their pipelines come from the scripts (metal-tt)
     lib = msl / f'b-{chain_of(repo)}'
     digest = hashlib.sha256()
@@ -3466,6 +3499,7 @@ def main(args=None):
     say('preparing the Xcode project' if prepare_xcode else f'building the IPA → {out_ipa}')
     ipa_env = dict(env, GAME=g.id, W=str(work / 'ipa'), PATCHED=str(patched), ROMFS=str(rfs.source(game)), MSL_IOS=str(ios), GFXAPI=gfx, FONT_PY=py, DM_DISPLAY_NAME=app_name, DM_BUNDLE_ID=bundle_id, AOC=str(aoc or ''), DM_XCODE_DERIVED_DATA=str(work / 'xcode-derived-data'), DM_TEAM_ID=team_id, DM_LANG=lang, CONTROL=str(control))
     if prepare_xcode: ipa_env['DM_XCODE_PROJECT_DIR'] = str(project.parent)
+    if gfx == 'nvn': ipa_env['DM_PSO_DEPTH'] = depth_mode(g, work, report=True)[0]   # the offline archive's depth mode (build_ipa.sh hands it to pso_offline.py)
     separate = romfs_mode == 'separate'
     if separate: ipa_env['DM_COPY_ROMFS'] = 'NO'; say('game files: separate (DM_COPY_ROMFS=NO), left out of the app; the image stays at ' + str(rfs.source(game)))
     if shader_files: ipa_env['DM_SHADER_FILES'] = '1'; say('shader library: its separate files (DM_SHADER_FILES=1), for install tools that cannot copy a large file')

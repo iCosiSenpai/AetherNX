@@ -126,6 +126,10 @@ import CoreGraphics
         let dots = SVGPath.parse("M0 0l.5.5l1e1 0").cgPath.boundingBoxOfPath
         expect(abs(dots.maxX - 10.5) < 0.001 && abs(dots.maxY - 0.5) < 0.001, "'.5.5' is two numbers and 1e1 is ten (\(dots))")
         failed += checkLauncherLayout(LauncherModel(mac.settings, defaults: d), defaults: d)
+        // a default by the device's memory (settings.py MEMORY_DEFAULTS: pso_mtl4 auto): Metal 4 pipelines on from 10 GB, as nvn_mtl.m pso4_on decides without the launcher
+        expect(Setting.resolve("mem>=10?1:0", memory: 12 << 30) == "1" && Setting.resolve("mem>=10?1:0", memory: 8 << 30) == "0"
+               && Setting.resolve("mem>=10?on:off", memory: 10 << 30) == "on" && Setting.resolve("1") == "1" && Setting.resolve("mem>=x?1:0") == "mem>=x?1:0",
+               "a default by the device's memory takes its first value from that much memory, the second below it")
         print("launcher storage: \(failed) failed")
         exit(failed == 0 ? 0 : 1)
     }

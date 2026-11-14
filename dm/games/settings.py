@@ -59,6 +59,12 @@ def fixups_keys(path):   # '# KEY<TAB>value' header rows of a rewriter table, as
 UNKNOWN_LANGUAGES = 'This game\'s files do not list its languages, so some of these may not be in the game. It may then show another one.'
 
 
+# Profile defaults that depend on the device, as the launcher resolves them (dm/ios/Sources/LauncherSettings.swift Setting.resolve): mem>=<GB>?<value>:<value> takes the first value on a
+# device with at least that much memory. pso_mtl4 auto (DM_GAME_PSO_MTL4 2): Metal 4 pipelines on a device with 10 GB or more; the host applies the same rule (nvn_mtl.m pso4_on)
+MEMORY_DEFAULTS = {'DM_GAME_PSO_MTL4': {'2': 'mem>=10?1:0'}}
+MEMORY_DEFAULT = re.compile(r'mem>=(\d+)\?([^:?]+):([^:?]+)')
+
+
 def build(gid, patched, control):
     platform = os.environ.get('SETTINGS_PLATFORM') or 'ios'
     if platform not in ('ios', 'mac'): sys.exit(f'SETTINGS_PLATFORM must be ios or mac: {platform}')
@@ -87,7 +93,7 @@ def build(gid, patched, control):
             parts = d.split('|')
             if len(parts) != 2 or not all(parts): sys.exit(f'settings.tsv:{n}: platform default is <ios>|<mac>: {d}')
             d = parts[0] if platform == 'ios' else parts[1]
-        if d.startswith('DM_GAME_'): return macro(d, n)
+        if d.startswith('DM_GAME_'): v = macro(d, n); return MEMORY_DEFAULTS.get(d, {}).get(v, v)
         if d.startswith('build:'):
             name, fallback, default = d[6:].partition('=')
             v = os.environ.get(name)
@@ -133,10 +139,13 @@ def build(gid, patched, control):
                 hi = float(int(keys['RENDER_SCALE'], 16))
             s.update(min=lo, max=hi, step=st)
         elif kind == 'toggle':
-            if s['default'] not in ('0', '1'): sys.exit(f'settings.tsv:{n}: a toggle defaults to 0 or 1: {s["default"]}')
+            mem = MEMORY_DEFAULT.fullmatch(s['default'])
+            if not mem and s['default'] not in ('0', '1') or mem and {mem[2], mem[3]} != {'0', '1'}:
+                sys.exit(f'settings.tsv:{n}: a toggle defaults to 0 or 1, or mem>=<GB>?1:0: {s["default"]}')
             on_off = ['1', '0'] if values == '-' else values.split('/')
             if len(on_off) != 2 or not all(on_off) or on_off[0] == on_off[1]: sys.exit(f'settings.tsv:{n}: toggle values are - or <on>/<off>: {values}')
-            s.update(on=on_off[0], off=on_off[1], default=on_off[0] if s['default'] == '1' else on_off[1])   # the default as the value the variable takes
+            as_value = lambda d, on_off=on_off: on_off[0] if d == '1' else on_off[1]   # the default as the value the variable takes
+            s.update(on=on_off[0], off=on_off[1], default=f'mem>={mem[1]}?{as_value(mem[2])}:{as_value(mem[3])}' if mem else as_value(s['default']))
         else: sys.exit(f'settings.tsv:{n}: unknown kind {kind}')
         out.append(s)
     return {'schema': SCHEMA, 'game': g.id, 'settings': out}

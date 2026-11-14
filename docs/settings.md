@@ -218,8 +218,9 @@ flowchart TD
 
 At start, before the game's first frame, the app prepares what it already knows: the pipelines in the archive and those the prewarm lists name (one comes with the game, one grows on the phone as you play); with a warm archive that takes well under a second. A pipeline never seen before is drawn meanwhile with a stand-in for its pair of shaders, a *hybrid* pipeline that reads the draw's vertices in a general way and draws the same picture, while the real pipeline is built in the background and archived for the next start.
 
+- **Default:** on for an iPhone or iPad with 10 GB of memory or more (an iPhone 17 Pro), off on an 8 GB one (an iPhone 15 Pro, an iPad with M1), unless the game's profile was tested with one or the other. Off, every new pipeline is built while you play: short stutters, and a scene can stay black for a moment while its pipelines build.
 - **When to change it:** turn it off only if a game crashes or runs out of memory with it.
-- **Cost:** memory for the archive while the game runs, and storage on the phone.
+- **Cost:** memory for the archive while the game runs (about 300 MB in Hyrule Warriors: Age of Calamity), and storage on the phone.
 
 ### Pipeline prebuild
 

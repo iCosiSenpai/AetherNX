@@ -9,6 +9,7 @@ files separate gets them from scripts/push_romfs.sh. Nothing is signed or instal
 The route is NX2Apple's (LNPANDY/NX2Apple, MIT: frontend/Sources/NXCore/ShellInstall.swift), applied to AetherNX's one app per game: the same xcodebuild and devicectl
 calls, the retry under the team's own identifier when the default one belongs to another team, and the retry without a capability the team's profile cannot carry.
 """
+import contextlib
 import json
 import os
 import plistlib
@@ -368,6 +369,29 @@ def device_has_image(dev, bundle_id, work, afcclient=None, run=None):
         return out.is_file() and out.read_text(errors='replace').strip() == ident.strip()
 
 
+DEPTH_LOG = re.compile(r'\[nvn\] depth mode (near=0|near=-w)')   # the host's line when the game sets its NVN depth mode (build_ipa_from_nsp.py depth_mode)
+
+
+def learn_depth_mode(dev, bundle_id, work, afcclient=None, run=None):
+    """The game's NVN depth mode as the copy on the device logged it (Documents/log.txt, log.prev.txt), recorded in the build folder (depth_mode) for the build that follows:
+    its pipeline bases made offline then take the game's mode, where an archive made for the other one is refused and the device builds every base again at its next start.
+    Read-only on the device; returns the mode recorded, or None (no afcclient, no app, no such line)"""
+    run = run or run_text
+    afc = afcclient if afcclient is not None else shutil.which('afcclient')
+    if not afc or not bundle_id: return None
+    with tempfile.TemporaryDirectory(prefix='aethernx-log-') as tmp:
+        for name in ('log.txt', 'log.prev.txt'):
+            out = Path(tmp) / name
+            run([afc, '-u', dev['udid'], '--container', bundle_id, *(['-n'] if dev['connection'] == 'network' else []), '--', 'get', '-f', f'/Documents/{name}', str(out)], timeout=60)
+            try: found = DEPTH_LOG.findall(out.read_text(errors='replace'))
+            except OSError: continue
+            if found:
+                mode = 'zero' if found[-1] == 'near=0' else 'gl'
+                with contextlib.suppress(OSError): (Path(work) / 'depth_mode').write_text(f"{mode}\t{dev['name']}'s log of the game\n")
+                return mode
+    return None
+
+
 def install(folder, work, *, build_args, keys=None, device=None, team=None, files='bundle', icloud_container='', launch=False, as_json=False,
             api_key=None, api_key_id=None, api_issuer=None, python=sys.executable, environ=None):
     """Build the game in `folder` for the device, sign it, install it and copy its files when they are separate. Returns the exit code"""
@@ -376,6 +400,7 @@ def install(folder, work, *, build_args, keys=None, device=None, team=None, file
     dev = pick_device(list_devices(), device)
     last = remembered(work)
     has_image = files == 'auto' and dev['connection'] == 'network' and device_has_image(dev, last.get('bundle_id'), work)
+    if dev['connection'] != 'none': learn_depth_mode(dev, last.get('bundle_id'), work)   # before the build: its offline pipeline archive takes the mode the game ran with
     asked, files = files, files_mode(files, dev, has_image=has_image)
     report = Report(as_json, 3 if files == 'separate' else 2)
     if asked == 'auto':
