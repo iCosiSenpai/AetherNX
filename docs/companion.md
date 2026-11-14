@@ -7,7 +7,7 @@ AetherNX Companion is an iPhone and iPad app that shows the games you installed 
 - [The game folder](#the-game-folder)
 - [How it talks to the Mac](#how-it-talks-to-the-mac)
 - [Signing, entitlements and containers](#signing-entitlements-and-containers)
-- [What the game apps must still learn](#what-the-game-apps-must-still-learn)
+- [What the game apps read](#what-the-game-apps-read)
 - [The prototype](#the-prototype)
 
 ## What iOS allows
@@ -22,7 +22,7 @@ AetherNX Companion is an iPhone and iPad app that shows the games you installed 
 Phase 1 works through the shared iCloud folder alone:
 
 1. **Library.** It shows one card per game folder of iCloud Drive › AetherNX that has a `game.json`. The card shows the game's name, its icon and version, and when it was last saved and on which device. A folder without `game.json` is listed by its folder name, never by title ID alone, and is marked as not described yet.
-2. **Open the game.** Play opens the game's app through its URL scheme `aethernx-<title ID in lower case>://`. The game apps do not declare that scheme yet ([below](#what-the-game-apps-must-still-learn)). Until they do, the companion says to open the game from the Home Screen.
+2. **Open the game.** Play opens the game's app with `aethernx-<title ID in lower case>://play`, and the app presses its own Play ([below](#what-the-game-apps-read)). A game app built before it declared the scheme does not answer; the companion then says to open the game from the Home Screen.
 3. **Saves.** It reads the header of the cloud copy, `<title ID>/save.dmsync` ([the format](../dm/host/save_sync.c)), and shows when it was saved, from which device and how many files it holds. Back Up Now copies it into the game's `Backups` folder in iCloud. The companion lists those copies and can share them. It does not restore one yet: the engine would take a restored copy for an older save and could keep the device's own instead. Restoring waits for an engine rule for a restore ([Saves in the cloud](frontends.md#the-cloud-saves-folder)).
 4. **Mods.** It lists the mods in `Mods/` by Studio's rules (a folder with a `romfs` folder inside, or Atmosphère's layout). It turns them on and off and orders them. The choice goes into `Mods/mods.json`, which Studio reads as well.
 5. **Cheats.** It lists each cheat file's cheats and turns single cheats on and off by writing `<build ID>.enabled` in `Cheats/`, the file the host reads at every start ([Cheats](frontends.md#cheats)). The switch for all of a game's cheats is the same flag file the host reads, `.cheats-off-<title ID>`.
@@ -79,7 +79,7 @@ Studio writes the file after every library scan, and when a game's cloud folder 
 { "format" : 1, "off" : ["Big Head Mode"], "order" : ["HD Textures", "Big Head Mode"] }
 ```
 
-`order` lists mod folder names, highest priority first. Mods not listed come after it, sorted by name. `off` lists the mods turned off. Studio uses this file when it is present, instead of its preference keys `mods.order` and `mods.off`. When the player changes the list on the Mac, Studio writes both. Studio then writes `mods.folders` for the Mac app ([Mods and cheats from a front end](frontends.md#mods-and-cheats-from-a-front-end-mac)). It does that at its next scan, or when the game's page opens. So a change made on the phone reaches the Mac app the next time Studio runs. The Mac app's own launcher could read the file directly ([below](#what-the-game-apps-must-still-learn)).
+`order` lists mod folder names, highest priority first. Mods not listed come after it, sorted by name. `off` lists the mods turned off. Studio uses this file when it is present, instead of its preference keys `mods.order` and `mods.off`. When the player changes the list on the Mac, Studio writes both. Studio then writes `mods.folders` for the Mac app ([Mods and cheats from a front end](frontends.md#mods-and-cheats-from-a-front-end-mac)). It does that at its next scan, or when the game's page opens. The Mac app's launcher also reads the file itself at every start, before `mods.folders`, so a change made on the phone applies at its next start even when Studio is not opened. The iPhone app reads it at Play ([below](#what-the-game-apps-read)).
 
 ## How it talks to the Mac
 
@@ -104,15 +104,18 @@ The phone needs `NSLocalNetworkUsageDescription` and `NSBonjourServices = [_aeth
 
 The proposed bundle ID is `io.github.icosisenpai.aethernx.companion`, with the same team suffix rule as the game apps (`device_install.team_variant`). The prototype builds for the Simulator without signing. No App ID or container is registered for it.
 
-## What the game apps must still learn
+## What the game apps read
 
-The companion's choices reach the Mac through Studio today. On the iPhone and iPad, these changes to the game apps' own launcher are still needed. They touch `dm/ios/Sources/Launcher.swift`, `front_ios.m` and `dm/ios/tools/build_ipa.sh`, the files the pending nxnative sync also changes, so they come after it:
+The game apps take the companion's choices from the game folder themselves ([Mods and cheats on the iPhone](frontends.md#mods-and-cheats-on-the-iphone)):
 
-1. **The URL scheme.** `build_ipa.sh` adds `CFBundleURLTypes` with `aethernx-<title ID in lower case>` to the game's Info.plist, and the launcher handles `aethernx-<title ID>://`. `aethernx-<title ID>://play` could start the game at once.
-2. **Mods.** When the Cloud saves folder is a game folder (the folder holding `<title ID>/`, as iCloud Drive › AetherNX › `<name>` is), the launcher lists `Mods/` by the same rules as Studio. It applies `Mods/mods.json` and puts the `romfs` folders of the mods that are on into `DM_ROMFS_OVERLAY` before the start. It holds the folder's security scope for the session, as `dm_cloud_saves_env` does for the save.
-3. **Cheats.** The same folder's `Cheats/` becomes `DM_CHEATS`. The iOS app sets neither `DM_CHEATS` nor `DM_ROOT` today, so cheats are off there ([Cheats](frontends.md#cheats), The iPhone).
-4. **The folder to pick.** The game app's Cloud saves picker should suggest the game's folder in iCloud Drive › AetherNX (not its `<title ID>` folder), so mods and cheats come with the save.
-5. **The Mac launcher** (`dm/mac/launcher.c`, `mods_and_cheats`) can read `Mods/mods.json` itself. A change made on the phone would then apply at the Mac app's next start even when Studio is not opened.
+1. **The link.** `build_ipa.sh` names the URL scheme `aethernx-<title ID in lower case>` in the app's `CFBundleURLTypes`. `aethernx-<title ID>://` opens the app. `aethernx-<title ID>://play` also presses Play, with the save check a tap on Play has ([The link](frontends.md#starting-a-game)).
+2. **Mods.** When the iPhone app's Cloud saves folder is a game folder, the app lists `Mods/` by Studio's rules at Play and applies `Mods/mods.json`. The `romfs` folders of the mods that are on go into `DM_ROMFS_OVERLAY`. iCloud Drive › AetherNX › `<name>` is such a folder, and so is any folder named by the title ID. A folder every game shares has the game's folder inside it, `<title ID>/`. The picked folder's security scope covers the game folder and is held for the session. A mod whose files iCloud has not brought to the phone yet is asked for and left out of that start.
+3. **Cheats.** The same folder's `Cheats/` becomes `DM_CHEATS`, so `<build ID>.enabled` and `.cheats-off-<title ID>` decide which cheats run on the phone too. The host reads `DM_CHEATS` once the game's loading has finished, after the settings screen.
+4. **The folder to pick.** The Cloud saves picker opens at the game's folder in iCloud Drive › AetherNX, named as Studio names it. A pick of the `<title ID>` folder inside it is noticed: the settings screen says to pick the folder above, so mods and cheats come with the save.
+5. **What Play uses.** The settings screen's Mods and Cheats section shows each mod and the cheats on for the build. It changes nothing: the companion and Studio do that.
+6. **The Mac launcher** (`dm/mac/launcher.c`, `mods_and_cheats`) reads `Mods/mods.json` itself, before Studio's `mods.folders`, so a change made on the phone applies at the Mac app's next start even when Studio is not opened.
+
+An app built before these changes has none of them: it needs a new build, which `./aethernx install` or Studio's Install makes. Not tested yet on a device: a real iCloud Drive game folder picked in the Files picker, the picker opening at it, and the companion's Play starting a game app. The synthetic tests (`dm/ios/tests/test_game_extras.py`) cover the folder rules, `mods.json`, the cheats folder, the variables at Play, the link, and the scheme in a built app's `Info.plist` (`build_smoke.py`).
 
 ## The prototype
 
@@ -123,7 +126,7 @@ The companion's choices reach the Mac through Studio today. On the iPhone and iP
 - The first screen offers to choose iCloud Drive › AetherNX, or to look at a demo library. The demo writes four invented games into the app's own `Documents/Demo` folder: one without `game.json`, one with no save yet, mods (one a code mod), cheat files with a master, a label and a duplicate name. It goes through the same reader as the real folder.
 - Launch arguments for the Simulator: `-demo` opens the demo library, `-game "<folder name>"` opens that game's page, `-section saves|mods|cheats|folder` scrolls the page there.
 
-Tested in the iOS 27.2 Simulator (iPhone 17, iPad Pro 11-inch) with the demo library: the library, a game's page, and its mods and cheats sections, in English and Italian. Not tested yet: a real iCloud Drive folder picked in the Files picker (the Simulator has no iCloud account here), the toggles and Back Up Now driven by taps (the same code paths run in the test), and Play against a game app, since none answers the scheme yet.
+Tested in the iOS 27.2 Simulator (iPhone 17, iPad Pro 11-inch) with the demo library: the library, a game's page, and its mods and cheats sections, in English and Italian. Not tested yet: a real iCloud Drive folder picked in the Files picker (the Simulator has no iCloud account here), the toggles and Back Up Now driven by taps (the same code paths run in the test), and Play against a game app on a device.
 
 | | | |
 |---|---|---|

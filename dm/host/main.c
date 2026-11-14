@@ -148,7 +148,6 @@ static void host_preload(int argc, char **argv) {
     }
     if (!n) n = profile_modules(argv[1], names);
     load_modules(argv[1], names, n);
-    dm_cheats_init();   // the Atmosphère cheat files for this build (hle_cheats.c): picked by first 16 hex digits of main's build ID, which the loader knows now
     dm_sdk_major();   // logs the SDK version, which SDK-dependent behaviour follows (loader.c)
     uint64_t ta = now_ns();
     probe_install();   // DM_PROBE probes (for diagnostics)
@@ -186,6 +185,9 @@ int main(int argc, char **argv) {
         void crash_thread_init(void); crash_thread_init();   // The signal alternate stack is per thread: loading installed it on another thread, so add it for this thread
         LOG("host loading already finished early in the background (dm_host_preload_start)");
     } else host_preload(argc, argv);
+    // The Atmosphère cheat files for this build (hle_cheats.c): picked by the first 16 hex digits of main's build ID, which the loader knows now. Here, not in the
+    // loading: the iOS app's loading starts at launch, and its launcher sets DM_CHEATS at Play (the game folder's Cheats, GameExtras.swift)
+    dm_cheats_init();
     { void dm_fps_state_apply(void); dm_fps_state_apply(); }   // frame rate and render scale into the frame step state page (loader.c): the iOS launcher sets them after the loading began
     front_run(guest_loop);
     return 0;

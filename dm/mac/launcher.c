@@ -30,6 +30,7 @@
 
 extern char **environ;
 int dm_mac_launcher(void);   // Launcher.swift: 1 = Play (the settings are in the environment), 0 = the player quit, 2 = no window (apply the saved choices here)
+int dm_mac_game_mods(const char *title_id, char *out, long cap);   // Launcher.swift: the mods of the game folder's Mods/mods.json; 1 = in out, 0 = no mods.json, -1 = too long
 static volatile pid_t g_child;   // the host while it runs; 0 once it has exited (forward then has no one to forward to)
 static char *g_file_keys, *g_launch_keys;   // the variables the env files set, and the settings the launch environment set (DM_ENV_FILE_KEYS, DM_ENV_LAUNCH_KEYS)
 
@@ -152,11 +153,21 @@ static void cloud_saves_folder(void) {
 // in priority order, becomes DM_ROMFS_OVERLAY (the first folder that has a file wins, then the game's own RomFS); `cheats.folder` becomes DM_CHEATS. They are
 // paths, which an env.txt may not set (env_file.h), so they come from the app's own preferences, as cloudSaves.folder does; a value the launch environment or an
 // env file set wins. A folder that is not there is left out, with a [RED] line: a mod on an iCloud Drive folder the Mac has not downloaded yet, say.
-static void mods_and_cheats(void) {
+// Before mods.folders comes the game folder's Mods/mods.json (docs/companion.md), which AetherNX Companion writes on the iPhone as Studio does on the Mac: when the
+// folder beside the cloud save has one, the mods on are taken from it by Studio's rules (Launcher.swift dm_mac_game_mods), so a change made on the phone applies at
+// the next start even when Studio is not opened. Call it after cloud_saves_folder, which sets DM_SAVE_SYNC.
+static void mods_and_cheats(const char *id) {
     CFStringRef domain = CFBundleGetIdentifier(CFBundleGetMainBundle());
     if (!domain) return;
     struct stat st; char s[PATH_MAX];
-    CFPropertyListRef mods = getenv("DM_ROMFS_OVERLAY") ? NULL : CFPreferencesCopyAppValue(CFSTR("mods.folders"), domain);
+    int own = 0;   // the mods came from mods.json: mods.folders is not read
+    if (!getenv("DM_ROMFS_OVERLAY")) {
+        static char ov[1 << 16];
+        int r = dm_mac_game_mods(id, ov, sizeof ov);
+        if (r < 0) fprintf(stderr, "[RED] launcher: the mods of mods.json do not fit in %zu bytes: mods.folders is used\n", sizeof ov);
+        else if (r > 0) { own = 1; if (*ov) setenv("DM_ROMFS_OVERLAY", ov, 1); }
+    }
+    CFPropertyListRef mods = getenv("DM_ROMFS_OVERLAY") || own ? NULL : CFPreferencesCopyAppValue(CFSTR("mods.folders"), domain);
     if (mods && CFGetTypeID(mods) == CFArrayGetTypeID()) {
         char *all = NULL; size_t len = 0; int n = 0;
         for (CFIndex i = 0; i < CFArrayGetCount(mods); i++) {
@@ -241,7 +252,7 @@ int main(int argc, char **argv) {
     if (!shown) return 0;   // Quit: no game
     if (shown == 2) saved_choices();
     cloud_saves_folder();
-    mods_and_cheats();
+    mods_and_cheats(id);
     setenv("DM_ROOT", sup, 0); setenv("DM_ROMFS", romfs, 0); setenv("DM_TEMP", temp, 0);
     snprintf(p, sizeof p, "%s/msl", res); setenv("DM_MSL_DIR", p, 0);
     snprintf(p, sizeof p, "%s/font", dm); setenv("DM_FONT_DIR", p, 0);

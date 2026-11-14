@@ -1845,8 +1845,8 @@ static void folder_flags(void) {
     if (g_safe) LOG("[RED] cheats: the last run ended without a clean exit while cheats were on: every cheat starts off (the Cheats panel restores them)");
 }
 
-// Read the switches, find the game's file and load it (load_all starts the idle apply thread when it has cheats). Called after load_modules
-// (main.c host_preload): the build ID to pick the file by comes from the modules them
+// Read the switches, find the game's file and load it (load_all starts the idle apply thread when it has cheats). Called once the loading is done
+// (main.c main), as the build ID to pick the file by comes from the modules, and not during it: the iOS app loads at launch and sets DM_CHEATS at Play
 void dm_cheats_init(void) {
     atomic_store(&g_dbg, !!getenv("DM_CHEATS_DEBUG"));
     const char *e = getenv("DM_CHEATS_ANY_BUILD"); g_any = e && *e && atoi(e) != 0;
