@@ -812,7 +812,7 @@ class Script(unittest.TestCase):
         p = self.pso_cmd; self.assertTrue(p[1].endswith('dm/gfx/tools/pso_offline.py'))
         self.assertEqual({p[i]: p[i + 1] for i in range(2, len(p) - 1) if p[i].startswith('--')},
                          {'--game': '01008CF01BAAC000', '--msl': str(tmp / 'shader/cache/b-0123456789ab'), '--out': str(tmp / 'pso/mac'), '--work': str(tmp / 'pso/mac-work'),
-                          '--gpu': 'applegpu_g14s', '--platform': 'macos'})
+                          '--gpu': 'applegpu_g14s', '--platform': 'macos', '--depth': 'gl'})   # the depth mode build_ipa_from_nsp.depth_mode settled: no key, no run of the game logged
         self.assertFalse(any('does not name this Mac' in m for m in self.said))
         o, _ = self.pack_cmd('nvn', work=tmp, gpus='g18p')   # PSO_GPUS set for the IPA: built as asked, with a note that this Mac's app builds its own bases
         self.assertEqual(o['--pso'], str(tmp / 'pso/mac'))
