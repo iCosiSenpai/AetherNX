@@ -14,7 +14,7 @@
 "Backups are copies of the cloud's save in this game's Backups folder. Each device also keeps the save a sync replaced. Restoring a backup from here comes later: the engine would take an older copy for an older save." = "I backup sono copie del salvataggio nel cloud, nella cartella Backups del gioco. Ogni dispositivo tiene anche il salvataggio sostituito da una sincronizzazione. Il ripristino di un backup da qui arriverà più avanti: il motore prenderebbe una copia vecchia per un salvataggio più vecchio.";
 "Build %@" = "Build %@";
 "Cheats" = "Trucchi";
-"Cheats fit one version of the game: the file's name is its build ID. The game reads them when it starts; while it runs, use its Reload Cheats. The iPhone and iPad apps do not read this folder yet." = "I trucchi valgono per una sola versione del gioco: il nome del file è il suo build ID. Il gioco li legge all'avvio; mentre è aperto, ricaricali dal suo menu dei trucchi. Le app per iPhone e iPad non leggono ancora questa cartella.";
+"Cheats fit one version of the game: the file's name is its build ID. The game reads them when it starts; while it runs, use its Reload Cheats. The iPhone and iPad app reads this folder at Play, when it is its Cloud saves folder." = "I trucchi valgono per una sola versione del gioco: il nome del file è il suo build ID. Il gioco li legge all'avvio; mentre è aperto, ricaricali dal suo menu dei trucchi. L'app per iPhone e iPad legge questa cartella al Gioca, quando è la sua cartella dei Salvataggi nel cloud.";
 "Choose Another Folder…" = "Scegli un'altra cartella…";
 "Choose the AetherNX Folder" = "Scegli la cartella AetherNX";
 "Coming from iCloud" = "In arrivo da iCloud";
@@ -25,7 +25,7 @@
 "Forget This Library" = "Dimentica questa libreria";
 "From %@ · %@" = "Da %@ · %@";
 "Here, choose iCloud Drive › AetherNX. Each game you built or installed from the Mac has a folder there." = "Qui, scegli iCloud Drive › AetherNX. Ogni gioco che hai compilato o installato dal Mac ha lì la sua cartella.";
-"Higher mods win when two change the same file. The Mac app uses them from its next start, once AetherNX on the Mac has read this list. The iPhone and iPad apps do not read mods yet." = "Le mod più in alto vincono quando due cambiano lo stesso file. L'app per Mac le usa dal prossimo avvio, dopo che AetherNX sul Mac ha letto questo elenco. Le app per iPhone e iPad non leggono ancora le mod.";
+"Higher mods win when two change the same file. The Mac app uses them from its next start, once AetherNX on the Mac has read this list; the iPhone and iPad app at Play, when this folder is its Cloud saves." = "Le mod più in alto vincono quando due cambiano lo stesso file. L'app per Mac le usa dal prossimo avvio, dopo che AetherNX sul Mac ha letto questo elenco. L'app per iPhone e iPad le usa al Gioca, quando questa cartella è i suoi Salvataggi nel cloud.";
 "In each game's app, choose that game's folder in Cloud saves, so the save goes through it." = "Nell'app di ogni gioco, scegli la cartella di quel gioco in Salvataggi cloud, così il salvataggio passa da lì.";
 "In iCloud" = "In iCloud";
 "Installed on iPhone or iPad" = "Installato su iPhone o iPad";

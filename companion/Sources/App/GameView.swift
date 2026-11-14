@@ -221,7 +221,7 @@ private struct ModsSection: View {
             }
         } footer: {
             if !mods.isEmpty {
-                Text("Higher mods win when two change the same file. The Mac app uses them from its next start, once AetherNX on the Mac has read this list. The iPhone and iPad apps do not read mods yet.")
+                Text("Higher mods win when two change the same file. The Mac app uses them from its next start, once AetherNX on the Mac has read this list; the iPhone and iPad app at Play, when this folder is its Cloud saves.")
             }
         }
     }
@@ -266,7 +266,7 @@ private struct CheatsSections: View {
                     .font(.footnote.monospaced())
             } footer: {
                 if file.id == game.cheats.last?.id {
-                    Text("Cheats fit one version of the game: the file's name is its build ID. The game reads them when it starts; while it runs, use its Reload Cheats. The iPhone and iPad apps do not read this folder yet.")
+                    Text("Cheats fit one version of the game: the file's name is its build ID. The game reads them when it starts; while it runs, use its Reload Cheats. The iPhone and iPad app reads this folder at Play, when it is its Cloud saves folder.")
                 }
             }
             .disabled(!game.cheatsMasterOn)

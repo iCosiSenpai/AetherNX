@@ -178,7 +178,7 @@ Each game has a **Mods** folder and a **Cheats** folder next to its save. With i
 - **Mods** replace the game's files: one folder per mod, with a `romfs` folder inside (Atmosphère's `atmosphere/contents/<title ID>/romfs` layout works too). Turn them on and off and put them in order on the game's page; the first mod that has a file wins. They apply at the game's next start, with no rebuild. **Find Mods on GameBanana** searches for the game there. Code mods (`exefs`) and mods that need a loader do not run.
 - **Cheats** are Atmosphère cheat files, named after the game's build ID. Turn single cheats on and off while you play, from the game's Cheats menu.
 
-The iPhone and iPad apps do not read mods and cheats yet; the format is in [Mods and cheats from a front end](docs/frontends.md#mods-and-cheats-from-a-front-end-mac).
+The iPhone and iPad apps read them too, at Play, from the game folder they use for cloud saves ([Mods and cheats on the iPhone](docs/frontends.md#mods-and-cheats-on-the-iphone)); the format is in [Mods and cheats from a front end](docs/frontends.md#mods-and-cheats-from-a-front-end-mac).
 
 ## Console Mode
 
