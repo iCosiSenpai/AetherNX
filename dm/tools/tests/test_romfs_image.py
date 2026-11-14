@@ -283,7 +283,10 @@ if cmd == 'put':
         shutil.copytree(src, dst, dirs_exist_ok=True)
     else:
         if dst.exists() and 'f' not in flags: fail('Failed to write into existing file without -f option')
-        data = src.read_bytes(); dst.write_bytes(data[:len(data) // 2] if os.environ.get('AFC_PUT_SHORT') else data)
+        data = src.read_bytes(); data = data[:len(data) // 2] if os.environ.get('AFC_PUT_SHORT') else data
+        if dst.exists():   # as the real one: -f writes over the file without truncating it (6 bytes over 25 leave 25)
+            with open(dst, 'r+b') as f: f.write(data)
+        else: dst.write_bytes(data)
 elif cmd == 'get':
     src, dst = at(rest[0]), Path(rest[1])
     if not src.is_file(): fail('Failed to open remote file: Not found (8)')
@@ -441,6 +444,12 @@ class AfcTransfers(unittest.TestCase):
         self.assertIn('mv /Documents/romfs.img.part /Documents/romfs.img', calls)
         self.assertFalse(self.xcrun_calls.exists())   # devicectl is not used for the image
         self.assertIn('game files on the phone', result.stdout)
+
+    def test_a_longer_part_left_by_a_copy_cut_off_does_not_spoil_the_next(self):
+        # afcclient's put -f writes over a file without truncating it: a longer .part from before would keep its tail and fail the size check every time
+        self.afc(); (self.device / 'Documents/romfs.img.part').write_bytes(b'x' * (self.img.stat().st_size + 4096))
+        result = self.push(); self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.device / 'Documents/romfs.img').read_bytes(), self.img.read_bytes())
 
     def test_an_image_already_on_the_device_is_not_copied_again(self):
         # The identity beside the image after its copy: a second push of the same image copies nothing; another image, or ROMFS_PUSH_FORCE=1, copies again

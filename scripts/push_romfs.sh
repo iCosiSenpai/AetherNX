@@ -62,6 +62,9 @@ if [ "$via" = afc ]; then
     afc rm /Documents/romfs.img.id > /dev/null 2>&1 || true
     if [ "$net" = 1 ]; then echo "copying $((size >> 20)) MB over AFC on the network (about 8 MB/s: $((size / 8000000 / 60 + 1)) minutes; a cable is about four times faster)"
     else echo "copying $((size >> 20)) MB over AFC (about 30 MB/s over USB)"; fi
+    # afcclient's put -f writes over a file without truncating it (6 bytes over 25 left 25): the .part of a copy cut off before, longer than this image, would keep its
+    # tail, and the size check below would call every copy incomplete; so it goes first
+    afc rm /Documents/romfs.img.part > /dev/null 2>&1 || true
     afc put -f "$img" /Documents/romfs.img.part
     got=$(remote_size /Documents/romfs.img.part)
     [ "$got" = "$size" ] || { echo "[RED] the copy is incomplete: Documents/romfs.img.part holds ${got:-nothing} of $size bytes (a full device, or the cable); Documents/romfs.img is unchanged. Run this again" >&2; exit 1; }

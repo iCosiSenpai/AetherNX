@@ -58,6 +58,7 @@ else echo "ROMFS_PUSH_VIA is afc or devicectl, not $via" >&2; exit 1; fi
 for img in "${imgs[@]}"; do
     n=$(basename "$img"); size=$(stat -f %z "$img")
     if [ "$via" = afc ]; then
+        afc rm "/Documents/aoc/$n.part" > /dev/null 2>&1 || true   # put -f does not truncate a longer leftover (push_romfs.sh)
         afc put -f "$img" "/Documents/aoc/$n.part"
         got=$(remote_size "/Documents/aoc/$n.part")
         [ "$got" = "$size" ] || { echo "[RED] the copy of $n is incomplete: Documents/aoc/$n.part holds ${got:-nothing} of $size bytes (a full device, or the cable); the DLC on the phone is unchanged. Run this again" >&2; exit 1; }
