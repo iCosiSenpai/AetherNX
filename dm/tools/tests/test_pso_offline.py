@@ -16,7 +16,6 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
 import unittest
 import tracemalloc
 from unittest import mock
@@ -530,6 +529,9 @@ class Build(unittest.TestCase):
         # DM_PSO_BASE_JOBS groups at a time (base_jobs: as many as memory and cores allow); the archive takes the pieces in the groups' order, not the order they end in
         bases = [('v_bp', f'vertex{i}', 'f_b', 'main0') for i in range(6)]
         ended, merged, lock = [], [], threading.Lock()
+        # the three groups meet at a barrier (they run at once: run one at a time, it times out and fails), then end in the opposite order, each after the next group:
+        # events, not sleeps, so a slow runner cannot reorder them (sleeps of 80-240 ms did, once)
+        together, done = threading.Barrier(3, timeout=20), {i: threading.Event() for i in (0, 2, 4)}
         original = self.fake_run
         def run(cmd, **kw):
             cmd = [str(c) for c in cmd]
@@ -540,8 +542,11 @@ class Build(unittest.TestCase):
             if 'metal-tt' in cmd and '-o' in cmd:
                 js = next(Path(p) for p in cmd if p.endswith('.mtl4-json'))
                 names = [f['name'] for f in json.loads(js.read_text())['function_descriptors']['library_function_descriptors'] if f['library'] == 'lib:v_bp']
-                time.sleep(0.08 * (3 - int(names[0][-1]) // 2))   # the first group ends last
+                i = int(names[0][-1])
+                together.wait()
+                if i < 4: self.assertTrue(done[i + 2].wait(20))   # the first group ends last
                 with lock: ended.append(names[0])
+                done[i].set()
                 Path(cmd[cmd.index('-o') + 1]).write_bytes(','.join(names).encode())
                 return subprocess.CompletedProcess(cmd, 0)
             return original(cmd, **kw)
