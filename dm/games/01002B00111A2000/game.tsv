@@ -41,6 +41,12 @@ mem_used	0x4800000
 # nvnMemoryPoolFlushMappedRange; without the upload the intro movie stayed black under its "+ Skip" prompt
 tex_flush_upload	on
 
+# ---- Pipelines ----
+# The game sets the near=0 depth mode (nvnDeviceSetDepthMode): the pipeline bases made before it runs take the main0_z vertex entries. Without the key the
+# archive made offline was for near=-w, and an iPhone 17 Pro Max refused it ("made for … depth near=-w … this run needs … depth near=0") and built 3,176 bases
+# itself in 170 s on every core at its first start with Metal 4 pipelines (2026-11-14)
+depth_mode	zero
+
 # ---- Presentation ----
 # The Switch version shows 30 fps and steps the game a fixed amount per update: a KIDS task waits out 1/30 s and steps the game clock by 1/30 s, the battle steps 1 / the game's frame-rate
 # block (30.0), and the event scripts step by the KTGL device's frame rate (59.94 / present interval 2). On 1.3.0 main (patches.py FRAME_STEP) three stubs run the updates at the cap
