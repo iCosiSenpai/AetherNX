@@ -83,6 +83,13 @@ Update 1.3.0 (v327680) over the base game, with four DLC packages (one is only a
 
 - With a save whose first-boot settings were made, `DM_KEYS="f300:A,f420:A,f540:A,f660:A,f780:A,f900:A,f1300:Plus,f1350:Plus"` confirms the settings, skips the intro movie and plays the opening into the first battle, The Battle of Hyrule Field (about frame 4000).
 
+## iPhone 17 Pro Max (2026-11-14)
+
+1.3.0 without DLC, built after the nxnative sync to `0c07813` and installed from the Mac (game files separate, the HorizonNative iCloud container). It starts from the launcher or its `aethernx-01002b00111a2000://play` link and plays the opening mission: frame time p50 16.67 / p95 18.3 ms, GPU p50 8.1 ms over 300 frames (A19 Pro, iOS 27.2).
+
+- **Stutters and a black scene with Metal 4 pipelines off** (the launcher's default for this profile, `DM_PSO_MTL4=0`): every new pipeline is compiled on the device while playing. In one 3-minute session (10,200 frames) 30 long frames held 18 s of pipeline compiles (`[longframe] … new pipelines 4 …, 53.7 ms`), and at a mission's start the parallel precompile handed pipelines to the background and left their draws out (`parallel precompile: 39 draws left …`): the 3D scene stayed black while the UI, whose pipelines were made, showed. `archive lookups found 0`, although the app carries the offline archive for this GPU (`pso/applegpu_g18p.mtl4a`, 261 MB).
+- **Not yet measured:** the same with Metal 4 pipelines on (`DM_PSO_MTL4=1`, set on this device in `Documents/env.txt`), which takes pipelines from that archive. If it holds, `pso_mtl4 on` belongs in `game.tsv`.
+
 ## Found on this game
 
 General host changes first needed here; each applies to every game:
