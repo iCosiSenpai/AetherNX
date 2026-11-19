@@ -27,7 +27,7 @@ import Foundation
         expect(GameExtras.isOwnFolder(shared + "/0100abcd12340000", titleID: tid) && GameExtras.base(cloud: shared + "/" + tid, titleID: tid) == shared + "/" + tid, "a folder named by the title ID is the game's own")
         expect(!GameExtras.isOwnFolder(shared, titleID: tid) && GameExtras.base(cloud: shared, titleID: tid.lowercased()) == shared + "/" + tid, "a folder every game shares: the game's folder in it, as Studio has it")
         expect(GameExtras.gameFolderAbove(game + "/" + tid, titleID: tid) == game && GameExtras.gameFolderAbove(shared + "/" + tid, titleID: tid) == nil && GameExtras.gameFolderAbove(game, titleID: tid) == nil, "a pick of the save's own folder in a game folder is noticed")
-        expect(GameExtras.displayName(game) == "iCloud Drive › AetherNX › Starfall Tactics" && GameExtras.displayName("/a/Mobile Documents/iCloud~io~github~icosisenpai~horizonnative/Documents/\(tid)") == "iCloud Drive › HorizonNative › \(tid)", "folders by their iCloud Drive names")
+        expect(GameExtras.displayName(game) == "iCloud Drive › AetherNX › Starfall Tactics" && GameExtras.displayName("/a/Mobile Documents/iCloud~io~github~icosisenpai~horizonnative/Documents/\(tid)") == "iCloud Drive › AetherNX › \(tid)", "folders by their iCloud Drive names")
 
         // A game folder as Studio and the companion leave it
         make("\(game)/\(tid)/save.dmsync")

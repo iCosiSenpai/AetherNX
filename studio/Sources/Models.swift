@@ -24,7 +24,7 @@ struct UpdatePackage: Decodable, Hashable, Identifiable {
     var path: String
     var size: Int64
     var version: Int
-    var id: String { path }
+    var id: String { "\(path)#\(version)" }
 }
 
 struct DLCPackage: Decodable, Hashable, Identifiable {
@@ -60,6 +60,8 @@ struct Game: Decodable, Hashable, Identifiable {
     var folder: String
     var profile: Bool
     var base: PackageFile?
+    var container: PackageFile?
+    var buildInputSize: Int64?
     var updates: [UpdatePackage]
     var dlc: [DLCPackage]
     var compressed: [String]
@@ -90,6 +92,8 @@ struct Game: Decodable, Hashable, Identifiable {
         folder = try c.decode(String.self, forKey: .folder)
         profile = try c.decodeIfPresent(Bool.self, forKey: .profile) ?? false
         base = try c.decodeIfPresent(PackageFile.self, forKey: .base)
+        container = try c.decodeIfPresent(PackageFile.self, forKey: .container)
+        buildInputSize = try c.decodeIfPresent(Int64.self, forKey: .buildInputSize)
         updates = try c.decodeIfPresent([UpdatePackage].self, forKey: .updates) ?? []
         dlc = try c.decodeIfPresent([DLCPackage].self, forKey: .dlc) ?? []
         compressed = try c.decodeIfPresent([String].self, forKey: .compressed) ?? []
@@ -111,11 +115,12 @@ struct Game: Decodable, Hashable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, kind, titleId, name, folder, profile, base, updates, dlc, compressed, archives, workDir, workReachable, workMovesTo, extractedVersions
+        case id, kind, titleId, name, folder, profile, base, container, buildInputSize, updates, dlc, compressed, archives, workDir, workReachable, workMovesTo, extractedVersions
         case displayVersion, icon, macApps, ipas, deviceInstall, saveDir, logFile, decompDir, liftedFiles, notes
     }
 
     var isBuildable: Bool { kind != .archives }
+    var requiresKeys: Bool { kind == .packages }
     var macApp: String? { macApps.first }
     var ipa: String? { ipas.first }
     var latestUpdate: UpdatePackage? { updates.max { $0.version < $1.version } }
@@ -123,15 +128,20 @@ struct Game: Decodable, Hashable, Identifiable {
     /// Switch 2 games have title IDs that start with 04 (Switch games: 01).
     var isSwitch2: Bool { titleId?.hasPrefix("04") == true }
 
+    func matchesSearch(_ query: String) -> Bool {
+        query.isEmpty || name.localizedCaseInsensitiveContains(query) || titleId?.localizedCaseInsensitiveContains(query) == true
+    }
+
     /// About what a first build needs free, as the build script measures it: the game's image (the base game with its
     /// newest update, or a dump's newest version) and 6 GB for the shaders.
     var firstBuildSpace: Int64 {
-        let image = kind == .dump ? (latestUpdate?.size ?? base?.size ?? 0) : (base?.size ?? 0) + (latestUpdate?.size ?? 0)
+        let image = buildInputSize ?? (kind == .dump ? (latestUpdate?.size ?? base?.size ?? 0) : (base?.size ?? 0) + (latestUpdate?.size ?? 0))
         return image + 6 * 1_073_741_824
     }
 
     var totalSize: Int64 {
-        (base?.size ?? 0) + updates.reduce(0) { $0 + $1.size } + dlc.reduce(0) { $0 + $1.size } + archives.reduce(0) { $0 + $1.size }
+        let gameFiles = container?.size ?? ((base?.size ?? 0) + updates.reduce(0) { $0 + $1.size } + dlc.reduce(0) { $0 + $1.size })
+        return gameFiles + archives.reduce(0) { $0 + $1.size }
     }
 
     /// One short line for the sidebar.

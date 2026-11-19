@@ -1,6 +1,7 @@
 #!/bin/bash
 # Builds, signs, notarizes and packages AetherNX Studio for a GitHub release, into build/release/:
-# AetherNX-<version>.zip and AetherNX-<version>.dmg, both stapled.
+# AetherNX-<version>.zip (with a stapled app) and a stapled AetherNX-<version>.dmg.
+# Install dmgbuild 1.6.7 in your release environment, or point AETHERNX_DMGBUILD at it.
 #
 #   AETHERNX_SIGN_IDENTITY="Developer ID Application: <name> (<team ID>)" studio/release.sh
 #
@@ -16,6 +17,8 @@ team="$(sed -nE 's/.*\(([A-Z0-9]{10})\)$/\1/p' <<< "$identity")"
 [ -n "$team" ] || { echo "the identity must end with its team ID in parentheses" >&2; exit 1; }
 version="$(tr -d '[:space:]' < "$root/VERSION")"
 out="$root/build/release"
+dmgbuild="${AETHERNX_DMGBUILD:-dmgbuild}"
+command -v "$dmgbuild" >/dev/null || { echo "install dmgbuild 1.6.7 to create the installer" >&2; exit 1; }
 app="$root/build/AetherNX.app"
 
 # Fail in seconds, not after the build, when the profile does not authenticate.
@@ -42,26 +45,42 @@ if codesign -d --entitlements - --xml "$app" 2> /dev/null | grep -q get-task-all
   exit 1
 fi
 
-rm -rf "$out"
 mkdir -p "$out"
-ditto -c -k --sequesterRsrc --keepParent "$app" "$out/submit.zip"
-notarize "$out/submit.zip"
-xcrun stapler staple "$app"
-rm "$out/submit.zip"
-# The zip is made again after stapling: the one sent to Apple holds the app without its ticket.
-ditto -c -k --sequesterRsrc --keepParent "$app" "$out/AetherNX-$version.zip"
-
-staging="$(mktemp -d)"
+staging="$(mktemp -d "$out/.staging.XXXXXX")"
 trap 'rm -rf "$staging"' EXIT
-cp -R "$app" "$staging/"
-ln -s /Applications "$staging/Applications"
-hdiutil create -quiet -volname "AetherNX $version" -srcfolder "$staging" -ov -format UDZO "$out/AetherNX-$version.dmg"
-codesign --force --timestamp --sign "$identity" "$out/AetherNX-$version.dmg"
-notarize "$out/AetherNX-$version.dmg"
-xcrun stapler staple "$out/AetherNX-$version.dmg"
+zip="$staging/AetherNX-$version.zip"
+dmg="$staging/AetherNX-$version.dmg"
+
+ditto -c -k --sequesterRsrc --keepParent "$app" "$staging/submit.zip"
+notarize "$staging/submit.zip"
+xcrun stapler staple "$app"
+xcrun stapler validate "$app"
+ditto -c -k --sequesterRsrc --keepParent "$app" "$zip"
+
+"$dmgbuild" -s "$studio/dmg_settings.py" \
+  -D "app=$app" -D "icon=$root/assets/AppIcon.icns" -D "background=$studio/Installer.tiff" \
+  "AetherNX $version" "$dmg"
+
+# Verify the mounted copy too. Finder metadata added during packaging can invalidate an app's signature.
+(
+  mount="$staging/mounted"
+  mkdir "$mount"
+  hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$dmg" > /dev/null
+  trap 'hdiutil detach "$mount" > /dev/null' EXIT
+  codesign --verify --deep --strict -R "$requirement" "$mount/AetherNX.app"
+  xcrun stapler validate "$mount/AetherNX.app"
+  [ "$(readlink "$mount/Applications")" = /Applications ]
+  cmp "$studio/Installer.tiff" "$mount/.background.tiff"
+)
+
+codesign --force --timestamp --sign "$identity" "$dmg"
+notarize "$dmg"
+xcrun stapler staple "$dmg"
+xcrun stapler validate "$dmg"
 
 spctl -a -vvv -t install "$app" 2>&1 | grep -q "source=Notarized Developer ID" || { echo "Gatekeeper does not accept the app" >&2; exit 1; }
-spctl -a -vvv -t open --context context:primary-signature "$out/AetherNX-$version.dmg" 2>&1 | grep -q "source=Notarized Developer ID" || { echo "Gatekeeper does not accept the disk image" >&2; exit 1; }
+spctl -a -vvv -t open --context context:primary-signature "$dmg" 2>&1 | grep -q "source=Notarized Developer ID" || { echo "Gatekeeper does not accept the disk image" >&2; exit 1; }
 
-(cd "$out" && shasum -a 256 "AetherNX-$version.zip" "AetherNX-$version.dmg" | tee SHA256SUMS)
+(cd "$staging" && shasum -a 256 "AetherNX-$version.zip" "AetherNX-$version.dmg" | tee SHA256SUMS)
+mv "$zip" "$dmg" "$staging/SHA256SUMS" "$out/"
 echo "Release files in $out"

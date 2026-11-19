@@ -1,54 +1,48 @@
-// The Mac settings window (dm/mac/Launcher.swift), run by test_launcher_storage.py: measure the real grouped Form without creating or showing a window.
+// The Mac launcher is driven by the same settings file as the storage tests.
 import AppKit
 import SwiftUI
 
+@MainActor
 func checkLauncherLayout(_ model: LauncherModel, defaults: UserDefaults) -> Int {
     NSApplication.shared.setActivationPolicy(.prohibited)
     var failed = 0
-    func expect(_ c: Bool, _ what: String) { print((c ? "PASS " : "FAIL ") + what); if !c { failed += 1 } }
-    func measure(_ advanced: Bool, width: CGFloat) -> CGFloat {
-        defaults.set(advanced, forKey: "window.advanced")
-        var extra: CGFloat?
-        let view = NSHostingView(rootView: LauncherView(m: model, done: { _ in }, fit: { extra = $0 }).defaultAppStorage(defaults))
-        view.sizingOptions = []
-        // SwiftUI reports the Form's scroll geometry on a later pass, an estimate first and the measured rows a few ms after it, later still on a slow runner (issue #445): run the
-        // loop until the report meets the step's expectation and has held for 0.2 s; after 5 s the check sees whatever was reported last
-        func settle(_ want: (CGFloat) -> Bool) {
-            let limit = Date().addingTimeInterval(5)
-            var held = extra, since = Date()
-            while Date() < limit {
-                view.layoutSubtreeIfNeeded()
-                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
-                if extra != held { held = extra; since = Date() } else if let e = extra, want(e), Date().timeIntervalSince(since) >= 0.2 { return }
-            }
-        }
-        view.frame = NSRect(x: 0, y: 0, width: width, height: 660)
-        settle { _ in true }
-        guard let delta = extra else { expect(false, "native Form reports its scroll content size"); return 0 }
-        let height = 660 + delta
-        view.frame.size.height = height
-        settle { abs($0) < 1 }
-        expect(abs(extra ?? .infinity) < 1, "native Form fits its measured height (advanced=\(advanced), width=\(width), height=\(height))")
-        defaults.set(!advanced, forKey: "window.advanced")
-        settle { advanced ? $0 < 0 : $0 > 0 }
-        expect(advanced ? (extra ?? 0) < 0 : (extra ?? 0) > 0, "the same Form reports expansion and collapse after its saved state changes")
-        view.frame.size.height += extra ?? 0
-        settle { abs($0) < 1 }
-        expect(abs(extra ?? .infinity) < 1, "the same Form fits after its saved state changes")
-        return height
+    func expect(_ condition: Bool, _ detail: String) {
+        print((condition ? "PASS " : "FAIL ") + detail)
+        if !condition { failed += 1 }
     }
-    for width: CGFloat in [520, 560] {
-        // each measurement in its own pool: a hosting view left autoreleased stays alive and lays out its Form again on every later change of window.advanced
-        let closed = autoreleasepool { measure(false, width: width) }, open = autoreleasepool { measure(true, width: width) }
-        expect(closed > 0 && open > closed, "Advanced expands the measured native content")
+
+    let pages = LauncherView.pages(for: model)
+    expect(pages.map(\.id) == model.sections.map { "settings." + $0 } + ["cloud", "support"],
+           "categories preserve the settings file's order and include launch services")
+    for section in model.sections {
+        let page = LauncherView.Page.settings(section)
+        let rows = model.rows(in: section)
+        let basic = rows.filter(\.basic)
+        expect(page.rows(model, advanced: true).map(\.id) == rows.map(\.id),
+               "Advanced exposes all visible settings in \(section)")
+        expect(page.rows(model, advanced: false).map(\.id) == (basic.isEmpty ? rows : basic).map(\.id),
+               "Basic settings come first without hiding categories that have only advanced settings")
+        expect(page.offersAdvanced(model) == (!basic.isEmpty && basic.count < rows.count),
+               "Advanced control appears only when it changes the contents")
     }
-    let visible = NSRect(x: -1920, y: 40, width: 1920, height: 900)
-    let initial = NSRect(x: -1500, y: 540, width: 560, height: 400)
-    let expanded = LauncherWindowLayout.fitted(initial, extraHeight: 300, visible: visible)
-    let capped = LauncherWindowLayout.fitted(initial, extraHeight: 1200, visible: visible)
-    let collapsed = LauncherWindowLayout.fitted(expanded, extraHeight: -300, visible: visible)
-    expect(expanded.maxY == initial.maxY && expanded.height == 700, "expansion preserves the top edge")
-    expect(capped == NSRect(x: -1500, y: 40, width: 560, height: 900), "tall content stops at the visible screen frame")
-    expect(collapsed == initial, "collapse restores the content height and top edge")
+
+    let view = NSHostingView(rootView: LauncherView(m: model,
+        name: "Xenoblade Chronicles X: Definitive Edition – Nintendo Switch 2 Edition",
+        version: "2.0.0", done: { _ in }).defaultAppStorage(defaults))
+    view.sizingOptions = []
+    let minimum = NSSize(width: 580, height: 430)
+    view.frame.size = minimum
+    view.layoutSubtreeIfNeeded()
+    expect(view.fittingSize.width <= minimum.width && view.fittingSize.height <= minimum.height,
+           "the long title and launcher chrome fit at the minimum window size")
+
+    let visible = NSRect(x: -1440, y: 40, width: 1440, height: 790)
+    let preferred = NSSize(width: 740, height: 625)
+    let centered = LauncherWindowLayout.initial(preferred, visible: visible)
+    expect(centered.size == preferred && centered.midX == visible.midX && centered.midY == visible.midY,
+           "the launcher opens centered on the active display")
+    let smallScreen = NSRect(x: 0, y: 30, width: 680, height: 540)
+    expect(LauncherWindowLayout.initial(preferred, visible: smallScreen) == smallScreen,
+           "the initial size is constrained by the visible screen")
     return failed
 }

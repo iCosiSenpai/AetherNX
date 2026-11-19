@@ -12,10 +12,10 @@ REPO = Path(__file__).resolve().parents[3]
 for folder in ('scripts', 'dm/tools', 'dm/games'):
     if str(REPO / folder) not in sys.path: sys.path.insert(0, str(REPO / folder))
 build = importlib.import_module('build_ipa_from_nsp')
+from game import Game
 
 
-class Profile(dict):
-    id = '0100000000990000'
+TITLE = '0100000000990000'
 
 
 class DepthMode(unittest.TestCase):
@@ -24,29 +24,34 @@ class DepthMode(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.work = self.root / 'work'; (self.work / 'logs').mkdir(parents=True)
         self.home = self.root / 'home'; (self.home / 'Library/Logs/HorizonNative').mkdir(parents=True)
+        self.profile_dir = self.root / TITLE; self.profile_dir.mkdir()
         patcher = mock.patch.object(build.Path, 'home', return_value=self.home); patcher.start(); self.addCleanup(patcher.stop)
 
+    def profile(self, depth=''):
+        (self.profile_dir / 'game.tsv').write_text(f'depth_mode\t{depth}\n' if depth else '')
+        return Game(self.profile_dir)
+
     def test_the_profile_wins(self):
-        (self.home / f'Library/Logs/HorizonNative/{Profile.id}.log').write_text('[dm] [nvn] depth mode near=-w (GL)\n')
-        self.assertEqual(build.depth_mode(Profile(depth_mode='zero'), self.work), ('zero', 'the profile'))
+        (self.home / f'Library/Logs/HorizonNative/{TITLE}.log').write_text('[dm] [nvn] depth mode near=-w (GL)\n')
+        self.assertEqual(build.depth_mode(self.profile('zero'), self.work), ('zero', 'the profile'))
 
     def test_without_a_run_it_is_nvns_default(self):
-        self.assertEqual(build.depth_mode(Profile(), self.work), ('gl', None))
+        self.assertEqual(build.depth_mode(self.profile(), self.work), ('gl', None))
         self.assertFalse((self.work / 'depth_mode').exists())
 
     def test_this_macs_log_of_the_game_is_learned_and_recorded(self):
-        log = self.home / f'Library/Logs/HorizonNative/{Profile.id}.log'
+        log = self.home / f'Library/Logs/HorizonNative/{TITLE}.log'
         log.write_text('[dm] boot\n[dm] [nvn] depth mode near=0 (as D3D / Metal)\n')
-        self.assertEqual(build.depth_mode(Profile(), self.work), ('zero', str(log)))
+        self.assertEqual(build.depth_mode(self.profile(), self.work), ('zero', str(log)))
         self.assertEqual((self.work / 'depth_mode').read_text(), f'zero\t{log}\n')
         log.unlink()   # the record keeps it for the next builds
-        self.assertEqual(build.depth_mode(Profile(), self.work)[0], 'zero')
+        self.assertEqual(build.depth_mode(self.profile(), self.work)[0], 'zero')
 
     def test_the_builds_own_runs_and_a_devices_record(self):
         (self.work / 'logs/heap_check.log').write_text('[dm] [nvn] depth mode near=0 (as D3D / Metal)\n')
-        self.assertEqual(build.depth_mode(Profile(), self.work)[0], 'zero')
+        self.assertEqual(build.depth_mode(self.profile(), self.work)[0], 'zero')
         (self.work / 'depth_mode').write_text("gl\tFixture iPhone's log of the game\n")   # what ./aethernx install read on the device wins over older logs
-        self.assertEqual(build.depth_mode(Profile(), self.work), ('gl', "Fixture iPhone's log of the game"))
+        self.assertEqual(build.depth_mode(self.profile(), self.work), ('gl', "Fixture iPhone's log of the game"))
 
     def test_the_last_line_of_a_log_counts(self):
         log = self.root / 'host.log'

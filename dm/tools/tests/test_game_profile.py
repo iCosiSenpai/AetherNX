@@ -96,6 +96,16 @@ class BuildModules(unittest.TestCase):
         self.assertIn('#define DM_GAME_MODULES {"main", "subsdk0", "subsdk1", "sdk"}', text)
         self.assertIn('#define DM_GAME_BUILD_MODULES {"' + 'a' * 32 + '", "main subsdk0 sdk"}, {"' + 'd' * 32 + '", "main subsdk0 subsdk1 sdk"}', text)
 
+    def test_texture_gob_order(self):
+        for setting, expected in (('', 0), ('tex_gob_order\tauto\n', 0), ('tex_gob_order\ttegra_x1\n', 1)):
+            with self.subTest(setting=setting):
+                r, text = self.run_game(self.ROWS + setting, 'header', ID, '{d}/game.h')
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn(f'#define DM_GAME_TEX_GOB_TEGRA_X1 {expected}\n', text)
+        r, _ = self.run_game(self.ROWS + 'tex_gob_order\tunknown\n', 'header', ID, '{d}/game.h')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('tex_gob_order must be auto or tegra_x1', r.stderr)
+
     def test_modules_of_a_rewritten_folder(self):
         r, _ = self.run_game(self.ROWS, 'modules', ID, '{d}/patched')
         self.assertEqual((r.returncode, r.stdout.strip()), (0, 'main subsdk0 subsdk1 sdk'), r.stderr)   # main's build is 1.8.0's

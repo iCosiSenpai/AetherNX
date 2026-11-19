@@ -29,6 +29,7 @@
 #include "save_sync.h"
 
 extern char **environ;
+__attribute__((weak_import)) void dm_mac_resolve_cloud_folder(void);
 int dm_mac_launcher(void);   // Launcher.swift: 1 = Play (the settings are in the environment), 0 = the player quit, 2 = no window (apply the saved choices here)
 int dm_mac_game_mods(const char *title_id, char *out, long cap);   // Launcher.swift: the mods of the game folder's Mods/mods.json; 1 = in out, 0 = no mods.json, -1 = too long
 static volatile pid_t g_child;   // the host while it runs; 0 once it has exited (forward then has no one to forward to)
@@ -140,6 +141,7 @@ static void saved_choices(void) {   // after the env files, before the bundle's 
 // Cloud saves: the folder chosen in the settings window (Launcher.swift CloudSavesSection, cloudSaves.folder in the app's preferences) becomes DM_SAVE_SYNC
 // (dm/host/save_sync.h), with or without the window; a DM_SAVE_SYNC the launch environment or an env file set wins. A front end may write the key too (docs/frontends.md, The cloud saves folder)
 static void cloud_saves_folder(void) {
+    if (dm_mac_resolve_cloud_folder) { dm_mac_resolve_cloud_folder(); return; }
     CFStringRef domain = CFBundleGetIdentifier(CFBundleGetMainBundle());
     if (getenv("DM_SAVE_SYNC") || !domain) return;
     CFPropertyListRef v = CFPreferencesCopyAppValue(CFSTR("cloudSaves.folder"), domain); char s[PATH_MAX];

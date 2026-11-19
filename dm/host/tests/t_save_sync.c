@@ -284,7 +284,7 @@ int main(void) {
     setenv("DM_SAVE_SYNC", cloud2, 1);
     CHECK(save_sync_after_exit(M, DM_GAME_ID) == 0 && cloud_has(cf2, root, "game.dat", "p1"), "nor does the Mac launcher's send after the host replace it");
     unsetenv("DM_SAVE_SYNC");
-    CHECK(run(M, cloud2, "game.dat", "m3", "offline", cf2, UNREADABLE) == NOT_SENT && same(p, "m3") && cloud_has(cf2, root, "game.dat", "p1"),
+    CHECK(run(M, cloud2, "game.dat", "m3", "offline", cf2, UNREADABLE) == 0 && same(p, "m3") && cloud_has(cf2, root, "game.dat", "p1"),
           "the player plays offline with the cloud unreadable all along: m3 is played, nothing is sent");
     CHECK(run(M, cloud2, NULL, NULL, choice_of("cloud", cf2), NULL, READABLE) == 0 && same(p, "p1"), "with the cloud back, the player chooses the iPhone's: it comes in");
     backup_of(M, "local", back, sizeof back); snprintf(q, sizeof q, "%s/save/game.dat", back);

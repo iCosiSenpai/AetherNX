@@ -75,7 +75,7 @@ private struct CloudSavesSection: View {
                 LabeledContent("Folder") {
                     Text(!state.folder.isEmpty ? (state.folder as NSString).lastPathComponent : state.usingICloud ? "iCloud (automatic)" : "Off").lineLimit(1).truncationMode(.middle)
                 }
-                Button(state.folder.isEmpty ? "Choose a Folder in iCloud Drive…" : "Choose a Different Folder…") { state.picking = true }
+                Button(state.folder.isEmpty ? "Choose a Cloud Folder…" : "Choose a Different Folder…") { state.picking = true }
                     .focusRing(focused, tint)
                     // The sheet sits on the button, not on the Section: SwiftUI hands a Section's modifiers to every row, so one tap presented a picker per row and they invalidated each other (LNPANDY/NX2Apple#315).
                     .sheet(isPresented: $state.picking) {
@@ -100,7 +100,7 @@ private struct CloudSavesSection: View {
             Text("Cloud Saves")
         } footer: {
             Text(!state.note.isEmpty ? state.note : !state.container.isEmpty
-                 ? "Saves sync through iCloud by themselves (iCloud Drive › HorizonNative): on the Mac, choose that folder in the app's Cloud Saves. Or choose this game's folder in iCloud Drive › AetherNX (\(GameExtras.folderName(for: name))), which AetherNX on the Mac keeps: its mods and cheats then come with the save. The save comes in when the game starts and goes out after each save; a save that is replaced is kept in save-backups."
+                 ? "Saves sync through iCloud by themselves (iCloud Drive › AetherNX): on the Mac, choose that folder in the app's Cloud Saves. Or choose this game's folder in iCloud Drive › AetherNX (\(GameExtras.folderName(for: name))), which AetherNX on the Mac keeps: its mods and cheats then come with the save. The save comes in when the game starts and goes out after each save; a save that is replaced is kept in save-backups."
                  : "Choose this game's folder in iCloud Drive › AetherNX (\(GameExtras.folderName(for: name))), which AetherNX on the Mac keeps: its mods and cheats then come with the save. Any folder in iCloud Drive works for the save, with the same one in the Mac app's Cloud Saves. The save comes in when the game starts and goes out after each save; a save that is replaced is kept in save-backups.")
         }
         .id("cloud")

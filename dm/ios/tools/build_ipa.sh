@@ -43,6 +43,7 @@ VNACP=$(dirname "$ROMFS")/control.nacp; [ -f "$VNACP" ] || VNACP=$W/data/v0/cont
 [ -n "${DM_APP_VERSION:-}" ] || DM_APP_VERSION=$(python3 "$DM/tools/nacp.py" --version "$VNACP") || { t "no display version in $VNACP: the app version is 1.0"; DM_APP_VERSION=1.0; }
 VNACP=${CONTROL:-$VNACP}   # from here on, the file that lists the game's languages for the launcher's settings
 # The app's link, aethernx-<base game title ID in lower case>:// (Info.plist CFBundleURLTypes, project.yml): AetherNX Companion's Play opens …://play (docs/companion.md)
+export DM_TITLE_ID="$GAME"
 export DM_URL_SCHEME=aethernx-$(echo "$GAME" | tr 'A-Z' 'a-z')
 export LC_ALL=C DM_BUNDLE_ID=${DM_BUNDLE_ID:-io.github.icosisenpai.horizonnative.$(echo "$GAME" | tr 'A-Z' 'a-z')} DM_DISPLAY_NAME DM_APP_VERSION DM_APP_CATEGORY=$(gp app_category) DM_TEAM_ID=${DM_TEAM_ID:-0000000000}   # placeholder identity: unsigned, the install tool replaces it
 if [ "${DM_SHOW_FPS:-0}" = 1 ]; then export DM_SHOW_FPS=YES; else export DM_SHOW_FPS=NO; fi

@@ -24,7 +24,7 @@ xcrun swiftc \
   -O -parse-as-library -swift-version 5 \
   -target arm64-apple-macos26.0 \
   -module-name AetherNXStudio \
-  "$studio"/Sources/*.swift \
+  "$studio"/Sources/*.swift "$root/dm/ios/Sources/CloudFolders.swift" \
   -o "$app/Contents/MacOS/AetherNX"
 
 if [ -n "$identity" ]; then

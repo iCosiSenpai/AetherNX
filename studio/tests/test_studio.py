@@ -31,12 +31,20 @@ def make_library(dz):
     lib = dz / 'lib'
     lib.mkdir(parents=True)
     (lib / f'Stray [{TITLE}].nsp').write_bytes(b'NSP0')
+    (lib / 'Game.nup').write_bytes(b'NUP0')
+    (lib / 'Cart.XCI').write_bytes(b'HEAD')
+    (lib / 'Cart (Initial Area).bin').write_bytes(b'cart area')
+    (lib / 'Another Cart (Initial Area).bin').write_bytes(b'unrelated')
     (lib / 'random.zip').write_bytes(b'PK')
     write_plist(lib / 'Game.app/Contents/Info.plist', {'CFBundleIdentifier': f'io.github.icosisenpai.horizonnative.{TITLE}', 'DMTitleID': TITLE})
     (lib / 'Game.app.key').write_text('key\n')
+    (lib / 'Game.app.key.partial').write_text('partial key\n')
+    write_plist(lib / 'Game.app.old/Contents/Info.plist', {'DMTitleID': TITLE})
+    write_plist(lib / 'Other.app.partial/Contents/Info.plist', {'DMTitleID': '0100000000880000'})
     write_plist(lib / 'Other.app/Contents/Info.plist', {'CFBundleIdentifier': 'com.example.otherapp', 'DMTitleID': '0100000000880000'})
     (lib / 'some.ipa').write_bytes(b'PK')
     (lib / f'{TITLE}-work').mkdir()
+    (lib / '.aethernx-build').write_text(f'/Volumes/Test/Builds/{TITLE}_build\n')
     (dz / 'save' / TITLE).mkdir(parents=True)
     (dz / 'logs').mkdir()
     (dz / 'logs' / f'{TITLE}.log').write_text('log\n')
@@ -165,7 +173,7 @@ class StudioTests(unittest.TestCase):
         cls.built = subprocess.run(['xcrun', 'swiftc', '-emit-library', '-enable-testing', '-parse-as-library', '-swift-version', '5', '-target', TARGET, *cls.cache,
                                     '-module-name', 'AetherNXStudio', '-emit-module', '-emit-module-path', str(cls.library / 'AetherNXStudio.swiftmodule'),
                                     '-emit-localized-strings', '-emit-localized-strings-path', str(cls.strings),
-                                    *sorted(map(str, (STUDIO / 'Sources').glob('*.swift'))), '-o', str(cls.library / 'libAetherNXStudio.dylib')],
+                                    *sorted(map(str, (STUDIO / 'Sources').glob('*.swift'))), str(STUDIO.parent / 'dm/ios/Sources/CloudFolders.swift'), '-o', str(cls.library / 'libAetherNXStudio.dylib')],
                                    capture_output=True, text=True, timeout=900)
 
     @classmethod

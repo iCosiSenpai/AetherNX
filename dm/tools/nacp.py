@@ -14,8 +14,11 @@ LANGUAGES = [('en-US', 'American English'), ('en-GB', 'British English'), ('ja',
 def name(path):
     """The title area holds 0x300 bytes per language (name 0x200 + publisher 0x100); take the first non-empty one (0 = American English); a missing file or no sensible name returns an empty string"""
     p = Path(path)
-    if not p.is_file(): return ''
-    b = p.read_bytes(); t = b[:0x3000]
+    return name_from_bytes(p.read_bytes()) if p.is_file() else ''
+
+
+def name_from_bytes(b):
+    t = b[:0x3000]
     if len(b) >= 2:
         try:   # newer SDKs compress the title area: a u16 size + raw deflate, inflating to 32 languages × 0x300 (Mario 1.2.1 does); inflate no further than that (a crafted size could inflate about 1,000 times)
             d = zlib.decompressobj(-15); z = d.decompress(b[2:2 + struct.unpack_from('<H', b)[0]], 0x6000 + 1)
@@ -33,8 +36,11 @@ def name(path):
 def version(path):
     """The display version (0x10 bytes at 0x3060, e.g. 1.2.1), cut to what iOS accepts as a bundle version (up to three dot-separated integers); a missing file or no leading number returns an empty string"""
     p = Path(path)
-    if not p.is_file(): return ''
-    m = re.match(rb'\d+(\.\d+){0,2}', p.read_bytes()[0x3060:0x3070])
+    return version_from_bytes(p.read_bytes()) if p.is_file() else ''
+
+
+def version_from_bytes(b):
+    m = re.match(rb'\d+(\.\d+){0,2}', b[0x3060:0x3070])
     return m.group().decode() if m else ''
 
 

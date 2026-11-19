@@ -23,9 +23,9 @@ enum CloudSaves {
         var folder: String? { if case .folder(let path, _) = self { path } else { nil } }
     }
 
-    /// The folder iPhone and iPad apps signed with the project's iCloud container sync through by themselves; iCloud Drive shows it as HorizonNative.
+    /// The folder iPhone and iPad apps signed with the project's iCloud container sync through by themselves; iCloud Drive shows it as AetherNX.
     static func automaticFolder(home: String = NSHomeDirectory()) -> String {
-        home + "/Library/Mobile Documents/iCloud~io~github~icosisenpai~horizonnative/Documents"
+        CloudFolders.native(home: home).path
     }
 
     /// iCloud Drive › HorizonNative Saves, the folder `DM_SAVE_SYNC=icloud` names: one to choose in the iPhone app's Cloud saves too.
@@ -41,9 +41,58 @@ enum CloudSaves {
 
     /// A game's folder name in iCloud Drive › AetherNX: its name, without what a file name cannot hold.
     static func folderName(for name: String) -> String {
-        let cleaned = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
-            .trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: ".")))
-        return cleaned.isEmpty ? "Game" : String(cleaned.prefix(120))
+        CloudFolders.folderName(name)
+    }
+
+    static let primaryRootKey = "cloudSaves.primaryRoot"
+    static let fallbackRootKey = "cloudSaves.fallbackRoot"
+
+    static func googleDrive(home: String = NSHomeDirectory(), fileManager fm: FileManager = .default) -> String? {
+        let storage = URL(fileURLWithPath: home).appendingPathComponent("Library/CloudStorage", isDirectory: true)
+        let candidates = (try? fm.contentsOfDirectory(at: storage, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+        let available = candidates.filter { $0.lastPathComponent.hasPrefix("GoogleDrive-") }
+            .map { $0.appendingPathComponent("My Drive", isDirectory: true) }
+            .filter { CloudFolders.accessible($0, fileManager: fm) }
+        return available.count == 1 ? available.first?.path : nil
+    }
+
+    static func googleFolder(base: String) -> String {
+        base.isEmpty ? "" : URL(fileURLWithPath: base).appendingPathComponent("AetherNX", isDirectory: true).path
+    }
+
+    static func preferredICloud() -> String {
+        let fm = FileManager.default
+        if CloudFolders.accessible(CloudFolders.native(), fileManager: fm) { return automaticFolder() }
+        if fm.ubiquityIdentityToken != nil, CloudFolders.accessible(CloudFolders.drive(), fileManager: fm) { return aetherFolder() }
+        return ""
+    }
+
+    static func supportsManagedFolders(_ game: Game) -> Bool {
+        guard let path = game.macApp, let info = NSDictionary(contentsOf: URL(fileURLWithPath: path).appendingPathComponent("Contents/Info.plist")) else { return false }
+        return (info["DMManagedCloudFolders"] as? Bool) == true
+    }
+
+    /// Never create a replacement mount path when its provider is unavailable.
+    static func prepareRoot(_ root: String) {
+        guard !root.isEmpty, root != automaticFolder() else { return }
+        let url = URL(fileURLWithPath: root, isDirectory: true)
+        guard CloudFolders.accessible(url.deletingLastPathComponent()),
+              !FileManager.default.fileExists(atPath: root),
+              (try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)) != nil else { return }
+        if let icon = Bundle.main.url(forResource: "AppIcon", withExtension: "icns").flatMap(NSImage.init(contentsOf:)) {
+            NSWorkspace.shared.setIcon(icon, forFile: root, options: [])
+        }
+    }
+
+    static func routes(domain: String, primary: String?, fallback: String?) {
+        let key = domain as CFString
+        CFPreferencesSetAppValue(primaryRootKey as CFString, primary.map { $0 as CFString }, key)
+        CFPreferencesSetAppValue(fallbackRootKey as CFString, fallback.map { $0 as CFString }, key)
+        CFPreferencesAppSynchronize(key)
+    }
+
+    static func savedRoots(domain: String) -> [String] {
+        [primaryRootKey, fallbackRootKey].compactMap { CFPreferencesCopyAppValue($0 as CFString, domain as CFString) as? String }
     }
 
     /// The folder a game takes from the library's setting: the setting itself, or the game's own folder in it when it is iCloud Drive › AetherNX.
@@ -57,8 +106,8 @@ enum CloudSaves {
     static func displayName(_ folder: String, home: String = NSHomeDirectory()) -> String {
         let path = (folder as NSString).standardizingPath
         let container = automaticFolder(home: home)
-        if path == container { return "iCloud Drive › HorizonNative" }
-        if path.hasPrefix(container + "/") { return "iCloud Drive › HorizonNative › " + path.dropFirst(container.count + 1).replacingOccurrences(of: "/", with: " › ") }
+        if path == container { return "iCloud Drive › AetherNX" }
+        if path.hasPrefix(container + "/") { return "iCloud Drive › AetherNX › " + path.dropFirst(container.count + 1).replacingOccurrences(of: "/", with: " › ") }
         let drive = home + "/Library/Mobile Documents/com~apple~CloudDocs"
         if path == drive { return "iCloud Drive" }
         if path.hasPrefix(drive + "/") { return "iCloud Drive › " + path.dropFirst(drive.count + 1).replacingOccurrences(of: "/", with: " › ") }
@@ -88,6 +137,7 @@ enum CloudSaves {
 
     /// A choice for this game alone: a folder, or nil for off. It no longer follows the library's default.
     static func choose(_ folder: String?, domain: String) {
+        routes(domain: domain, primary: nil, fallback: nil)
         write(folder ?? "", inherited: false, domain: domain)
     }
 
@@ -149,8 +199,11 @@ enum CloudSaves {
 
     /// A game's file in a cloud folder: `<folder>/<title ID>/save.dmsync`, or `<folder>/save.dmsync` when the folder is already the game's own.
     static func cloudFile(folder: String, titleID: String) -> String {
-        let own = (folder as NSString).lastPathComponent.caseInsensitiveCompare(titleID) == .orderedSame
-        return own ? folder + "/save.dmsync" : folder + "/\(titleID)/save.dmsync"
+        let url = URL(fileURLWithPath: folder)
+        let legacy = url.appendingPathComponent(titleID.uppercased(), isDirectory: true)
+        let own = url.lastPathComponent.caseInsensitiveCompare(titleID) == .orderedSame
+            || (CloudFolders.owns(url, titleID: titleID) && !FileManager.default.fileExists(atPath: legacy.path))
+        return (own ? url : legacy).appendingPathComponent("save.dmsync").path
     }
 
     struct LogNote: Hashable {
@@ -349,12 +402,15 @@ struct SavesSection: View {
             Spacer()
             Menu("Change") {
                 let own = CloudSaves.libraryTarget(CloudSaves.aetherFolder(), gameName: game.name)
-                Button { choose(own, domain: domain) } label: {
+                Button {
+                    if CloudSaves.supportsManagedFolders(game) { chooseManaged(CloudSaves.aetherFolder(), domain: domain) }
+                    else { choose(own, domain: domain) }
+                } label: {
                     Text("iCloud Drive › AetherNX › \(CloudSaves.folderName(for: game.name)) (with Mods and Cheats)")
                 }
                 Divider()
-                if FileManager.default.fileExists(atPath: (CloudSaves.automaticFolder() as NSString).deletingLastPathComponent) {
-                    Button { choose(CloudSaves.automaticFolder(), domain: domain) } label: { Text(verbatim: "iCloud Drive › HorizonNative") }
+                if FileManager.default.fileExists(atPath: CloudSaves.automaticFolder()) {
+                    Button("AetherNX iCloud container") { chooseManaged(CloudSaves.automaticFolder(), domain: domain) }
                 }
                 Button { choose(CloudSaves.driveFolder(), domain: domain) } label: { Text(verbatim: "iCloud Drive › HorizonNative Saves") }
                 Button("Choose a Folder…") { pickFolder(domain: domain, from: setting.folder) }
@@ -411,6 +467,20 @@ struct SavesSection: View {
         revision += 1
     }
 
+    private func chooseManaged(_ root: String, domain: String) {
+        guard CloudSaves.supportsManagedFolders(game), let titleID = game.titleId else {
+            choose(root, domain: domain)
+            return
+        }
+        CloudSaves.prepareRoot(root)
+        guard let folder = try? CloudFolders.game(in: URL(fileURLWithPath: root), name: game.name, titleID: titleID) else {
+            model.log(String(localized: "The selected cloud folder is unavailable."), kind: .info)
+            return
+        }
+        choose(folder.path, domain: domain)
+        CloudSaves.routes(domain: domain, primary: root, fallback: nil)
+    }
+
     private func pickFolder(domain: String, from current: String?) {
         CloudSavesPanel.pick(startingAt: current) { url in
             if let url { choose(url.path, domain: domain) }
@@ -461,20 +531,43 @@ enum CloudSavesPanel {
 struct CloudSavesSettings: View {
     @Environment(AppModel.self) private var model
     @AppStorage(Pref.cloudSavesFolder) private var libraryFolder = ""
+    @AppStorage(Pref.cloudSavesGoogleDrive) private var google = ""
+    @AppStorage(Pref.cloudSavesFallback) private var fallback = false
+
+    private var googleTarget: String { CloudSaves.googleFolder(base: google) }
+    private var iCloud: String { CloudSaves.preferredICloud() }
+    private var canFallback: Bool {
+        !googleTarget.isEmpty && (libraryFolder == CloudSaves.automaticFolder() || libraryFolder == CloudSaves.aetherFolder()
+                                 || (libraryFolder == googleTarget && !iCloud.isEmpty))
+    }
 
     var body: some View {
         Section {
-            Picker("Cloud saves", selection: Binding(get: { libraryFolder }, set: { set($0) })) {
+            Picker("Primary cloud folder", selection: Binding(get: { libraryFolder }, set: { set($0) })) {
                 Text("Off").tag("")
-                Divider()
-                if FileManager.default.fileExists(atPath: (CloudSaves.automaticFolder() as NSString).deletingLastPathComponent) || libraryFolder == CloudSaves.automaticFolder() {
-                    Text(verbatim: "iCloud Drive › HorizonNative").tag(CloudSaves.automaticFolder())
+                if FileManager.default.fileExists(atPath: CloudSaves.automaticFolder()) || libraryFolder == CloudSaves.automaticFolder() {
+                    Text("AetherNX iCloud container").tag(CloudSaves.automaticFolder())
                 }
-                Text("iCloud Drive › AetherNX (a folder per game, with Mods and Cheats)").tag(CloudSaves.aetherFolder())
+                Text("iCloud Drive › AetherNX").tag(CloudSaves.aetherFolder())
                 Text(verbatim: "iCloud Drive › HorizonNative Saves").tag(CloudSaves.driveFolder())
-                if !libraryFolder.isEmpty, libraryFolder != CloudSaves.automaticFolder(), libraryFolder != CloudSaves.driveFolder(), libraryFolder != CloudSaves.aetherFolder() {
+                if !googleTarget.isEmpty { Text("Google Drive › AetherNX").tag(googleTarget) }
+                if !libraryFolder.isEmpty, libraryFolder != CloudSaves.automaticFolder(), libraryFolder != CloudSaves.driveFolder(),
+                   libraryFolder != CloudSaves.aetherFolder(), libraryFolder != googleTarget {
                     Text(verbatim: CloudSaves.displayName(libraryFolder)).tag(libraryFolder)
                 }
+            }
+            Button(google.isEmpty ? "Choose Google Drive…" : "Change Google Drive Folder…") {
+                CloudSavesPanel.pick(startingAt: google.isEmpty ? CloudSaves.googleDrive() : google) { url in
+                    guard let url else { return }
+                    let wasPrimary = !googleTarget.isEmpty && libraryFolder == googleTarget
+                    google = url.path
+                    CloudSaves.prepareRoot(googleTarget)
+                    if wasPrimary { set(googleTarget) } else { model.applyCloudSavesFolder() }
+                }
+            }
+            if canFallback {
+                Toggle(libraryFolder == googleTarget ? "Use iCloud as fallback" : "Use Google Drive as fallback", isOn: $fallback)
+                    .onChange(of: fallback) { _, _ in model.applyCloudSavesFolder() }
             }
             Button("Choose a Folder…") {
                 CloudSavesPanel.pick(startingAt: libraryFolder.isEmpty ? nil : libraryFolder) { url in if let url { set(url.path) } }
@@ -482,12 +575,16 @@ struct CloudSavesSettings: View {
         } header: {
             Text("Saves")
         } footer: {
-            Text("The folder every game's Mac app syncs its save through, unless a game has its own choice on its page. With AetherNX, each game gets a folder named after it, with its save, a Mods folder and a Cheats folder: on the iPhone or iPad, choose that same folder in the app's Cloud saves. HorizonNative is the folder the iPhone and iPad apps use by themselves when they are signed with an iCloud container.")
+            Text("Each provider uses an AetherNX folder with a folder for each game. Select My Drive from Google Drive for desktop. The fallback is used when the primary folder is unavailable. Separate changes are kept for review. Rebuild existing Mac game apps to use the new routing.")
+        }
+        .onAppear {
+            if google.isEmpty, let detected = CloudSaves.googleDrive() {
+                google = detected
+            }
         }
     }
 
     private func set(_ folder: String) {
-        if !folder.isEmpty { try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true) }
         libraryFolder = folder
         model.applyCloudSavesFolder()
     }

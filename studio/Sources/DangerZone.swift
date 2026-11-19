@@ -42,6 +42,17 @@ struct RemovalPlan: Equatable {
 
         /// Ticked when the whole game goes; iCloud saves reach other devices, so they are left unless chosen.
         var inEverything: Bool { self != .iCloudSaves }
+
+        var removalTitle: LocalizedStringKey {
+            switch self {
+            case .gameFiles: "Remove Game Files…"
+            case .buildFolder: "Remove Build…"
+            case .apps: "Remove Built Apps…"
+            case .saves: "Remove Local Saves…"
+            case .iCloudSaves: "Remove iCloud Saves…"
+            case .logsAndSettings: "Remove Logs and Settings…"
+            }
+        }
     }
 
     struct Item: Identifiable, Equatable {
@@ -59,6 +70,12 @@ struct RemovalPlan: Equatable {
     func item(_ kind: Kind) -> Item? { items.first { $0.kind == kind } }
     var total: Int64 { items.reduce(0) { $0 + $1.size } }
 
+    nonisolated static func needsConnectedBuildDisk(_ game: Game, kinds: Set<Kind>) -> Bool {
+        guard !game.workReachable, let work = game.workDir, !kinds.isDisjoint(with: [.gameFiles, .buildFolder, .apps]) else { return false }
+        let pointer = URL(filePath: game.folder).appending(path: ".aethernx-build")
+        return (try? String(contentsOf: pointer, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) == work
+    }
+
     /// What removing the game takes. `libraryFolders`: a game whose folder is a library folder itself (its packages at the top of it) shares that folder with
     /// other things, so only what is the game's own goes: its packages, and the apps that name its title ID; no archive or IPA merely lying there.
     nonisolated static func make(for game: Game, libraryFolders: [String]) -> RemovalPlan {
@@ -67,7 +84,10 @@ struct RemovalPlan: Equatable {
         let isLibraryFolder = libraryFolders.contains { canonical($0) == canonical(game.folder) }
         func existing(_ paths: [String]) -> [String] {
             var seen = Set<String>()
-            return paths.filter { fm.fileExists(atPath: $0) && seen.insert(URL(filePath: $0).standardizedFileURL.path).inserted }
+            return paths.filter { path in
+                (fm.fileExists(atPath: path) || (try? fm.destinationOfSymbolicLink(atPath: path)) != nil)
+                    && seen.insert(URL(filePath: path).standardizedFileURL.path).inserted
+            }
         }
         func item(_ kind: Kind, _ paths: [String], domains: [String] = []) -> Item? {
             let found = existing(paths)
@@ -80,12 +100,18 @@ struct RemovalPlan: Equatable {
         var files: [String] = game.kind == .archives || !isLibraryFolder ? game.archives.flatMap { archiveParts($0.path) } : []
         switch game.kind {
         case .packages:
-            if let base = game.base { files.append(base.path) }
-            files += game.updates.map(\.path)
-            files += game.dlc.map(\.path)
-            files += game.compressed
+            let packages = [game.base?.path].compactMap { $0 } + game.updates.map(\.path) + game.dlc.map(\.path) + game.compressed
+            files += packages.flatMap { path in
+                let url = URL(filePath: path)
+                guard ["xci", "xcz"].contains(url.pathExtension.lowercased()) else { return [path] }
+                return [path, url.deletingPathExtension().path + " (Initial Area).bin"]
+            }
         case .dump:
-            files += ["base", "updates", "dlc", "exefs", "romfs"].map { folder.appending(path: $0).path }
+            if let container = game.container {
+                files.append(container.path)
+            } else {
+                files += ["base", "updates", "dlc", "exefs", "romfs"].map { folder.appending(path: $0).path }
+            }
         case .archives:
             if game.archives.isEmpty, game.id != game.folder { files += archiveParts(game.id) }
         }
@@ -95,16 +121,25 @@ struct RemovalPlan: Equatable {
         if let id = game.titleId {
             builds += [folder.appending(path: "\(id)_survey").path, folder.appending(path: "\(id)-work").path]
         }
+        if game.workReachable { builds.append(folder.appending(path: ".aethernx-build").path) }
 
         // Built apps: only bundles whose Info.plist names this game's title ID (DMTitleID, written by dm/mac/pack_app.py). Another app in the folder
         // is not removed, and neither are its settings
-        let builtApps = game.macApps.compactMap { app -> (path: String, bundleID: String?)? in
+        let appFolders = Set([folder.path, game.workDir.map { URL(filePath: $0).deletingLastPathComponent().path }].compactMap { $0 })
+        let stagedApps = appFolders.flatMap { path in
+            ((try? fm.contentsOfDirectory(at: URL(filePath: path), includingPropertiesForKeys: nil)) ?? [])
+                .filter { $0.lastPathComponent.hasSuffix(".app.partial") || $0.lastPathComponent.hasSuffix(".app.old") }.map(\.path)
+        }
+        let builtApps = (game.macApps + stagedApps).compactMap { app -> (path: String, bundleID: String?)? in
             guard let info = NSDictionary(contentsOf: URL(filePath: app).appending(path: "Contents/Info.plist")),
                   let id = game.titleId, (info["DMTitleID"] as? String)?.uppercased() == id.uppercased() else { return nil }
             return (app, info["CFBundleIdentifier"] as? String)
         }
         var apps: [String] = []
-        for app in builtApps { apps += [app.path, app.path + ".key"] }
+        for app in builtApps {
+            let output = app.path.hasSuffix(".app") ? app.path : URL(filePath: app.path).deletingPathExtension().path
+            apps += [app.path, output + ".key", output + ".key.partial"]
+        }
         if !isLibraryFolder { for ipa in game.ipas { apps += [ipa, ipa + ".idx"] } }
 
         var domains: [String] = builtApps.compactMap(\.bundleID)
@@ -123,7 +158,11 @@ struct RemovalPlan: Equatable {
 
         var cloud: [String] = []
         if let id = game.titleId {
-            cloud.append(home.appending(path: "Library/Mobile Documents/iCloud~io~github~icosisenpai~horizonnative/Documents/\(id)").path)
+            let roots = Set(domains.flatMap(CloudSaves.savedRoots(domain:))
+                + [CloudSaves.automaticFolder(home: home.path), CloudSaves.aetherFolder(home: home.path)])
+            cloud = roots.flatMap {
+                CloudFolders.knownGameFolders(in: URL(fileURLWithPath: $0), titleID: id).map(\.path)
+            }.sorted()
         }
 
         let items = [
@@ -186,10 +225,10 @@ struct DangerZoneSection: View {
                 }
             }
             .padding(.bottom, 10)
-            ForEach([RemovalPlan.Kind.buildFolder, .apps, .saves], id: \.self) { kind in
+            ForEach([RemovalPlan.Kind.buildFolder, .apps, .saves, .logsAndSettings], id: \.self) { kind in
                 if let item = plan?.item(kind), item.size > 0 || !item.paths.isEmpty {
                     row(title: kind.title, detail: kind.detail, size: item.size) {
-                        Button("Remove…") { model.removalRequest = RemovalRequest(game: game, kinds: [kind]) }
+                        Button(kind.removalTitle) { model.removalRequest = RemovalRequest(game: game, kinds: [kind]) }
                             .disabled(busy)
                     }
                     Divider()
@@ -253,8 +292,10 @@ struct RemovalSheet: View {
         guard let plan else { return [] }
         return isEverything ? plan.items : plan.items.filter { request.kinds.contains($0.kind) }
     }
-    private var selectedSize: Int64 { shown.filter { chosen.contains($0.kind) }.reduce(0) { $0 + $1.size } }
+    private var selectedItems: [RemovalPlan.Item] { shown.filter { chosen.contains($0.kind) } }
+    private var selectedSize: Int64 { selectedItems.reduce(0) { $0 + $1.size } }
     private var isRunning: Bool { model.playLog.isRunning(request.game) }
+    private var isMissingDisk: Bool { RemovalPlan.needsConnectedBuildDisk(request.game, kinds: chosen) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -301,6 +342,11 @@ struct RemovalSheet: View {
                     .font(.callout)
                     .foregroundStyle(.red)
             }
+            if isMissingDisk {
+                Label("Connect the build disk to remove the selected items.", systemImage: "externaldrive.badge.exclamationmark")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+            }
             HStack {
                 Text("\(selectedSize.fileSize) selected")
                     .foregroundStyle(.secondary)
@@ -309,11 +355,11 @@ struct RemovalSheet: View {
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Move to Trash") { run(permanently: false) }
-                    .disabled(chosen.isEmpty || plan == nil || isRunning)
+                    .disabled(selectedItems.isEmpty || isRunning || isMissingDisk)
                 Button("Delete Permanently", role: .destructive) { confirmsPermanent = true }
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
-                    .disabled(chosen.isEmpty || plan == nil || isRunning)
+                    .disabled(selectedItems.isEmpty || isRunning || isMissingDisk)
             }
         }
         .padding(22)
@@ -331,11 +377,10 @@ struct RemovalSheet: View {
     }
 
     private func run(permanently: Bool) {
-        guard let plan else { return }
-        let items = plan.items.filter { chosen.contains($0.kind) }
-        let removesGame = isEverything && chosen.contains(.gameFiles)
-        model.remove(items, of: request.game, permanently: permanently, forgetsGame: removesGame)
-        dismiss()
+        let items = selectedItems
+        guard !items.isEmpty else { return }
+        let removesGame = items.contains { $0.kind == .gameFiles }
+        if model.remove(items, of: request.game, permanently: permanently, forgetsGame: removesGame) { dismiss() }
     }
 }
 

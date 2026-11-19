@@ -45,6 +45,7 @@ enum GameExtras {
         let path = (folder as NSString).standardizingPath
         if (path as NSString).lastPathComponent.caseInsensitiveCompare(titleID) == .orderedSame { return true }
         return (path as NSString).deletingLastPathComponent == CloudSaves.aetherFolder(home: home)
+            || CloudFolders.owns(URL(fileURLWithPath: path), titleID: titleID)
     }
 
     static func modsFolder(in base: String) -> String { (base as NSString).appendingPathComponent("Mods") }

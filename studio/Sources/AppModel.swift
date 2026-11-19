@@ -19,6 +19,8 @@ enum Pref {
     static let extraArguments = "extraArguments"
     static let setupCompleted = "setupCompleted"
     static let downloadArtwork = "downloadArtwork"
+    static let libraryFilter = "libraryFilter"
+    static let librarySort = "librarySort"
     static let notifyBuilds = "notifyBuilds"
     static let checkUpdatesAtLaunch = "checkUpdatesAtLaunch"
     static let showsMenuBarItem = "showsMenuBarItem"
@@ -33,6 +35,8 @@ enum Pref {
     static let ascIssuer = "ascIssuer"
     static let iCloudContainer = "iCloudContainer"
     static let cloudSavesFolder = "cloudSavesFolder"
+    static let cloudSavesGoogleDrive = "cloudSavesGoogleDrive"
+    static let cloudSavesFallback = "cloudSavesFallback"
 
     static func register() {
         UserDefaults.standard.register(defaults: [
@@ -135,6 +139,7 @@ final class AppModel {
     private(set) var scanFailure: String?
     private(set) var isScanning = false
     @ObservationIgnored private var rescanPending = false
+    @ObservationIgnored private var importedFolders: Set<String> = []
     private(set) var hasScanned = false
     /// The game whose page shows; nil on the other pages. Choosing one opens its page.
     var selectedGameID: Game.ID? {
@@ -211,7 +216,8 @@ final class AppModel {
         return games.first { $0.id == selectedGameID }
     }
 
-    var canStartJob: Bool { engine != nil && job?.isRunning != true }
+    var isJobBusy: Bool { pendingDeviceBuild != nil || job?.isRunning == true }
+    var canStartJob: Bool { engine != nil && !isJobBusy }
     /// Build and Install: start now, or wait in the build queue behind the running job.
     var canQueueBuild: Bool { engine != nil }
 
@@ -223,6 +229,7 @@ final class AppModel {
         let target: BuildTarget
     }
     private(set) var buildQueue: [QueuedBuild] = []
+    private var pendingDeviceBuild: Game.ID?
     /// The queue waits after a job was stopped: the player stopped the work, so the next does not start by itself.
     private(set) var queuePaused = false
 
@@ -237,7 +244,7 @@ final class AppModel {
     /// The next queued build that can start: one whose game is still in the library, and that build() accepts (keys, room, its disk). One it refuses
     /// says why, as a Build button would, and the queue goes on.
     private func startNextQueued() {
-        while !queuePaused, job?.isRunning != true, !buildQueue.isEmpty {
+        while !queuePaused, pendingDeviceBuild == nil, job?.isRunning != true, !buildQueue.isEmpty {
             let next = buildQueue.removeFirst()
             guard let game = games.first(where: { $0.id == next.gameID }) else {
                 log(String(localized: "\(next.gameName) is not in the library any more: its queued build is skipped."), kind: .error)
@@ -311,6 +318,7 @@ final class AppModel {
     }
 
     func downloadEngine() {
+        guard !isJobBusy else { return }
         let destination = Engine.defaultCloneLocation
         if Engine.isEngine(destination) { setEngine(destination); return }
         if FileManager.default.fileExists(atPath: destination.path) {
@@ -366,15 +374,15 @@ final class AppModel {
 
     func rescan() {
         keys = KeysStatus.current()
+        guard !isScanning else {
+            rescanPending = true
+            return
+        }
         guard let engine, !libraryFolders.isEmpty else {
             games = []
             scanErrors = []
             scanFailure = nil
             hasScanned = true
-            return
-        }
-        guard !isScanning else {
-            rescanPending = true   // the folders changed during a scan: scan again when it ends
             return
         }
         isScanning = true
@@ -383,16 +391,16 @@ final class AppModel {
             let result = await CommandRunner.capture(executable: engine.appending(path: "aethernx"), arguments: ["scan", "--json"] + folders, directory: engine,
                                                      environment: toolEnvironment)
             isScanning = false
-            hasScanned = true
-            defer {
-                if rescanPending {
-                    rescanPending = false
-                    rescan()
-                }
+            if rescanPending {
+                rescanPending = false
+                rescan()
+                return
             }
+            hasScanned = true
             guard result.status == 0 else {
                 scanFailure = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\n").last.map(String.init)
                     ?? String(localized: "The library scan stopped with exit code \(result.status).")
+                finishLibraryImport()
                 return
             }
             do {
@@ -412,18 +420,46 @@ final class AppModel {
             } catch {
                 scanFailure = String(localized: "Could not read the scan result: \(error.localizedDescription)")
             }
+            finishLibraryImport()
         }
     }
 
     func addLibraryFolder(_ url: URL) {
-        let path = url.standardizedFileURL.path
-        guard !libraryFolders.contains(path) else { return }
-        libraryFolders.append(path)
+        addLibraryFolders([url], selectsGames: false)
+    }
+
+    private func addLibraryFolders(_ urls: [URL], selectsGames: Bool) {
+        let paths = urls.map { $0.standardizedFileURL.resolvingSymlinksInPath().path }
+        var known = Set(libraryFolders.map { URL(filePath: $0).resolvingSymlinksInPath().path })
+        libraryFolders += paths.filter { known.insert($0).inserted }
+        if selectsGames { importedFolders.formUnion(paths) }
         rescan()
+    }
+
+    private func finishLibraryImport() {
+        guard !importedFolders.isEmpty else { return }
+        let folders = importedFolders
+        importedFolders.removeAll()
+        func isInImport(_ path: String) -> Bool {
+            let url = URL(filePath: path)
+            return folders.contains(url.path) || folders.contains(url.deletingLastPathComponent().path)
+        }
+        sidebarSelection = .home
+        if let scanFailure {
+            if !games.isEmpty { errorMessage = scanFailure }
+            return
+        }
+        let imported = games.filter { isInImport($0.folder) }
+        if imported.count == 1 { selectedGameID = imported[0].id }
+        if imported.isEmpty && !games.isEmpty {
+            errorMessage = scanErrors.first(where: { isInImport($0.folder) })?.message
+                ?? String(localized: "No supported game files were found in the selected folders.")
+        }
     }
 
     func removeLibraryFolder(_ path: String) {
         libraryFolders.removeAll { $0 == path }
+        importedFolders.remove(URL(filePath: path).resolvingSymlinksInPath().path)
         rescan()
     }
 
@@ -476,7 +512,7 @@ final class AppModel {
 
     /// `aethernx move-build`: the game's build folder and the Mac apps beside it go to the builds folder, or back beside the game when none is set.
     func moveBuild(_ game: Game) {
-        guard canStartJob, let engine, let target = game.workMovesTo else { return }
+        guard canStartJob, removingGameID != game.id, let engine, let target = game.workMovesTo else { return }
         if let app = game.macApp, NSWorkspace.shared.runningApplications.contains(where: { $0.bundleURL?.standardizedFileURL.path == app }) {
             errorMessage = String(localized: "\(game.name) is open: quit it, then move its build.")
             return
@@ -489,30 +525,44 @@ final class AppModel {
                  directory: engine) { [weak self] _ in self?.rescan() }
     }
 
-    func chooseLibraryFolder() {
+    func chooseLibraryFolder(selectsGames: Bool = false) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = true
-        panel.message = String(localized: "Choose a folder with your games: one folder per game, or a single game's folder.")
+        panel.directoryURL = libraryFolders.last.map { URL(filePath: $0).deletingLastPathComponent() }
+        panel.message = String(localized: "Choose a game folder or a library of game folders. Keep one NUP per game folder.")
         panel.prompt = String(localized: "Add")
-        if panel.runModal() == .OK { panel.urls.forEach(addLibraryFolder) }
+        let window = NSApp.keyWindow
+        Task {
+            let response: NSApplication.ModalResponse
+            if let window {
+                response = await panel.beginSheetModal(for: window)
+            } else {
+                response = await panel.begin()
+            }
+            if response == .OK { addLibraryFolders(panel.urls, selectsGames: selectsGames) }
+        }
     }
 
     // MARK: Jobs
 
     func build(_ game: Game, target: BuildTarget) {
-        guard engine != nil, game.isBuildable else { return }
-        if job?.isRunning == true {   // a job runs: this one waits its turn
+        guard let engine, game.isBuildable, removingGameID != game.id else { return }
+        if target == .device && pendingDeviceBuild == game.id { return }
+        if job?.isRunning == true || pendingDeviceBuild != nil {
             guard !buildQueue.contains(where: { $0.gameID == game.id && $0.target == target }) else { return }
             buildQueue.append(QueuedBuild(gameID: game.id, gameName: game.name, target: target))
             log(String(localized: "Queued: \(game.name), \(String(localized: target.queueTitle)). It starts when the running job ends."), kind: .info)
             return
         }
         if target == .device, !devices.hasLoaded {   // the devices are read when first needed: an install started before Settings was ever opened
+            pendingDeviceBuild = game.id
             devices.refresh(engine: engine) { [weak self] in
-                guard let self, devices.hasLoaded else { return }
-                build(game, target: target)
+                guard let self else { return }
+                pendingDeviceBuild = nil
+                if let current = games.first(where: { $0.id == game.id }) { build(current, target: target) }
+                startNextQueued()
             }
             return
         }
@@ -521,8 +571,7 @@ final class AppModel {
             return
         }
         keys = KeysStatus.current()
-        // A dump holds the game's files already decrypted: only packages need the keys
-        guard keys.isUsable || game.kind == .dump else {
+        guard keys.isUsable || !game.requiresKeys else {
             errorMessage = String(localized: "Set your prod.keys in Settings → Keys before building.")
             return
         }
@@ -582,7 +631,7 @@ final class AppModel {
             environment = Self.signingEnvironment(keyPath: defaults.string(forKey: Pref.ascKeyPath) ?? "", keyID: defaults.string(forKey: Pref.ascKeyID) ?? "",
                                                   issuer: defaults.string(forKey: Pref.ascIssuer) ?? "")
         }
-        guard let args = Self.buildArguments(folder: game.folder, target: target, keys: keys.isUsable ? keys.path : nil,
+        guard let args = Self.buildArguments(folder: game.folder, target: target, keys: game.requiresKeys && keys.isUsable ? keys.path : nil,
                                              keepExtracted: defaults.bool(forKey: Pref.keepExtracted), language: defaults.string(forKey: Pref.language),
                                              pipelineArchive: defaults.bool(forKey: Pref.pipelineArchive), showFPS: defaults.bool(forKey: Pref.showFPS),
                                              macSigningIdentity: defaults.string(forKey: Pref.macSigningIdentity), extra: defaults.string(forKey: Pref.extraArguments) ?? "",
@@ -620,16 +669,54 @@ final class AppModel {
 
     /// The library's cloud folder reaches every built game that has no choice of its own (CloudSaves.applyLibraryFolder).
     func applyCloudSavesFolder() {
-        let folder = UserDefaults.standard.string(forKey: Pref.cloudSavesFolder) ?? ""
+        let defaults = UserDefaults.standard
+        let automatic = CloudSaves.preferredICloud()
+        let folder = defaults.string(forKey: Pref.cloudSavesFolder) ?? automatic
+        if defaults.object(forKey: Pref.cloudSavesFolder) == nil && !folder.isEmpty { defaults.set(folder, forKey: Pref.cloudSavesFolder) }
+        let google = CloudSaves.googleFolder(base: defaults.string(forKey: Pref.cloudSavesGoogleDrive) ?? "")
+        let managedRoots = [CloudSaves.automaticFolder(), CloudSaves.aetherFolder(), google].filter { !$0.isEmpty }
+        let managed = managedRoots.contains(folder)
+        let fallback = defaults.bool(forKey: Pref.cloudSavesFallback) && managed ? (folder == google ? automatic : google) : ""
+        if managed { CloudSaves.prepareRoot(folder) }
+        if !fallback.isEmpty && fallback != folder { CloudSaves.prepareRoot(fallback) }
+
+        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
         var targets: [String: String] = [:]
         for game in games where game.macApp != nil {
-            guard let domain = CloudSaves.domain(for: game) else { continue }
-            let target = CloudSaves.libraryTarget(folder, gameName: game.name)
-            if !target.isEmpty {
-                try? FileManager.default.createDirectory(atPath: target, withIntermediateDirectories: true)
-                GameExtras.prepare(folder: target, game: game)
+            guard let domain = CloudSaves.domain(for: game), let id = game.titleId, !running.contains(domain) else { continue }
+            let old = CloudSaves.setting(domain: domain)
+            if old == .off { continue }
+            if case .folder(let path, inherited: false) = old {
+                // The old container root was a built-in choice. Treat it as managed for newly rebuilt apps.
+                if managedRoots.contains(path), CloudSaves.supportsManagedFolders(game) {
+                    CloudSaves.routes(domain: domain, primary: path, fallback: nil)
+                    if let named = try? CloudFolders.game(in: URL(fileURLWithPath: path), name: game.name, titleID: id) {
+                        CloudSaves.choose(named.path, domain: domain)
+                        CloudSaves.routes(domain: domain, primary: path, fallback: nil)
+                    }
+                }
+                continue
             }
-            targets[domain] = target
+
+            if managed && CloudSaves.supportsManagedFolders(game) {
+                let root = URL(fileURLWithPath: folder, isDirectory: true)
+                let destination = (try? CloudFolders.game(in: root, name: game.name, titleID: id))?.path
+                    ?? root.appendingPathComponent(CloudFolders.folderName(game.name), isDirectory: true).path
+                targets[domain] = destination
+                CloudSaves.routes(domain: domain, primary: folder, fallback: fallback.isEmpty || fallback == folder ? nil : fallback)
+                if CloudFolders.owns(URL(fileURLWithPath: destination), titleID: id) {
+                    GameExtras.prepare(folder: destination, game: game)
+                }
+            } else {
+                if managed && folder == google { continue }
+                let target = CloudSaves.libraryTarget(folder, gameName: game.name)
+                if !target.isEmpty && (!managed || CloudFolders.accessible(URL(fileURLWithPath: folder))) {
+                    try? FileManager.default.createDirectory(atPath: target, withIntermediateDirectories: true)
+                    GameExtras.prepare(folder: target, game: game)
+                }
+                CloudSaves.routes(domain: domain, primary: nil, fallback: nil)
+                targets[domain] = target
+            }
         }
         defer { publishManifests() }   // after the folders changed: each game folder of iCloud Drive › AetherNX says what the game is (docs/companion.md)
         guard !targets.isEmpty else { return }
@@ -745,7 +832,7 @@ final class AppModel {
     // MARK: Game actions
 
     func play(_ game: Game) {
-        guard let app = game.macApp else { return }
+        guard removingGameID != game.id, let app = game.macApp else { return }
         refreshExtras(game)   // the mods on and the cheats folder, as the game's folder holds them now
         NSWorkspace.shared.openApplication(at: URL(filePath: app), configuration: NSWorkspace.OpenConfiguration()) { _, error in
             if let error {
@@ -755,7 +842,7 @@ final class AppModel {
     }
 
     func importPackagesIntoSelectedGame() {
-        guard let game = selectedGame, game.isBuildable else { return }
+        guard let game = selectedGame, game.requiresKeys else { return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.allowsMultipleSelection = true
@@ -826,11 +913,16 @@ final class AppModel {
 
     /// Removes the chosen parts of a game, to the Trash or for good. With the game files gone, its folder goes too when
     /// nothing else is left in it, and a library folder that was only this game leaves the library.
-    func remove(_ items: [RemovalPlan.Item], of game: Game, permanently: Bool, forgetsGame: Bool) {
-        guard removingGameID == nil, jobFor(game)?.isRunning != true else { return }
+    @discardableResult
+    func remove(_ items: [RemovalPlan.Item], of game: Game, permanently: Bool, forgetsGame: Bool) -> Bool {
+        guard removingGameID == nil, pendingDeviceBuild != game.id, jobFor(game)?.isRunning != true else { return false }
+        guard !RemovalPlan.needsConnectedBuildDisk(game, kinds: Set(items.map(\.kind))) else {
+            errorMessage = String(localized: "Connect the build disk to remove the selected items.")
+            return false
+        }
         guard !playLog.isRunning(game) else {   // its app runs from the extracted files and writes the saves
             errorMessage = String(localized: "\(game.name) is open: quit it before removing it.")
-            return
+            return false
         }
         removingGameID = game.id
         let paths = items.flatMap(\.paths)
@@ -840,27 +932,44 @@ final class AppModel {
         let ownsFolder = game.kind != .archives || game.id == game.folder
         log(permanently ? String(localized: "Deleting \(size.fileSize) of \(game.name)…") : String(localized: "Moving \(size.fileSize) of \(game.name) to the Trash…"), kind: .info)
         Task {
-            // The launcher's settings first: cfprefsd keeps a copy of a plist removed under it
-            for domain in domains {
+            var failures = await Self.discard(paths, permanently: permanently)
+            // Clear cfprefsd after moving the preference files, so Trash retains their contents.
+            for domain in domains where !FileManager.default.fileExists(atPath: NSHomeDirectory() + "/Library/Preferences/\(domain).plist") {
                 _ = await CommandRunner.capture(executable: URL(filePath: "/usr/bin/defaults"), arguments: ["delete", domain], directory: nil)
             }
-            var failures = await Self.discard(paths, permanently: permanently)
-            if forgetsGame && ownsFolder && Self.isSafeToRemove(folder) && Self.holdsNoFiles(folder) {
+            if failures.isEmpty && forgetsGame && ownsFolder && Self.isSafeToRemove(folder) && Self.holdsNoFiles(folder) {
                 failures += await Self.discard([folder], permanently: permanently)
-                if libraryFolders.contains(folder) { libraryFolders.removeAll { $0 == folder } }
+                if failures.isEmpty { libraryFolders.removeAll { RemovalPlan.canonical($0) == RemovalPlan.canonical(folder) } }
             }
-            if forgetsGame { playLog.forget(game) }
+            if failures.isEmpty && forgetsGame {
+                if let id = game.titleId, !games.contains(where: { $0.id != game.id && $0.titleId == id }) {
+                    artwork.forget(id)
+                    failures += await Self.discard([artwork.directory.appending(path: id).path], permanently: permanently)
+                }
+                if failures.isEmpty {
+                    playLog.forget(game)
+                    lastSuccess[game.id] = nil
+                    outcomes[game.id] = nil
+                    buildQueue.removeAll { $0.gameID == game.id }
+                    if selectedGameID == game.id { sidebarSelection = .home }
+                }
+            }
             for failure in failures { log(failure, kind: .error) }
+            if let first = failures.first {
+                errorMessage = String(localized: "Some items could not be removed. \(first)")
+            }
             log(failures.isEmpty ? String(localized: "\(game.name): \(size.fileSize) removed.") : String(localized: "\(game.name): some items could not be removed."), kind: failures.isEmpty ? .info : .error)
             removingGameID = nil
             removalPlans[game.id] = nil
-            if forgetsGame, selectedGameID == game.id { selectedGameID = nil }
             rescan()
         }
+        return true
     }
 
     private nonisolated static func discard(_ paths: [String], permanently: Bool) async -> [String] {
-        let urls = paths.map { URL(filePath: $0) }.filter { FileManager.default.fileExists(atPath: $0.path) || (try? $0.checkResourceIsReachable()) == true }
+        let urls = Set(paths).map { URL(filePath: $0) }.filter { url in
+            FileManager.default.fileExists(atPath: url.path) || (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil
+        }
         guard !urls.isEmpty else { return [] }
         if permanently {
             return await Task.detached(priority: .userInitiated) {
@@ -893,14 +1002,18 @@ final class AppModel {
 
     /// Whether a folder holds nothing but empty folders and Finder's own files.
     nonisolated static func holdsNoFiles(_ path: String) -> Bool {
-        guard let walker = FileManager.default.enumerator(at: URL(filePath: path), includingPropertiesForKeys: [.isDirectoryKey]) else { return false }
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey]
+        var couldNotRead = false
+        guard let walker = FileManager.default.enumerator(at: URL(filePath: path), includingPropertiesForKeys: Array(keys),
+                                                           errorHandler: { _, _ in couldNotRead = true; return false }) else { return false }
         for case let url as URL in walker {
-            if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true { continue }
+            guard let values = try? url.resourceValues(forKeys: keys), values.isSymbolicLink != true else { return false }
+            if values.isDirectory == true { continue }
             let name = url.lastPathComponent
             if name == ".DS_Store" || name.hasPrefix("._") || name == "Icon\r" { continue }
             return false
         }
-        return true
+        return !couldNotRead
     }
 
     // MARK: Setup check

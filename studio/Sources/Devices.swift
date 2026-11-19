@@ -67,9 +67,12 @@ final class DeviceCenter {
     private(set) var isLoading = false
     private(set) var hasLoaded = false
     private(set) var error: String?
+    @ObservationIgnored private var onRefresh: [@MainActor () -> Void] = []
 
     func refresh(engine: URL?, then done: (@MainActor () -> Void)? = nil) {
-        guard let engine, !isLoading else { return }
+        guard let engine else { return }
+        if let done { onRefresh.append(done) }
+        guard !isLoading else { return }
         isLoading = true
         Task {
             let result = await CommandRunner.capture(executable: engine.appending(path: "aethernx"), arguments: ["devices", "--json"], directory: engine, timeout: 90)
@@ -83,7 +86,9 @@ final class DeviceCenter {
                 let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\n").last.map(String.init)
                 error = detail ?? String(localized: "The device list could not be read (exit code \(result.status)).")
             }
-            done?()
+            let callbacks = onRefresh
+            onRefresh.removeAll()
+            for callback in callbacks { callback() }
         }
     }
 

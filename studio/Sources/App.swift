@@ -84,7 +84,10 @@ struct AppCommands: Commands {
         }
 
         CommandGroup(replacing: .newItem) {
-            Button("Add Library Folder…") { model.chooseLibraryFolder() }
+            Button("Add Library Folder…") {
+                openWindow(id: "main")
+                model.chooseLibraryFolder(selectsGames: true)
+            }
                 .keyboardShortcut("o")
             Button("Unpack Archive…") { model.chooseArchiveToUnpack() }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
@@ -92,7 +95,7 @@ struct AppCommands: Commands {
             Divider()
             Button("Add Update or DLC…") { model.importPackagesIntoSelectedGame() }
                 .keyboardShortcut("i")
-                .disabled(model.selectedGame?.isBuildable != true)
+                .disabled(model.selectedGame?.requiresKeys != true)
         }
 
         CommandMenu("Game") {

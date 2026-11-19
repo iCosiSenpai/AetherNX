@@ -150,6 +150,40 @@ class Read(Base):
         app, base, vers, dlc = pack_nup.scan(n)
         self.assertEqual((app, base.kind, sorted(vers), sorted(dlc)), (TID, 0, [VER], [TID + 0x1001]))
 
+    def test_indexed_program_and_nacp_addons_in_library_and_build(self):
+        program = 0x0400000012345001
+        addon_base = 0x0100000012346000
+        control = bytearray(control_nacp('Enhanced Game', '', '2.0.0'))
+        struct.pack_into('<Q', control, 0x3070, addon_base)
+        meta = tlv([(pack_nup.T_NACP, control)])
+        write_nup(self.path, [(0, program, VER, version(tid=program), meta),
+                              (2, addon_base + 1, 0, {'romfs': {'dlcfile': b'dlc'}}, b'')])
+        n = self.open()
+        app, base, _, dlc = pack_nup.scan(n)
+        self.assertEqual(app, program)
+        out = self.dir / 'packed'
+        pack_nup.pack_version(n, base, base, app, out, say=lambda _: None)
+        pack_nup.pack_dlc(n, app, dlc, out / 'aoc', say=lambda _: None)
+        self.assertTrue((out / 'aoc/1.img').is_file())
+        for root in (self.dir, self.dir.parent):
+            with self.subTest(root=root):
+                scan = subprocess.check_output([sys.executable, str(REPO / 'scripts/aethernx_cli.py'), 'scan', '--json', str(root)])
+                result = json.loads(scan)
+                self.assertEqual(result['errors'], [])
+                self.assertEqual(len(result['games']), 1)
+                game = result['games'][0]
+                self.assertEqual((game['kind'], game['name'], game['title_id'], game['display_version']), ('dump', 'Enhanced Game', f'{program:016X}', '2.0.0'))
+                self.assertEqual(game['container']['path'], str(self.path))
+                self.assertEqual(game['build_input_size'], 400)
+                self.assertEqual([d['index'] for d in game['dlc']], [1])
+
+    def test_malformed_nup_has_a_library_error(self):
+        self.path.write_bytes(b'NUP\x01')
+        scan = subprocess.check_output([sys.executable, str(REPO / 'scripts/aethernx_cli.py'), 'scan', '--json', str(self.dir)])
+        result = json.loads(scan)
+        self.assertEqual(result['games'], [])
+        self.assertIn('not a NUP (too short)', result['errors'][0]['message'])
+
     def test_damaged_file_refused(self):
         b = bytearray(self.path.read_bytes()); b[0x90] ^= 1; self.path.write_bytes(b)   # a TOC byte
         with self.assertRaisesRegex(pack_nup.Error, 'SHA-256'): pack_nup.Nup(self.path)

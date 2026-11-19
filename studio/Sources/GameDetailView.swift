@@ -115,7 +115,7 @@ private struct GameFacts: View {
         if let version = game.displayVersion {
             out.append(Fact(label: String(localized: "Version"), value: version, systemImage: "number"))
         }
-        let size = (game.base?.size ?? 0) + (game.latestUpdate?.size ?? 0) + game.dlc.reduce(0) { $0 + $1.size }
+        let size = game.container?.size ?? ((game.base?.size ?? 0) + (game.latestUpdate?.size ?? 0) + game.dlc.reduce(0) { $0 + $1.size })
         if size > 0 { out.append(Fact(label: String(localized: "Game files"), value: size.fileSize, systemImage: "shippingbox")) }
         var built: [String] = []
         if game.macApp != nil { built.append("Mac") }
@@ -253,7 +253,7 @@ struct Switch2Badge: View {
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
             .foregroundStyle(.white)
-            .background(Color(red: 0.86, green: 0.12, blue: 0.2), in: Capsule())
+            .background(.black.opacity(0.74), in: Capsule())
             .help("A Nintendo Switch 2 game")
     }
 }
@@ -282,7 +282,7 @@ private struct BuildMenu: View {
     @Environment(AppModel.self) private var model
     @AppStorage(Pref.defaultTarget) private var defaultTarget = BuildTarget.mac.rawValue
 
-    private var target: BuildTarget { BuildTarget(rawValue: defaultTarget) ?? .mac }
+    private var target: BuildTarget { game.isSwitch2 ? .mac : BuildTarget(rawValue: defaultTarget) ?? .mac }
 
     var body: some View {
         let menu = Menu {
@@ -341,9 +341,8 @@ private struct MoreMenu: View {
                                                  message: String(localized: "The next build translates every shader again, which can take a long time."))
                     }
                 }
-                Button("Move Build Folder to Trash…") {
-                    model.confirmMoveToTrash(work, title: String(localized: "Move the build folder of \(game.name) to the Trash?"),
-                                             message: String(localized: "It holds the extracted game and the shader cache. The next build starts from scratch. Your game files and built apps stay."))
+                Button(RemovalPlan.Kind.buildFolder.removalTitle) {
+                    model.removalRequest = RemovalRequest(game: game, kinds: [.buildFolder])
                 }
             }
         } label: {
@@ -400,7 +399,9 @@ private struct FilesSection: View {
     var body: some View {
         GroupBox {
             VStack(spacing: 0) {
-                if let base = game.base {
+                if let container = game.container {
+                    FileRow(title: "NUP Container", value: container.name, size: container.size)
+                } else if let base = game.base {
                     FileRow(title: "Base game", value: game.kind == .dump ? String(localized: "Dump folder") : base.name, size: base.size)
                 } else {
                     FileRow(title: "Base game", value: String(localized: "Missing"), size: nil, warning: true)
@@ -408,10 +409,10 @@ private struct FilesSection: View {
                 Divider()
                 if let update = game.latestUpdate {
                     FileRow(title: "Game update", value: game.updates.count > 1 ? String(localized: "v\(update.version), newest of \(game.updates.count)") : "v\(update.version)", size: update.size)
-                } else {
+                } else if game.container == nil {
                     FileRow(title: "Game update", value: String(localized: "None. The newest update gives the best results."), size: nil)
                 }
-                Divider()
+                if game.latestUpdate != nil || game.container == nil { Divider() }
                 if game.dlc.isEmpty {
                     FileRow(title: "DLC", value: String(localized: "None"), size: nil)
                 } else {
@@ -450,12 +451,14 @@ private struct FilesSection: View {
             HStack {
                 Text("Game Files")
                 Spacer()
-                Button("Add Update or DLC…") {
-                    model.selectedGameID = game.id
-                    model.importPackagesIntoSelectedGame()
+                if game.requiresKeys {
+                    Button("Add Update or DLC…") {
+                        model.selectedGameID = game.id
+                        model.importPackagesIntoSelectedGame()
+                    }
+                    .buttonStyle(.link)
+                    .font(.callout)
                 }
-                .buttonStyle(.link)
-                .font(.callout)
             }
         }
     }

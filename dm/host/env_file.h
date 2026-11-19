@@ -18,6 +18,7 @@ static inline int dm_env_file_ok(const char *key, const char *value) {
     for (const char *k = key; *k; k++) if (!((*k >= 'A' && *k <= 'Z') || (*k >= '0' && *k <= '9') || *k == '_')) return 0;
     for (unsigned i = 0; i < sizeof layout / sizeof *layout; i++) if (!strcmp(key, layout[i])) return 0;
     if (!strcmp(key, "DM_SAVE_SYNC")) return 1;
+    if (!strcmp(key, "DM_SAVE_SYNC_MIRROR") || !strcmp(key, "DM_SAVE_SYNC_PAIRED")) return 0;
     if (strchr(value, '/') || !strcmp(value, ".") || !strcmp(value, "..")) return 0;
     return 1;
 }

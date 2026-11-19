@@ -111,9 +111,8 @@ def archives_in(folder, depth=0):
     return out
 
 
-def has_packages_here(folder):   # packages directly in the folder (not in its subfolders)
-    try: return any(p.is_file() and p.suffix.lower() in PACKAGE_SUFFIXES and not p.name.startswith('._') for p in folder.iterdir())
-    except OSError: return False
+def is_game_file(path):
+    return not path.name.startswith('._') and path.suffix.lower() in (*PACKAGE_SUFFIXES, '.nup') and path.is_file()
 
 
 def built_apps(folder, tid):
@@ -238,6 +237,29 @@ def device_install_record(work):
     return {k: str(rec[k]) for k in ('team', 'bundle_id', 'device', 'device_name', 'installed') if isinstance(rec.get(k), str)} or None
 
 
+def nup_listing(b, path, fam, app):
+    import nacp
+    n, base = fam['nup'], fam['base']
+    with n:
+        updates, dlc = fam['updates'], fam['dlc']
+        latest = updates[-1][1] if updates else base
+        metadata = b.pack_nup.app_package(n).meta()
+        metadata.update(latest.meta())
+        control = metadata.get(b.pack_nup.T_NACP, b'')
+        dlc_base = b.pack_nup.dlc_base(n, app) if dlc else 0
+
+        def package(k):
+            return {'name': k.name, 'path': str(path), 'size': n.tree_bytes(k.root)}
+
+        return {
+            'container': file_entry(path),
+            'build_input_size': n.tree_bytes(b.pack_nup.romfs_of(latest, base)),
+            'base': package(base) if base else None,
+            'updates': [dict(package(k), version=v) for v, k in updates],
+            'dlc': [dict(package(k), title_id=f'{t:016X}', index=t - dlc_base) for t, _, k in dlc],
+        }, nacp.name_from_bytes(control), nacp.version_from_bytes(control) or None
+
+
 def scan_game(folder):
     """One game folder as a dict, or None when the folder holds no game. Raises CliError with the reason when it holds an unreadable one."""
     b = builder()
@@ -246,33 +268,43 @@ def scan_game(folder):
     b.say = lambda msg: notes.append(re.sub(r'^\[[0-9:]+\] ', '', msg))   # the packing script's messages, kept as the game's notes instead of printed
     archives = archives_in(folder)
     kind = 'packages'
+    nup_fields, nup_name, display_version = {}, '', None
     try:
-        if b.dump_folder(folder):
+        if nup := b.nup_file(folder):
+            app, fam = b.scan_nup(nup); kind = 'dump'
+            nup_fields, nup_name, display_version = nup_listing(b, nup, fam, app)
+        elif b.dump_folder(folder):
             app, fam = b.scan_dump(folder); kind = 'dump'
         elif b.package_files(folder):
             app, fam = b.scan_nsps(folder, package_contents)   # without keys: a scan only lists the library
+        elif invalid := b.files_with_suffix(folder, '.nup'):
+            raise CliError(f'not a readable NUP: {", ".join(p.name for p in invalid)}')
         elif archives:
             return {'id': str(folder), 'kind': 'archives', 'title_id': None, 'name': folder.name, 'folder': str(folder), 'profile': False,
                     'archives': [file_entry(p) for p in archives], 'notes': ['The game is still in an archive: unpack it first.']}
         else:
             return None
-    except b.BuildError as e:
+    except (b.BuildError, b.pack_nup.Error) as e:
         raise CliError(str(e)) from e
     tid = f'{app:016X}'
     prof = profiles.by_title(app)
     base = fam['base']
-    name = (prof.get('name') if prof else None) or (re.sub(r'\s*[\[(].*$', '', base.stem).strip() if base and kind == 'packages' else folder.name)
+    name = (prof.get('name') if prof else None) or nup_name or (re.sub(r'\s*[\[(].*$', '', base.stem).strip() if base and kind == 'packages' else folder.name)
     work = work_folder(folder, tid)
     online = reachable(work)
     wanted = wanted_work(folder, tid)
     extracted = sorted((d.name for d in (work / 'extract').glob('v*') if (d / 'ExeFS').is_dir() and d.name[1:].isdigit()), key=lambda v: int(v[1:])) if (work / 'extract').is_dir() else []
     newest = work / 'extract' / extracted[-1] if extracted else None
-    display_version = None
     if newest and (newest / 'control.nacp').is_file():
         import nacp
-        with contextlib.suppress(Exception): display_version = nacp.version(str(newest / 'control.nacp')) or None
+        with contextlib.suppress(Exception): display_version = nacp.version(str(newest / 'control.nacp')) or display_version
     decomp = work / 'decomp'
     lifted = decomp / 'lifted'
+    packages = nup_fields or {
+        'base': file_entry(base) if base else None,
+        'updates': [dict(file_entry(p), version=v or 0) for v, p in sorted(fam['updates'], key=lambda u: u[0] or 0)],
+        'dlc': [dict(file_entry(p), title_id=f'{t:016X}', index=t - app - 0x1000) for t, _, p in sorted(fam['dlc'], key=lambda d: d[0])],
+    }
     return {
         'id': str(folder),
         'kind': kind,
@@ -280,16 +312,14 @@ def scan_game(folder):
         'name': name,
         'folder': str(folder),
         'profile': prof is not None,
-        'base': file_entry(base) if base else None,
-        'updates': [dict(file_entry(p), version=v or 0) for v, p in sorted(fam['updates'], key=lambda u: u[0] or 0)],
-        'dlc': [dict(file_entry(p), title_id=f'{t:016X}', index=t - app - 0x1000) for t, _, p in sorted(fam['dlc'], key=lambda d: d[0])],
+        **packages,
         'compressed': [str(p) for p in b.package_files(folder) if p.suffix.lower() in ('.nsz', '.xcz')] if kind == 'packages' else [],
         'archives': [file_entry(p) for p in archives],
         'work_dir': str(work),
         'work_reachable': online,   # false: the build is on a drive or a share that is not connected now
         'work_moves_to': str(wanted) if online and work.exists() and wanted != work else None,   # where move-build would put it (the builds folder, or back beside the game)
         'extracted_versions': extracted,
-        'display_version': display_version,   # from the newest extraction's control data, once the game was built
+        'display_version': display_version,
         'icon': str(newest / 'icon.jpg') if newest and (newest / 'icon.jpg').is_file() else None,
         'mac_apps': built_apps(folder, tid) + (built_apps(work.parent, tid) if work.parent != folder and online else []),   # a build elsewhere writes its app beside it
         'ipas': [str(p) for d in dict.fromkeys([folder, work.parent]) if d == folder or online for p in sorted(d.glob('*.ipa')) if p.is_file()],
@@ -314,7 +344,7 @@ def scan_library(roots):
             errors.append({'folder': str(root), 'message': 'not a folder'}); continue
         try:
             entries = sorted(root.iterdir())
-            own = has_packages_here(root) or (root / 'base').is_dir() or b.dump_folder(root)
+            own = any(is_game_file(p) for p in entries) or (root / 'base').is_dir() or b.dump_folder(root)
         except OSError as e:   # one that macOS's privacy settings or its permissions keep from this process
             errors.append({'folder': str(root), 'message': f'cannot be read ({e.strerror or e})'}); continue
         subdirs = [d for d in entries if d.is_dir() and not d.name.startswith('.') and not d.name.endswith(('_build', '_survey', '.app'))]
@@ -360,7 +390,7 @@ def cmd_scan(args):
             print(f"{g['name']}: archived ({len(g['archives'])} archive(s)), run ./aethernx unpack {shlex.quote(g['id'])}"); continue   # the archive itself when it lies at the top of a library folder (unpacking that folder would extract every archive of the library into it)
         upd = f"update v{g['updates'][-1]['version']}" if g['updates'] else 'no update'
         built = 'Mac app built' if g['mac_apps'] else 'not built'
-        prof = 'tested profile' if g['profile'] else 'no profile (best effort)'
+        prof = 'profile available' if g['profile'] else 'no profile (best effort)'
         print(f"{g['name']} [{g['title_id']}]: {upd}, {len(g['dlc'])} DLC, {prof}, {built}")
     for e in errors: print(f"! {e['folder']}: {e['message']}", file=sys.stderr)
     if not games and not errors: print('No games found.')
@@ -417,11 +447,17 @@ def cmd_unpack(args):
         extract_archive(arc, dest)
     b = builder()
     packages = [str(p) for p in b.package_files(dest)]
-    try: dumps = [str(d) for d in [dest, *sorted(p for p in dest.iterdir() if p.is_dir())] if b.dump_folder(d)]
-    except OSError: dumps = []
+    folders = [dest, *sorted(p for p in dest.iterdir() if p.is_dir())]
+    dumps = [str(d) for d in folders if b.dump_folder(d)]
+    for folder in folders:
+        with contextlib.suppress(b.BuildError):
+            if nup := b.nup_file(folder):
+                _, family = b.scan_nup(nup)
+                family['nup'].close()
+                packages.append(str(nup))
     # Nothing a build takes came out (an archive of something else, or one an extractor only partly opened): the archives stay, whatever --delete-archives says
     if not packages and not dumps:
-        raise CliError(f'{len(todo)} archive(s) extracted to {dest}, and no game package (.nsp, .xci, .nsz, .xcz) or dump folder is there' + (': the archives are kept' if args.delete_archives else ''))
+        raise CliError(f'{len(todo)} archive(s) extracted to {dest}, and no game package (.nsp, .xci, .nsz, .xcz, .nup) or dump folder is there' + (': the archives are kept' if args.delete_archives else ''))
     if args.delete_archives:   # every volume of a multi-part archive, not only its first
         for arc in todo:
             for part in archive_volumes(arc): part.unlink(missing_ok=True)

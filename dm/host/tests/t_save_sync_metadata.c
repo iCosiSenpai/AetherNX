@@ -274,10 +274,39 @@ static void journal_cases(const char *root, const char *both, const char *one) {
     CHECK(save_sync_mount(save, "0100000000010000") == 0, "a second mount gets the first's answer, not a new one");
     unlink(p);
 }
+static void paired_providers(const char *root) {
+    const char *name = "paired providers", *id = "0100000000010000";
+    char save[PATH_MAX], local[PATH_MAX], a[PATH_MAX], b[PATH_MAX], af[PATH_MAX], bf[PATH_MAX], p[PATH_MAX], remote[PATH_MAX];
+    ss_meta primary, standby, divergent;
+    snprintf(save, sizeof save, "%s/local", root); mkdirs(save);
+    snprintf(local, sizeof local, "%s/slot", save); put(local, "first version");
+    snprintf(a, sizeof a, "%s/iCloud/Game", root); mkdirs(a);
+    snprintf(b, sizeof b, "%s/Google Drive/Game", root); mkdirs(b);
+    snprintf(p, sizeof p, "%s/.aethernx-title", a); put(p, "0100000000010000\n");
+    snprintf(p, sizeof p, "%s/.aethernx-title", b); put(p, "0100000000010000\n");
+    cloud_path(a, id, af, sizeof af); cloud_path(b, id, bf, sizeof bf);
+    CHECK(ends(af, "iCloud/Game/save.dmsync") && ends(bf, "Google Drive/Game/save.dmsync"), "managed folders hold the save directly");
+    setenv("DM_SAVE_SYNC", a, 1); setenv("DM_SAVE_SYNC_MIRROR", b, 1); setenv("DM_SAVE_SYNC_PAIRED", "1", 1);
+    CHECK(save_sync_after_exit(save, id) && !ss_read(af, NULL, &primary) && !ss_read(bf, NULL, &standby) &&
+          !strcmp(primary.hash, standby.hash), "the standby receives the committed save");
+    cloud_bundle(root, 1, remote, sizeof remote);
+    CHECK(front_save_sync_store(remote, bf) && !ss_read(bf, NULL, &divergent), "another device changes the standby");
+    put(local, "progress on this Mac");
+    CHECK(save_sync_after_exit(save, id) && !ss_read(af, NULL, &primary) && !ss_read(bf, NULL, &standby) &&
+          !strcmp(standby.hash, divergent.hash) && strcmp(primary.hash, standby.hash), "a diverging standby isn't overwritten");
+    setenv("DM_SAVE_SYNC_CHOICE", "offline", 1);
+    put(local, "offline progress");
+    ss_meta after;
+    CHECK(save_sync_after_exit(save, id) && !ss_read(af, NULL, &after) && !strcmp(after.hash, primary.hash),
+          "playing offline writes neither provider");
+    unsetenv("DM_SAVE_SYNC"); unsetenv("DM_SAVE_SYNC_MIRROR"); unsetenv("DM_SAVE_SYNC_PAIRED"); unsetenv("DM_SAVE_SYNC_CHOICE");
+}
+
 int main(void) {
     char folder[] = "/tmp/dm-save-sync-metadata-XXXXXX", save[PATH_MAX], path[PATH_MAX];
     if (!mkdtemp(folder)) return 1;
     snprintf(save, sizeof save, "%s/save", folder);
+    paired_providers(folder);
     run_case(save, "open failure", 1, 0, 0, 0, EACCES);
     run_case(save, "write failure", 0, 1, 0, 0, ENOSPC);
     run_case(save, "write and close failures", 0, 1, 1, 0, ENOSPC);

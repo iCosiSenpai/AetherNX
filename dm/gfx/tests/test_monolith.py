@@ -10,15 +10,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import shader_split as split
 
 
-def program(stages, extra=0):
+def program(stages, extra=0, *, nvn2=False):
     controls, codes = [], []
     for stage in stages:
-        ctl, code = bytearray(0x880 + extra), bytearray(0x100)
+        ctl, code = bytearray((0xd0 if nvn2 else 0x880) + extra), bytearray(0x100)
         ctl[:4] = split.CTL_MAGIC
-        struct.pack_into('<I', ctl, 0x20, len(ctl))
-        struct.pack_into('<I', ctl, 0x704, len(code))
-        code[:4] = split.GFX_MAGIC
-        struct.pack_into('<I', code, 0x30, (split.STAGES.index(stage) + 1) << 10 | 1)
+        if nvn2:
+            struct.pack_into('<I', ctl, 4, 0xc9)
+            struct.pack_into('<I', ctl, 0x30, len(ctl))
+            struct.pack_into('<I', ctl, 0x44, len(code))
+        else:
+            struct.pack_into('<I', ctl, 0x20, len(ctl))
+            struct.pack_into('<I', ctl, 0x704, len(code))
+            code[:4] = split.GFX_MAGIC
+        struct.pack_into('<I', code, 0 if nvn2 else 0x30, (split.STAGES.index(stage) + 1) << 10 | 1)
         controls.append(bytes(ctl)); codes.append(bytes(code))
     # One SLCT, two identical variants; each vertex bundle includes geometry.
     slct = bytearray(72 + 16 + 2 * 52)
@@ -78,17 +83,38 @@ class MonolithTests(unittest.TestCase):
         out = []; split.monolith_shaders(wrapper, '/test', out)
         self.assertEqual(len(out), 4)
 
+    def test_ndsr_inside_a_compressed_archive_member(self):
+        _, controls, codes = program(['vs', 'ps'], nvn2=True)
+        data = bytearray(0x600)
+        data[:4] = b'NDSR'
+        for i, (control, code) in enumerate(zip(controls, codes)):
+            c, k = 0x100 + 0x100 * i, 0x400 + 0x100 * i
+            control_type = (0, 3)[i]
+            struct.pack_into('<4I', data, 0x10 + 16 * i, c, len(control) << 4 | control_type, k, len(code) << 4 | (control_type + 1))
+            data[c:c + len(control)] = control
+            data[k:k + len(code)] = code
+        packed = zlib.compress(data)
+        member = struct.pack('<4s4I28s', b'xbc1', 1, len(data), len(packed), 0, b'test') + packed
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / 'assets.ard'
+            archive.write_bytes(member)
+            out = []
+            split.arh_shaders(archive, 'assets.ard', [('/1234', 0, len(member))], out)
+        self.assertEqual([(st, c, k) for _, st, c, k in out], list(zip(['vs', 'ps'], controls, codes)))
+        self.assertEqual(split.var_pairs(out), {(split.skey(controls[0], codes[0]), split.skey(controls[1], codes[1]))})
+
     def test_standalone_slct_uses_its_own_relative_offsets(self):
-        data, ctls, codes = program(['vs', 'ps'])
-        body = bytearray(data[80:])
-        struct.pack_into('<I', body, 4, 0x1003)
-        c = len(data[80:80 + 192])
-        # The synthetic fixture's SLCT occupies 192 bytes; control and code
-        # sections now use offsets from that SLCT rather than separate bases.
-        struct.pack_into('<I', body, 40, c)
-        struct.pack_into('<I', body, 48, c + sum(map(len, ctls)) * 2)
-        out = []; split.scan_blob(bytes(body), 'main', out)
-        self.assertEqual([(s, ctl, code) for _, s, ctl, code in out], list(zip(['vs', 'ps'], ctls, codes)) * 2)
+        for nvn2 in (False, True):
+            with self.subTest(nvn2=nvn2):
+                data, ctls, codes = program(['vs', 'ps'], nvn2=nvn2)
+                body = bytearray(data[80:])
+                struct.pack_into('<I', body, 4, 0x1003)
+                # The standalone control and code offsets are relative to SLCT itself.
+                c = struct.unpack_from('<I', data, 28)[0]
+                struct.pack_into('<I', body, 40, c)
+                struct.pack_into('<I', body, 48, c + sum(map(len, ctls)) * 2)
+                out = []; split.scan_blob(bytes(body), 'main', out)
+                self.assertEqual([(s, ctl, code) for _, s, ctl, code in out], list(zip(['vs', 'ps'], ctls, codes)) * 2)
 
     def test_effect_glslc_output_inside_xbc(self):
         _, controls, codes = program(['vs', 'ps'])
@@ -141,6 +167,24 @@ class MonolithTests(unittest.TestCase):
         header = struct.pack('<4s9I8x', b'arh1', len(strings), len(nodes), so, len(strings), no, len(trie), fo, 1, int.from_bytes(mask, 'little') ^ 0xf3f35353)
         data = header + enc(strings) + enc(trie) + struct.pack('<Q4I', 32, 100, 200, 2, 0)
         self.assertEqual(split.arh_entries(data), [('a.bin', 32, 148)])
+
+    def test_arh2_uses_aligned_sizes_and_scans_each_member(self):
+        data, controls, codes = program(['vs', 'ps'], nvn2=True)
+        header = struct.pack('<4sII4xQIIQII', b'arh2', 2, 16, 1, 1, 0, 2, len(data), 0)
+        with tempfile.TemporaryDirectory() as tmp:
+            index = Path(tmp) / 'test.arh'
+            archive = index.with_suffix('.ard')
+            index.write_bytes(header)
+            archive.write_bytes(b'a'.ljust(16, b'\0') + data)
+            jobs, files = split.arh_jobs([(str(index), index.name)])
+            self.assertEqual(files, {str(index), str(archive)})
+            self.assertEqual(len(jobs), 2)
+            self.assertEqual(jobs[1][2][1], [('/0000000000000002', 16, len(data))])
+            _, shaders, _, _ = split.scan_file(jobs[1])
+            self.assertEqual(set(shaders), {split.skey(c, k) for c, k in zip(controls, codes)})
+            archive.write_bytes(b'')
+            with self.assertRaisesRegex(SystemExit, 'ARD entry out of bounds'):
+                split.arh_jobs([(str(index), index.name)])
 
 
 if __name__ == '__main__':

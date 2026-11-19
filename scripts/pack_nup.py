@@ -12,7 +12,7 @@
 #   extract/v<version>/ExeFS/   the version's code modules
 #   extract/v<version>/RomFS.img   its RomFS as one image (dm/tools/romfs_image.py), written straight from the container: the RomFS is never unpacked into loose files
 #   extract/v<version>/control.nacp, icon.jpg   the package's NACP and its icon, when it carries them (sips reads a PNG icon by its content)
-#   aoc/<index>.img   each DLC's RomFS (index = DLC title ID − base title ID − 0x1000), the host's DM_AOC_DIR
+#   aoc/<index>.img   each DLC's RomFS (index = DLC title ID − AddOnContentBaseId), the host's DM_AOC_DIR
 # An update's RomFS is packed on its own, never laid over the base: the dumps NUPs are packed from hold the patched RomFS of an update (pack_dump.py); an update with no romfs/ uses the base's.
 # Every file read is checked against its SHA-256. A repeat run keeps code modules whose content is the same and an image made from the same container tree by the same packer,
 # or, after a packer update, an image whose bytes check against the container's hashes.
@@ -177,9 +177,9 @@ class Nup:
 
 
 def program_id(npdm, where):   # the ACI0 program ID of an NPDM
-    if npdm[:4] != b'META': raise Error(f'{where}: not an NPDM')
+    if len(npdm) < 0x78 or npdm[:4] != b'META': raise Error(f'{where}: not an NPDM')
     off, size = struct.unpack_from('<II', npdm, 0x70)
-    if npdm[off:off + 4] != b'ACI0' or size < 0x18: raise Error(f'{where}: no ACI0 section')
+    if size < 0x18 or off + size > len(npdm) or npdm[off:off + 4] != b'ACI0': raise Error(f'{where}: no ACI0 section')
     return struct.unpack_from('<Q', npdm, off + 0x10)[0]
 
 
@@ -198,12 +198,17 @@ def scan(n):
         raise Error(f'{n.path}: no base game: pack the base game and its update into one NUP, or use updates marked standalone_update with complete exefs/ and romfs/')
     base = bases[0] if bases and n.tree_bytes(bases[0].root) else None   # a base record with no files is no base game
     # With no base the game is identified from the code actually present; each selected version is checked by pack_version.
-    ids ={program_id(n.read(i), f'{k.name} exefs/main.npdm') for k in n.packages if k.kind in (BASE, UPDATE) and k.exefs != NO_DIR
-           if (i := n.child(k.exefs, b'main.npdm')) is not None}
+    programs = {k: program_id(n.read(i), f'{k.name} exefs/main.npdm') for k in n.packages if k.kind in (BASE, UPDATE) and k.exefs != NO_DIR
+                if (i := n.child(k.exefs, b'main.npdm')) is not None}
+    ids = set(programs.values())
     if not ids: raise Error(f'{n.path}: no exefs/main.npdm in the base or updates')
     if len(ids) != 1: raise Error(f'{n.path}: base and updates have different program IDs: ' + ', '.join(f'{pid:016X}' for pid in sorted(ids)))
     app = ids.pop()
-    if app & 0xFFF: raise Error(f'{n.path}: base program ID {app:016X} is not a base title ID')
+    # An enhanced edition can ship a nonzero program index. Keep its full NPDM ID
+    # for rewriting and packaging when the NUP also identifies it as the program.
+    if app & 0xFFF and (app & 0x800 or any(k.title_id != app for k in programs)):
+        raise Error(f'{n.path}: program ID {app:016X} does not match an indexed program in the NUP')
+    aoc = dlc_base(n, app) if any(k.kind == ADDON for k in n.packages) else 0
     vers, dlc = {}, {}
     for k in n.packages:
         if k.kind == UPDATE:
@@ -211,7 +216,7 @@ def scan(n):
             if not k.version: raise Error(f'{n.path}: an update of version 0')
             vers[k.version] = k
         elif k.kind == ADDON:
-            if not 0 < k.title_id - app - 0x1000 <= 2000: raise Error(f'{n.path}: {k.title_id:016X} is not a DLC of {app:016X}')
+            if not 0 < k.title_id - aoc <= 2000: raise Error(f'{n.path}: {k.title_id:016X} is not a DLC of {app:016X}')
             if k.romfs == NO_DIR: raise Error(f'{n.path}: DLC {k.title_id:016X} has no romfs/')
             if k.title_id in dlc: raise Error(f'{n.path}: DLC {k.title_id:016X} more than once')
             dlc[k.title_id] = k
@@ -321,6 +326,14 @@ def app_package(n):   # the record that holds application metadata when no base 
     return next((k for k in n.packages if k.kind == BASE), n.packages[0])
 
 
+def dlc_base(n, app):
+    """The title range the application control data declares for its add-ons."""
+    control = app_package(n).meta().get(T_NACP, b'')
+    if len(control) >= 0x3078 and (base := struct.unpack_from('<Q', control, 0x3070)[0]):
+        return base
+    return (app & ~0xFFF) + 0x1000
+
+
 def control(k, out, fallback=None):   # the package's control data beside its ExeFS; what it lacks comes from fallback
     meta = fallback.meta() if fallback is not None else {}
     meta.update(k.meta())
@@ -350,7 +363,8 @@ def pack_version(n, k, base, app, out, say=print, step=lambda s: None):   # one 
 
 
 def pack_dlc(n, app, dlc, aoc, say=print):   # {DLC title ID: package} → aoc/<index>.img; images of DLC no longer in the container go
-    want = {f'{tid - app - 0x1000}.img': k for tid, k in dlc.items()}
+    base = dlc_base(n, app)
+    want = {f'{tid - base}.img': k for tid, k in dlc.items()}
     if aoc.is_dir():
         for f in aoc.iterdir():
             if f.name.removesuffix('.inputs.json') not in want: f.unlink()

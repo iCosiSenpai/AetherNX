@@ -44,7 +44,6 @@
 "Add Library Folder…" = "Aggiungi cartella della libreria…";
 "Add Update or DLC…" = "Aggiungi aggiornamento o DLC…";
 "Add Your Games" = "Aggiungi i tuoi giochi";
-"Add games" = "Aggiungi giochi";
 "Add-on content" = "Contenuti aggiuntivi";
 "Add…" = "Aggiungi…";
 "Advanced" = "Avanzate";
@@ -106,13 +105,10 @@
 "Checks and compiles the shaders of games that use Vulkan or OpenGL." = "Controlla e compila gli shader dei giochi che usano Vulkan o OpenGL.";
 "Choose Atmosphère cheat files (.txt, named by the game's build ID). They are copied into the game's Cheats folder." = "Scegli i file di trucchi Atmosphère (.txt, con il nome del build ID del gioco). Vengono copiati nella cartella Cheats del gioco.";
 "Choose Folder…" = "Scegli cartella…";
-"Choose Library Folder…" = "Scegli cartella della libreria…";
-"Choose a folder with your games: one folder per game, or a single game's folder." = "Scegli una cartella con i tuoi giochi: una cartella per gioco, oppure la cartella di un solo gioco.";
 "Choose an archive with a game's packages. It is extracted into a folder next to it." = "Scegli un archivio con i pacchetti di un gioco. Viene estratto in una cartella accanto.";
 "Choose it in Settings → General." = "Sceglila in Impostazioni → Generali.";
 "Choose mod folders (each with a romfs folder inside) or .zip files of them. They are copied into the game's Mods folder." = "Scegli le cartelle delle mod (ognuna con una cartella romfs dentro) o i loro file .zip. Vengono copiate nella cartella Mods del gioco.";
 "Choose the AetherNX folder (the one with the aethernx command)." = "Scegli la cartella di AetherNX (quella con il comando aethernx).";
-"Choose the folder that holds your games, one folder per game with the base game, its update and DLC (.nsp, .xci, .nsz or .xcz)." = "Scegli la cartella che contiene i tuoi giochi: una cartella per gioco, con gioco base, aggiornamento e DLC (.nsp, .xci, .nsz o .xcz).";
 "Choose update or DLC packages for %@. They are copied into the game's folder." = "Scegli i pacchetti di aggiornamento o DLC per %@. Vengono copiati nella cartella del gioco.";
 "Choose your prod.keys file." = "Scegli il tuo file prod.keys.";
 "Choose…" = "Scegli…";
@@ -196,7 +192,6 @@
 "Installing what the builds need" = "Installazione di ciò che serve alle build";
 "Installs go here" = "Le installazioni vanno qui";
 "Installs with Homebrew and the AetherNX tools what the builds need and is missing, then checks again" = "Installa con Homebrew e con gli strumenti di AetherNX ciò che serve alle build e manca, poi ricontrolla";
-"It holds the extracted game and the shader cache. The next build starts from scratch. Your game files and built apps stay." = "Contiene il gioco estratto e la cache degli shader. La prossima build riparte da zero. I file del gioco e le app già compilate restano.";
 "Its file changes are used; its code patches (exefs) are not." = "I file che cambia vengono usati; le sue patch al codice (exefs) no.";
 "Keep extracted game files" = "Conserva i file estratti del gioco";
 "Kept files make the next build much faster and take about as much space as the game. Pre-built pipelines avoid stutters the first time a scene appears, at the cost of a longer build and a bigger app." = "I file conservati rendono la build successiva molto più veloce e occupano circa quanto il gioco. Le pipeline precompilate evitano scatti la prima volta che compare una scena, al prezzo di una build più lunga e di un'app più grande.";
@@ -227,9 +222,7 @@
 "Mods: a folder per mod in the game's Mods folder, with a romfs folder inside. Turn them on and off, and order them, on the game's page. No rebuild: they apply at the game's next start." = "Mod: una cartella per mod nella cartella Mods del gioco, con una cartella romfs dentro. Attivale, disattivale e ordinale nella pagina del gioco. Niente da ricompilare: valgono dal prossimo avvio del gioco.";
 "More" = "Altro";
 "More actions" = "Altre azioni";
-"Move Build Folder to Trash…" = "Sposta la cartella di build nel Cestino…";
 "Move Shader Cache to Trash…" = "Sposta la cache shader nel Cestino…";
-"Move the build folder of %@ to the Trash?" = "Spostare nel Cestino la cartella di build di %@?";
 "Move the mod “%@” to the Trash?" = "Spostare la mod «%@» nel Cestino?";
 "Move the shader cache to the Trash?" = "Spostare la cache shader nel Cestino?";
 "Move to Trash" = "Sposta nel Cestino";
@@ -260,7 +253,6 @@
 "OK" = "OK";
 "On the device, copied once" = "Sul dispositivo, copiati una volta";
 "On the device, the game files are copied once and stay there: installing again (after an engine update, say) copies only the app, minutes less for a large game. Automatic does that with afcclient installed (brew install libimobiledevice) when the device is on a cable, or on Wi-Fi once it already holds the files; otherwise the files go inside the app. A first copy over Wi-Fi is slow (about an hour for 27 GB): choose On the device to make it anyway." = "Sul dispositivo, i file del gioco vengono copiati una volta e restano lì: reinstallare (per esempio dopo un aggiornamento del motore) copia solo l'app, minuti in meno per un gioco grande. Automatico lo fa con afcclient installato (brew install libimobiledevice) quando il dispositivo è collegato via cavo, o via Wi-Fi quando ha già i file; altrimenti i file vanno dentro l'app. La prima copia via Wi-Fi è lenta (circa un'ora per 27 GB): scegli Sul dispositivo per farla comunque.";
-"One folder per game, with its base game, update and DLC (.nsp, .xci, .nsz, .xcz), or an archive of them." = "Una cartella per gioco, con gioco base, aggiornamento e DLC (.nsp, .xci, .nsz, .xcz), oppure un loro archivio.";
 "Only for compressed packages (.nsz, .xcz): turns them into plain ones." = "Solo per i pacchetti compressi (.nsz, .xcz): li converte in pacchetti normali.";
 "Only for games kept in RAR or 7z archives: extracts them (zip and tar work without it)." = "Solo per i giochi in archivi RAR o 7z: li estrae (zip e tar funzionano anche senza).";
 "Only for iPhone and iPad builds: writes the Xcode project the app is signed with." = "Solo per le build per iPhone e iPad: scrive il progetto Xcode con cui viene firmata l'app.";
@@ -285,7 +277,6 @@
 "Prepare Xcode Project" = "Prepara progetto Xcode";
 "Preparing Xcode project" = "Preparazione progetto Xcode";
 "Preparing the Xcode project" = "Preparazione del progetto Xcode";
-"Put each game in its own folder inside a library folder, with its packages or an archive of them." = "Metti ogni gioco nella sua cartella dentro una cartella della libreria, con i suoi pacchetti o un loro archivio.";
 "Puts the engine, the translated shaders and the game data together into an app you open from the Finder." = "Mette insieme il motore, gli shader tradotti e i dati del gioco in un'app da aprire dal Finder.";
 "Read me.txt" = "Leggimi.txt";
 "Reads and writes zstd-compressed data in the game files and the shader cache." = "Legge e scrive i dati compressi con zstd nei file del gioco e nella cache degli shader.";
@@ -346,7 +337,6 @@
 "The command-line tools must be Xcode's own, not the smaller Command Line Tools package, which has no Metal compiler and no iOS SDK." = "Gli strumenti da riga di comando devono essere quelli di Xcode, non il pacchetto più piccolo Command Line Tools, che non ha il compilatore Metal né l'SDK di iOS.";
 "The file cannot be read." = "Il file non si può leggere.";
 "The file is not there any more." = "Il file non c'è più.";
-"The folder every game's Mac app syncs its save through, unless a game has its own choice on its page. With AetherNX, each game gets a folder named after it, with its save, a Mods folder and a Cheats folder: on the iPhone or iPad, choose that same folder in the app's Cloud saves. HorizonNative is the folder the iPhone and iPad apps use by themselves when they are signed with an iCloud container." = "La cartella tramite cui l'app per Mac di ogni gioco sincronizza il salvataggio, salvo che un gioco abbia una scelta sua nella sua pagina. Con AetherNX ogni gioco ha una cartella con il suo nome, con il salvataggio, una cartella Mods e una cartella Cheats: su iPhone o iPad scegli la stessa cartella nei Salvataggi cloud dell'app. HorizonNative è la cartella che le app per iPhone e iPad usano da sole quando sono firmate con un contenitore iCloud.";
 "The folder with the aethernx command, the build scripts and the HorizonNative engine. The app runs the builds from there, and updates it on its own, without a new version of the app (Updates)." = "La cartella con il comando aethernx, gli script di build e il motore HorizonNative. L'app esegue le build da lì e la aggiorna da sola, senza una nuova versione dell'app (Aggiornamenti).";
 "The game data goes to the app's own folder on the device, once: later installs of the app keep it there." = "I dati del gioco vanno nella cartella dell'app sul dispositivo, una volta sola: le installazioni successive dell'app li lasciano lì.";
 "The game no longer uses it from its next start. It stays in the Trash until you empty it." = "Il gioco non la usa più dal prossimo avvio. Resta nel Cestino finché non lo svuoti.";
@@ -388,7 +378,7 @@
 "Version" = "Versione";
 "Version %@" = "Versione %@";
 "Version %@ is out. You have %@." = "È uscita la versione %@. Hai la %@.";
-"Version %@, up to date" = "Versione %@, aggiornato";
+"Update check failed" = "Controllo aggiornamenti fallito";
 "What is new" = "Novità";
 "What this Mac needs" = "Cosa serve su questo Mac";
 "Without a profile the build guesses the game's settings. The app may not start; the build writes a survey of the game." = "Senza un profilo la build deduce le impostazioni del gioco. L'app potrebbe non avviarsi; la build scrive un'analisi del gioco.";
@@ -404,7 +394,6 @@
 "checking what changed since the last build" = "controllo di cosa è cambiato dall'ultima build";
 "compiling" = "compilazione";
 "copying the game files into the app" = "copia dei file del gioco nell'app";
-"iCloud Drive › AetherNX (a folder per game, with Mods and Cheats)" = "iCloud Drive › AetherNX (una cartella per gioco, con Mods e Cheats)";
 "iCloud Drive › AetherNX › %@ (with Mods and Cheats)" = "iCloud Drive › AetherNX › %@ (con Mods e Cheats)";
 "iPhone" = "iPhone";
 "iPhone & iPad" = "iPhone e iPad";
@@ -456,7 +445,6 @@
 "The game's log, its caches and the choices made in its launcher." = "Il log del gioco, le sue cache e le scelte fatte nel suo launcher.";
 "Danger Zone" = "Zona pericolosa";
 "%@ on this Mac" = "%@ su questo Mac";
-"Remove…" = "Rimuovi…";
 "Remove everything" = "Rimuovi tutto";
 "The game's files, build folder, apps, saves, log and settings: AetherNX forgets the game." = "File del gioco, cartella di build, app, salvataggi, log e impostazioni: AetherNX dimentica il gioco.";
 "Remove Everything…" = "Rimuovi tutto…";
@@ -501,7 +489,6 @@
 "A dump folder (the game's files already extracted, with exefs and romfs folders) needs no keys." = "Una cartella di dump (i file del gioco già estratti, con le cartelle exefs e romfs) non ha bisogno di chiavi.";
 "Without a choice, ~/.switch/prod.keys is used when it is there." = "Se non scegli nulla, viene usato ~/.switch/prod.keys quando esiste.";
 "Where your games are" = "Dove sono i tuoi giochi";
-"One folder per game, with its base game, update and DLC (.nsp, .xci, .nsz, .xcz), a dump of its files, or an archive of them. Add the folder that holds those folders." = "Una cartella per gioco, con il gioco base, l'aggiornamento e i DLC (.nsp, .xci, .nsz, .xcz), un dump dei suoi file o un archivio. Aggiungi la cartella che contiene quelle cartelle.";
 "No library folders yet" = "Ancora nessuna cartella della libreria";
 "Add Another Folder…" = "Aggiungi un'altra cartella…";
 "%lld games found" = "%lld giochi trovati";
@@ -740,3 +727,34 @@
 "for iPhone and iPad, game files separate" = "per iPhone e iPad, file di gioco separati";
 "install on iPhone or iPad" = "installazione su iPhone o iPad";
 "the Mac app" = "l'app per Mac";
+"Choose a game folder or a library of game folders. Keep one NUP per game folder." = "Scegli la cartella di un gioco o quella della libreria. Tieni un solo NUP per cartella di gioco.";
+"No supported game files were found in the selected folders." = "Nelle cartelle selezionate non sono stati trovati file di gioco supportati.";
+"NUP Container" = "Contenitore NUP";
+"No games match this view." = "Nessun gioco corrisponde a questa vista.";
+"Ready on Mac" = "Pronti su Mac";
+"Needs a Mac Build" = "Da compilare per Mac";
+"Name" = "Nome";
+"Library Options" = "Opzioni libreria";
+"Filter Games" = "Filtra giochi";
+"Sort Games" = "Ordina giochi";
+"Filter and sort games" = "Filtra e ordina i giochi";
+"Remove Game Files…" = "Rimuovi file del gioco…";
+"Remove Build…" = "Rimuovi build…";
+"Remove Built Apps…" = "Rimuovi app compilate…";
+"Remove Local Saves…" = "Rimuovi salvataggi locali…";
+"Remove iCloud Saves…" = "Rimuovi salvataggi iCloud…";
+"Remove Logs and Settings…" = "Rimuovi log e impostazioni…";
+
+"Connect the build disk to remove the selected items." = "Collega il disco della build per rimuovere gli elementi selezionati.";
+"Some items could not be removed. %@" = "Impossibile rimuovere alcuni elementi. %@";
+
+"Primary cloud folder" = "Cartella cloud principale";
+"AetherNX iCloud container" = "Contenitore iCloud di AetherNX";
+"iCloud Drive › AetherNX" = "iCloud Drive › AetherNX";
+"Google Drive › AetherNX" = "Google Drive › AetherNX";
+"Choose Google Drive…" = "Scegli Google Drive…";
+"Change Google Drive Folder…" = "Cambia cartella di Google Drive…";
+"Use iCloud as fallback" = "Usa iCloud come riserva";
+"Use Google Drive as fallback" = "Usa Google Drive come riserva";
+"The selected cloud folder is unavailable." = "La cartella cloud selezionata non è disponibile.";
+"Each provider uses an AetherNX folder with a folder for each game. Select My Drive from Google Drive for desktop. The fallback is used when the primary folder is unavailable. Separate changes are kept for review. Rebuild existing Mac game apps to use the new routing." = "Ogni servizio usa una cartella AetherNX con una sottocartella per gioco. Seleziona Il mio Drive in Google Drive per desktop. La riserva si usa se la cartella principale non è disponibile. Le modifiche indipendenti si conservano per il confronto. Ricompila le app di gioco per Mac per usare il nuovo percorso.";

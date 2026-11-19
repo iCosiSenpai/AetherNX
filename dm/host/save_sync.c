@@ -295,29 +295,49 @@ static choice_kind read_choice(char *hash) {
 }
 
 // ---------- the sync state, backups, the cloud's file ----------
-// <save>.sync: the hash of the save last known to be the same here and in the cloud file it names ("" for none). A base recorded for another cloud file is none: a player who
-// picks another folder has a first sync with it, so the save goes there even though it did not change (a file written before the cloud line existed counts for any folder)
-static void read_base(const char *save, const char *cloud, char *out) {
-    char p[PATH_MAX], ln[PATH_MAX + 16], hash[SS_HASH + 1] = ""; int other = 0; out[0] = 0;
-    snprintf(p, sizeof p, "%s.sync", save);
-    FILE *f = fopen(p, "r"); if (!f) return;
-    while (fgets(ln, sizeof ln, f)) {
-        if (!strncmp(ln, "base\t", 5) && strspn(ln + 5, "0123456789abcdef") == SS_HASH) { memcpy(hash, ln + 5, SS_HASH); hash[SS_HASH] = 0; }
-        else if (!strncmp(ln, "cloud\t", 6)) { ln[strcspn(ln, "\n")] = 0; other = strcmp(ln + 6, cloud) != 0; }
+// Keep a checkpoint for each of the two configured cloud destinations in the same .sync file.
+typedef struct { char hash[SS_HASH + 1], cloud[PATH_MAX]; } ss_base;
+
+static void read_bases(const char *save, ss_base *primary, ss_base *alternate) {
+    char path[PATH_MAX], line[PATH_MAX + SS_HASH + 32];
+    snprintf(path, sizeof path, "%s.sync", save);
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    while (fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\n")] = 0;
+        if (!strncmp(line, "base\t", 5) && strspn(line + 5, "0123456789abcdef") == SS_HASH) {
+            memcpy(primary->hash, line + 5, SS_HASH);
+            primary->hash[SS_HASH] = 0;
+        } else if (!strncmp(line, "cloud\t", 6)) {
+            strlcpy(primary->cloud, line + 6, sizeof primary->cloud);
+        } else if (!strncmp(line, "alternate\t", 10) && strspn(line + 10, "0123456789abcdef") == SS_HASH && line[10 + SS_HASH] == '\t') {
+            memcpy(alternate->hash, line + 10, SS_HASH);
+            alternate->hash[SS_HASH] = 0;
+            strlcpy(alternate->cloud, line + 11 + SS_HASH, sizeof alternate->cloud);
+        }
     }
     fclose(f);
-    if (other && *hash) SLOG("the last sync was with another cloud folder: this is the first with %s", cloud);
-    if (!other) memcpy(out, hash, sizeof hash);
 }
 
-static void write_base(const char *save, const char *cloud, const char *hash) {   // written beside it and renamed over it: a cut-off write must not read as another base
+static void read_base(const char *save, const char *cloud, char *out) {
+    ss_base primary = {0}, alternate = {0};
+    read_bases(save, &primary, &alternate);
+    const char *hash = !primary.cloud[0] || !strcmp(primary.cloud, cloud) ? primary.hash
+                     : !strcmp(alternate.cloud, cloud) ? alternate.hash : "";
+    memcpy(out, hash, strlen(hash) + 1);
+}
+
+static void write_base(const char *save, const char *cloud, const char *hash) {
+    ss_base primary = {0}, alternate = {0};
+    read_bases(save, &primary, &alternate);
+    if (getenv("DM_SAVE_SYNC_PAIRED") && primary.cloud[0] && strcmp(primary.cloud, cloud)) alternate = primary;
     char p[PATH_MAX], t[PATH_MAX + 8];
     snprintf(p, sizeof p, "%s.sync", save); snprintf(t, sizeof t, "%s.tmp", p);
     FILE *f = fopen(t, "w");
     int err = f ? 0 : errno;
     if (f) {
-        if (fprintf(f, "# save sync (dm/host/save_sync.h): the save last known to be the same here and in the cloud\nbase\t%s\ncloud\t%s\n", hash, cloud) < 0) err = errno;
-        // Close even after a write error, and keep that error if close or cleanup fails too.
+        if (fprintf(f, "# save sync (dm/host/save_sync.h)\nbase\t%s\ncloud\t%s\n", hash, cloud) < 0 ||
+            (alternate.hash[0] && fprintf(f, "alternate\t%s\t%s\n", alternate.hash, alternate.cloud) < 0)) err = errno;
         if (fclose(f) && !err) err = errno;
         if (!err && rename(t, p)) err = errno;
         if (err) unlink(t);
@@ -360,7 +380,22 @@ static int backup_dir(const char *save, const char *side, char *out, size_t n) {
     return mkdirs(out);
 }
 
-// A DM_SAVE_SYNC value → <folder>/<title ID>/save.dmsync; 0 when sync is off
+// A managed folder has its own title marker. Prefer its existing nested save for compatibility with earlier builds.
+static int named_cloud_folder(const char *dir, const char *id) {
+    char marker[PATH_MAX], line[32], legacy[PATH_MAX];
+    if (snprintf(marker, sizeof marker, "%s/.aethernx-title", dir) >= (int)sizeof marker ||
+        snprintf(legacy, sizeof legacy, "%s/%s", dir, id) >= (int)sizeof legacy) return 0;
+    struct stat st;
+    if (!stat(legacy, &st) || errno != ENOENT) return 0;
+    FILE *f = fopen(marker, "r");
+    if (!f) return 0;
+    int match = fgets(line, sizeof line, f) && strchr(line, '\n') && strcspn(line, "\n") == strlen(id) &&
+                !strncasecmp(line, id, strlen(id));
+    fclose(f);
+    return match;
+}
+
+// A DM_SAVE_SYNC value → the title's save.dmsync; 0 when sync is off.
 static int cloud_path(const char *v, const char *title, char *out, size_t n) {
     char dir[PATH_MAX], id[24];
     if (!v || !*v || !strcmp(v, "0")) return 0;
@@ -384,7 +419,8 @@ static int cloud_path(const char *v, const char *title, char *out, size_t n) {
     if (!*id || strchr(id, '/')) return 0;
     // The game's own folder chosen instead of the one above it (a picker shows <folder>/<title ID> once another device has synced): taken as it is, not given a second <title ID>
     const char *last = strrchr(dir, '/');
-    if (!strcasecmp(last ? last + 1 : dir, id)) return snprintf(out, n, "%s/save.dmsync", dir) < (int)n;
+    if (!strcasecmp(last ? last + 1 : dir, id) || named_cloud_folder(dir, id))
+        return snprintf(out, n, "%s/save.dmsync", dir) < (int)n;
     return snprintf(out, n, "%s/%s/save.dmsync", dir, id) < (int)n;
 }
 static int cloud_file(const char *title, char *out, size_t n) { return cloud_path(getenv("DM_SAVE_SYNC"), title, out, n); }
@@ -581,6 +617,7 @@ static int send_save(const char *save, const char *title, const char *cloud) {
         made_backup = 1;
         SRED("the cloud's save %s is damaged; this device's replaces it, and the damaged file is kept in %s", cloud, kept);
     }
+    else if (got && strcasecmp(other.title, title)) { SRED("not sent: %s belongs to another title", cloud); goto done; }
     else if (got && !strcmp(other.hash, mine.hash)) { write_base(save, cloud, mine.hash); ok = 1; goto done; }
     else if (got && other.files && strcmp(other.hash, base)) {
         static _Atomic int told;   // once a session: the sender comes here after every Commit
@@ -648,13 +685,17 @@ static int mount_once(const char *save, const char *title) {
         SLOG("this device's save is back as it was before that pull");
     }
     if (!cloud_file(title, cloud, sizeof cloud)) return 0;
+    choice_kind choice = read_choice(chosen);
+    if (choice == CH_OFFLINE) {
+        SLOG("the player chose to play with this device's save without the cloud's");
+        return 0;
+    }
     SLOG("on: %s", cloud);
     snprintf(tmp, sizeof tmp, "%s.sync-tmp", save); snprintf(theirs, sizeof theirs, "%s/in.dmsync", tmp);
     if (rm_tree(tmp) || mkdirs(tmp)) { SRED("cannot make %s (errno=%d): off", tmp, errno); return 0; }   // rm_tree: what an earlier session left
     if (ss_scan(save, &mine)) { SRED("this device's save %s cannot be read (errno=%d): off", save, errno); return 0; }
     read_base(save, cloud, base);
-    choice_kind choice = read_choice(chosen);
-    int got = choice == CH_OFFLINE ? -1 : fetch_timed(cloud, theirs, FETCH_MS), both = 0, failed = 0, pr;
+    int got = fetch_timed(cloud, theirs, FETCH_MS), both = 0, failed = 0, pr;
     if (got > 0 && ss_read(theirs, NULL, &other)) { SRED("the cloud's save %s is damaged: playing on with this device's, which replaces it (the damaged file is kept)", cloud); got = 0; }
     else if (got > 0 && strcasecmp(other.title, title)) { SRED("the cloud's save %s is %s's, not %s's: not used", cloud, other.title, title); got = -1; }
     if (got < 0) { SLOG("playing on with this device's save; it is not sent until it has been compared with the cloud's"); failed = 1; }
@@ -665,7 +706,7 @@ static int mount_once(const char *save, const char *title) {
         if (strcmp(choice == CH_CLOUD ? chosen : (*chosen ? chosen : "none"), now))   // the way stays ss_decide's: a save that changed on both sides is replaced on neither
             SRED("the cloud's save changed after the player chose (now %s): the choice is not used", now);
         else way = choice == CH_CLOUD ? SS_PULL : SS_PUSH;
-    } else if (choice == CH_OFFLINE) SLOG("the player chose to play with this device's save without the cloud's");
+    }
     switch (way) {
     case SS_PULL:
         when(other.saved, t, sizeof t);
@@ -781,7 +822,20 @@ int save_sync_after_exit(const char *save, const char *title) {   // save: DM_SA
     snprintf(dd, sizeof dd, "%s", save); size_t L = strlen(dd); while (L > 1 && dd[L - 1] == '/') dd[--L] = 0;
     pull_journal j;
     if (journal_read(dd, &j)) { SRED("a pull of the cloud's save did not finish: nothing is sent until the next start puts this device's save back"); return 0; }   // what is in place may be half the cloud's
-    return !cloud_file(title, cloud, sizeof cloud) || send_save(dd, title, cloud);
+    char choice[SS_HASH + 1];
+    if (read_choice(choice) == CH_OFFLINE || !cloud_file(title, cloud, sizeof cloud)) return 1;
+    if (!send_save(dd, title, cloud)) return 0;
+#if TARGET_OS_OSX
+    // Only mirror a save after reconciliation with the active destination. send_save
+    // refuses to replace any separate change made at the other destination.
+    const char *mirror = getenv("DM_SAVE_SYNC_MIRROR");
+    char secondary[PATH_MAX]; struct stat st;
+    if (mirror && !stat(mirror, &st) && S_ISDIR(st.st_mode) &&
+        cloud_path(mirror, title, secondary, sizeof secondary) && strcmp(secondary, cloud) &&
+        !send_save(dd, title, secondary))
+        SLOG("the standby cloud save was left as it was");
+#endif
+    return 1;
 }
 
 // ---------- the platform's parts: these defaults are plain file copies, which the Mac's iCloud Drive takes (it downloads a file a read asks for) ----------

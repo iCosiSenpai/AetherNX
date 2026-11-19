@@ -35,6 +35,18 @@
     <string>© 2026 Alessio Cosi. MIT License.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSUbiquitousContainers</key>
+    <dict>
+        <key>iCloud.io.github.icosisenpai.horizonnative</key>
+        <dict>
+            <key>NSUbiquitousContainerIsDocumentScopePublic</key>
+            <true/>
+            <key>NSUbiquitousContainerName</key>
+            <string>AetherNX</string>
+            <key>NSUbiquitousContainerSupportedFolderLevels</key>
+            <string>Any</string>
+        </dict>
+    </dict>
     <key>NSSupportsAutomaticTermination</key>
     <false/>
 </dict>

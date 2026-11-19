@@ -615,11 +615,22 @@ struct SettingRow: View {
         } else {
             switch s.kind {
             case "choice":
+#if os(macOS)
+                LabeledContent {
+                    Picker(s.label, selection: m.binding(s)) {
+                        ForEach(s.options ?? [], id: \.self) { o in Text(o.count > 1 ? o[1] : o.first ?? "").tag(o.first ?? "") }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .tint(.secondary)
+                } label: { settingLabel }
+#else
                 Picker(selection: m.binding(s)) {
                     ForEach(s.options ?? [], id: \.self) { o in Text(o.count > 1 ? o[1] : o.first ?? "").tag(o.first ?? "") }
                 } label: { settingLabel }
                 .pickerStyle(.menu)
                 .tint(.secondary)   // the value reads as the row's value, as on the Mac: the game's tint marks only what changed or has the focus
+#endif
             case "range":
                 VStack(alignment: .leading, spacing: 8) {
                     ViewThatFits(in: .horizontal) {
@@ -637,7 +648,15 @@ struct SettingRow: View {
                     }
                 }
             default:
+#if os(macOS)
+                LabeledContent {
+                    Toggle(s.label, isOn: Binding(get: { m.value(s) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue }))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                } label: { settingLabel }
+#else
                 Toggle(isOn: Binding(get: { m.value(s) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) { settingLabel }
+#endif
             }
         }
     }

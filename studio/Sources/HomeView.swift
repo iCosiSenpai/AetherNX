@@ -3,10 +3,11 @@ import SwiftUI
 /// The library's home: the game played last, with its picture, what stands where (tools, keys, devices, cloud, updates) and every game as a tile.
 /// The grid takes as many columns as the window has room for, so a large or external display shows more games, not more empty space.
 struct HomeView: View {
+    let search: String
     @Environment(AppModel.self) private var model
 
     private var lastPlayed: Game? {
-        model.games.filter { $0.isBuildable }.max { a, b in
+        model.games.filter { $0.macApp != nil }.max { a, b in
             (model.playLog.record(for: a)?.lastPlayed ?? .distantPast) < (model.playLog.record(for: b)?.lastPlayed ?? .distantPast)
         }
     }
@@ -18,21 +19,11 @@ struct HomeView: View {
                 if let job = model.job {
                     JobCard(job: job, showsGameName: job.gameID.flatMap { id in model.games.first { $0.id == id }?.name })
                 }
-                if let game = lastPlayed {
+                if search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let game = lastPlayed {
                     FeaturedGame(game: game)
                 }
-                StatusTiles()
-                if !model.games.isEmpty {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("All Games")
-                            .font(.title3.weight(.semibold))
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 190, maximum: 260), spacing: 16)], alignment: .leading, spacing: 18) {
-                            ForEach(model.games) { game in
-                                GameTile(game: game)
-                            }
-                        }
-                    }
-                }
+                LibraryGrid(search: search)
+                if search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { StatusTiles() }
             }
             .padding(.horizontal, 28)
             .padding(.vertical, 24)
@@ -64,6 +55,89 @@ struct HomeView: View {
         let installed = model.games.filter { $0.deviceInstall != nil }.count
         if installed > 0 { parts.append(String(localized: "\(installed) on iPhone or iPad")) }
         return parts.joined(separator: " · ")
+    }
+}
+
+private struct LibraryGrid: View {
+    let search: String
+    @Environment(AppModel.self) private var model
+    @AppStorage(Pref.libraryFilter) private var filter: Filter = .all
+    @AppStorage(Pref.librarySort) private var sort: Sort = .name
+
+    private enum Filter: String, CaseIterable, Identifiable {
+        case all, ready, unbuilt, archives
+        var id: Self { self }
+        var title: LocalizedStringKey {
+            switch self {
+            case .all: "All Games"
+            case .ready: "Ready on Mac"
+            case .unbuilt: "Needs a Mac Build"
+            case .archives: "Archives"
+            }
+        }
+
+        func matches(_ game: Game) -> Bool {
+            switch self {
+            case .all: true
+            case .ready: game.macApp != nil
+            case .unbuilt: game.isBuildable && game.macApp == nil
+            case .archives: game.kind == .archives
+            }
+        }
+    }
+
+    private enum Sort: String, CaseIterable, Identifiable {
+        case name, lastPlayed
+        var id: Self { self }
+        var title: LocalizedStringKey {
+            switch self {
+            case .name: "Name"
+            case .lastPlayed: "Last played"
+            }
+        }
+    }
+
+    private var games: [Game] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let filtered = model.games.filter { filter.matches($0) && $0.matchesSearch(query) }
+        guard sort == .lastPlayed else { return filtered }
+        return filtered.sorted {
+            let first = model.playLog.record(for: $0)?.lastPlayed ?? .distantPast
+            let second = model.playLog.record(for: $1)?.lastPlayed ?? .distantPast
+            return first > second
+        }
+    }
+
+    var body: some View {
+        let games = games
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(filter.title)
+                    .font(.title3.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                Menu("Library Options", systemImage: "line.3.horizontal.decrease") {
+                    Picker("Filter Games", selection: $filter) {
+                        ForEach(Filter.allCases) { Text($0.title).tag($0) }
+                    }
+                    Picker("Sort Games", selection: $sort) {
+                        ForEach(Sort.allCases) { Text($0.title).tag($0) }
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Filter and sort games")
+            }
+            if games.isEmpty {
+                Text("No games match this view.")
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 16)
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 190, maximum: 260), spacing: 16)], alignment: .leading, spacing: 18) {
+                    ForEach(games) { GameTile(game: $0) }
+                }
+            }
+        }
     }
 }
 
@@ -127,7 +201,7 @@ private struct FeaturedGame: View {
                     .aspectRatio(contentMode: .fill)
             }
         } else {
-            LinearGradient(colors: [Color.accentColor.opacity(0.55), Color.black.opacity(0.85)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            StudioArtwork()
         }
     }
 }
@@ -141,8 +215,10 @@ private struct StatusTiles: View {
             tile(title: "AetherNX Engine", value: engineValue, systemImage: "shippingbox", ok: model.engine != nil && !model.updates.toolsUpdateAvailable) {
                 model.sidebarSelection = .page(.updates)
             }
-            tile(title: "Keys", value: model.keys.isUsable ? String(localized: "prod.keys ready") : String(localized: "Not set: builds need them"),
-                 systemImage: "key", ok: model.keys.isUsable) { model.showSettings(.keys) }
+            if model.keys.isUsable || model.games.contains(where: \.requiresKeys) {
+                tile(title: "Keys", value: model.keys.isUsable ? String(localized: "prod.keys ready") : String(localized: "Not set: builds need them"),
+                     systemImage: "key", ok: model.keys.isUsable) { model.showSettings(.keys) }
+            }
             tile(title: "Devices", value: devicesValue, systemImage: "iphone.gen3", ok: model.devices.devices.contains(where: \.isReachable)) {
                 model.sidebarSelection = .page(.devices)
             }
@@ -159,7 +235,7 @@ private struct StatusTiles: View {
     private var engineValue: String {
         guard model.engine != nil else { return String(localized: "Not found") }
         if model.updates.toolsUpdateAvailable, let tools = model.updates.tools { return String(localized: "\(tools.behind) new changes to install") }
-        return model.engineVersion.map { String(localized: "Version \($0), up to date") } ?? String(localized: "Ready")
+        return model.engineVersion.map { String(localized: "Version \($0)") } ?? String(localized: "Ready")
     }
 
     private var devicesValue: String {
@@ -176,8 +252,10 @@ private struct StatusTiles: View {
 
     private var updatesValue: String {
         if model.updates.isChecking { return String(localized: "Checking…") }
+        guard model.updates.lastChecked != nil else { return String(localized: "Check for Updates") }
         if let release = model.updates.appRelease { return String(localized: "AetherNX \(release.version) is out") }
         if model.updates.toolsUpdateAvailable { return String(localized: "Engine changes to install") }
+        if model.updates.appError != nil || model.updates.toolsError != nil { return String(localized: "Update check failed") }
         if model.updates.upstreamChanges > 0 { return String(localized: "Up to date; nxnative has \(model.updates.upstreamChanges) new changes") }
         return String(localized: "Everything is up to date")
     }

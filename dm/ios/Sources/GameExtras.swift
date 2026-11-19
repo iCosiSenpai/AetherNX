@@ -24,9 +24,7 @@ enum GameExtras {
 
     /// A game's folder name in iCloud Drive › AetherNX: its name without what a file name cannot hold (Studio's CloudSaves.folderName).
     static func folderName(for name: String) -> String {
-        let cleaned = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
-            .trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: ".")))
-        return cleaned.isEmpty ? "Game" : String(cleaned.prefix(120))
+        CloudFolders.folderName(name)
     }
 
     /// The folder the Cloud saves picker opens at: the game's own folder in iCloud Drive › AetherNX, named after the game as Studio names it.
@@ -38,7 +36,9 @@ enum GameExtras {
     static func isOwnFolder(_ folder: String, titleID: String) -> Bool {
         let path = folder.count > 1 && folder.hasSuffix("/") ? String(folder.dropLast()) : folder
         if (path as NSString).lastPathComponent.caseInsensitiveCompare(titleID) == .orderedSame { return true }
+        let marker = URL(fileURLWithPath: path).appendingPathComponent(".aethernx-title")
         return (path as NSString).deletingLastPathComponent.hasSuffix(aetherSuffix)
+            || (try? String(contentsOf: marker, encoding: .utf8)) == titleID.uppercased() + "\n"
     }
 
     /// The folder a game's Mods and Cheats are in, for the cloud folder its save syncs through (Studio's GameExtras.folder): the cloud folder when it is the
@@ -59,7 +59,7 @@ enum GameExtras {
     /// A folder as the Files app names it: iCloud Drive's by their names there.
     static func displayName(_ path: String) -> String {
         let drive = "/Mobile Documents/com~apple~CloudDocs", container = "/Mobile Documents/iCloud~io~github~icosisenpai~horizonnative/Documents"
-        for (root, name) in [(drive, "iCloud Drive"), (container, "iCloud Drive › HorizonNative")] {
+        for (root, name) in [(drive, "iCloud Drive"), (container, "iCloud Drive › AetherNX")] {
             guard let r = path.range(of: root) else { continue }
             let rest = path[r.upperBound...].split(separator: "/")
             return ([name] + rest.map(String.init)).joined(separator: " › ")

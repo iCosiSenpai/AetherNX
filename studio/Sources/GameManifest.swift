@@ -35,7 +35,9 @@ enum GameManifest {
             candidate = CloudSaves.libraryTarget(libraryFolder, gameName: gameName, home: home)
         }
         let path = (candidate as NSString).standardizingPath
-        return !candidate.isEmpty && (path as NSString).deletingLastPathComponent == aether ? path : nil
+        let parent = (path as NSString).deletingLastPathComponent
+        return !candidate.isEmpty && (parent == aether || parent == CloudSaves.automaticFolder(home: home)
+               || (parent as NSString).lastPathComponent == "AetherNX") ? path : nil
     }
 
     /// The file's bytes: sorted keys, so two Macs with the same library write the same file.

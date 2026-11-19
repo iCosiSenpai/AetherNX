@@ -1340,9 +1340,13 @@ def nup_file(path):   # the NUP to pack: path when it is a .nup file, else the o
 def scan_nup(path, want=None):   # a NUP as scan_nsps gives a folder of NSPs, with its packages for the NSPs: (title ID, {'base', 'updates', 'dlc', 'nup': the open container})
     try:
         n = pack_nup.Nup(path)
-        app, base, vers, dlc = pack_nup.scan(n)
+        try:
+            app, base, vers, dlc = pack_nup.scan(n)
+            if want is not None and want != app: raise BuildError(f'no game {want:016X} (--title-id / TITLE_ID) in {path}, which holds {app:016X}')
+        except BaseException:
+            n.close()
+            raise
     except (pack_nup.Error, OSError) as e: raise BuildError(str(e)) from e
-    if want is not None and want != app: raise BuildError(f'no game {want:016X} (--title-id / TITLE_ID) in {path}, which holds {app:016X}')
     return app, {'base': base, 'updates': sorted(vers.items()), 'dlc': [(tid, None, k) for tid, k in sorted(dlc.items())], 'nup': n}
 
 
@@ -2830,7 +2834,7 @@ def depth_in_log(path):   # 'zero' / 'gl' as the last such line of a host log sa
 def depth_mode(g, work, report=False):
     """(mode, where) of the game's depth mode for bases made before it runs: the profile's depth_mode, else the build folder's record, else this Mac's log of the game
     (~/Library/Logs/HorizonNative/<title ID>.log), else the build's own logs, else ('gl', None), NVN's default. A mode learned from a log is recorded in the build folder"""
-    if g.get('depth_mode'): return g.get('depth_mode'), 'the profile'
+    if mode := g.get('depth_mode', ''): return mode, 'the profile'
     rec = Path(work) / 'depth_mode'
     try: mode, _, where = rec.read_text().strip().partition('\t')
     except OSError: mode, where = '', ''

@@ -28,7 +28,7 @@ class GameExtrasTests(unittest.TestCase):
             tmp = Path(tmp)
             exe = tmp / 'game_extras_check'
             r = subprocess.run(['xcrun', '-sdk', 'macosx', 'swiftc', '-swift-version', '5', '-parse-as-library', '-module-cache-path', str(tmp / 'module-cache'),
-                                '-o', str(exe), str(IOS / 'Sources/GameExtras.swift'), str(Path(__file__).with_name('game_extras_check.swift'))],
+                                '-o', str(exe), str(IOS / 'Sources/GameExtras.swift'), str(IOS / 'Sources/CloudFolders.swift'), str(Path(__file__).with_name('game_extras_check.swift'))],
                                capture_output=True, text=True, timeout=300)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             (tmp / 'scratch').mkdir()

@@ -184,7 +184,7 @@ private struct ToolsStep: View {
                 if model.engine == nil {
                     Button("Download") { model.downloadEngine() }
                         .buttonStyle(.borderedProminent)
-                        .disabled(!model.canStartJob)
+                        .disabled(model.isJobBusy)
                 }
             }
             if let job = model.job, job.gameID == nil, job.isRunning || job.state == .failed {
@@ -283,7 +283,7 @@ private struct LibraryStep: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            StepHeader(title: "Where your games are", detail: "One folder per game, with its base game, update and DLC (.nsp, .xci, .nsz, .xcz), a dump of its files, or an archive of them. Add the folder that holds those folders.")
+            StepHeader(title: "Where your games are", detail: "Choose a game folder or a library of game folders. Keep one NUP per game folder.")
             if model.libraryFolders.isEmpty {
                 StatusRow(ok: false, title: Text("No library folders yet"), detail: nil) {
                     Button("Add Folder…") { model.chooseLibraryFolder() }

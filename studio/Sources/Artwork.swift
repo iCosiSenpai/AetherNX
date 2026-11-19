@@ -28,6 +28,8 @@ final class ArtworkStore {
     @ObservationIgnored private var isWorking = false
     /// Counts the times the store was cleared: a lookup that started before the last clear is dropped.
     @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var fetchingTitle: String?
+    @ObservationIgnored private var discardFetch = false
     @ObservationIgnored let directory: URL
 
     /// A game no service had is asked again after this long.
@@ -93,16 +95,38 @@ final class ArtworkStore {
                 }
                 let next = queue.removeFirst(), generation = self.generation
                 let folder = directory.appending(path: next.titleId)
-                let entry = await Self.fetch(titleId: next.titleId, name: next.name, into: folder)
-                guard generation == self.generation else { continue }   // Download Again cleared the store during this fetch: its pictures went with it, and it is asked again
+                let staging = directory.appending(path: ".fetch-\(UUID().uuidString)")
+                let fm = FileManager.default
+                defer { try? fm.removeItem(at: staging) }
+                fetchingTitle = next.titleId
+                discardFetch = false
+                let entry = await Self.fetch(titleId: next.titleId, name: next.name, into: staging)
+                fetchingTitle = nil
+                guard generation == self.generation, !discardFetch else { continue }
                 if let entry {
-                    if let data = try? JSONEncoder().encode(entry) { try? data.write(to: folder.appending(path: "art.json")) }
-                    IconCache.forget(prefix: folder.path)
-                    art[next.titleId] = entry
+                    do {
+                        let data = try JSONEncoder().encode(entry)
+                        try data.write(to: staging.appending(path: "art.json"))
+                        if fm.fileExists(atPath: folder.path) { try fm.removeItem(at: folder) }
+                        try fm.moveItem(at: staging, to: folder)
+                        IconCache.forget(prefix: folder.path + "/")
+                        art[next.titleId] = entry
+                    } catch {
+                        queued.remove(next.titleId)
+                    }
                 }
             }
             isWorking = false
         }
+    }
+
+    /// Invalidate the one title before its cache folder is removed with the game.
+    func forget(_ id: String) {
+        if fetchingTitle == id { discardFetch = true }
+        queue.removeAll { $0.titleId == id }
+        queued.remove(id)
+        IconCache.forget(prefix: directory.appending(path: id).path + "/")
+        art[id] = nil
     }
 
     func clear() {

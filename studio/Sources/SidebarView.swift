@@ -6,21 +6,26 @@ struct SidebarView: View {
     @Environment(AppModel.self) private var model
 
     private var filtered: [Game] {
-        let query = search.trimmingCharacters(in: .whitespaces)
-        guard !query.isEmpty else { return model.games }
-        return model.games.filter { $0.name.localizedCaseInsensitiveContains(query) || ($0.titleId ?? "").localizedCaseInsensitiveContains(query) }
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return model.games.filter { $0.matchesSearch(query) }
     }
 
     var body: some View {
         @Bindable var model = model
+        let games = filtered
         List(selection: model.snapshotMode ? .constant(nil) : $model.sidebarSelection) {
             Label("Home", systemImage: "house")
                 .tag(SidebarItem.home)
             Section {
-                ForEach(filtered) { game in
+                ForEach(games) { game in
                     GameRow(game: game, job: model.jobFor(game))
                         .tag(SidebarItem.game(game.id))
                         .contextMenu { GameContextMenu(game: game) }
+                }
+                if games.isEmpty && !model.games.isEmpty {
+                    Text("No games match this view.")
+                        .foregroundStyle(.secondary)
+                        .selectionDisabled()
                 }
             } header: {
                 if !model.games.isEmpty { Text("Library") }
@@ -63,9 +68,6 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .overlay {
-            if !search.isEmpty && filtered.isEmpty { ContentUnavailableView.search(text: search) }
-        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             SidebarFooter()
         }
@@ -182,7 +184,7 @@ private struct SidebarFooter: View {
 
     @ViewBuilder
     private var problems: some View {
-        if model.engine != nil && !model.keys.isUsable {
+        if model.engine != nil && !model.keys.isUsable && model.games.contains(where: \.requiresKeys) {
             VStack(alignment: .leading, spacing: 6) {
                 Label("prod.keys not set", systemImage: "key")
                     .font(.callout.weight(.medium))

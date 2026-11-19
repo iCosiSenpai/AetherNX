@@ -486,9 +486,16 @@ Games read this count as a position in their own command memory and size their h
 
 - **Symptom:** a Switch 2 game's textures from its files keep their shapes but break up along every edge: misplaced 4×4 blocks (16-byte pieces) in a regular weave, invisible in flat areas. Normal maps make lit surfaces look woven; opacity masks punch holes.
 - **Cause:** the GOB (64 bytes × 8 rows) keeps its size and place, but the Switch 2 orders its 16-byte pieces x5 y2 x4 y1 y0 from the GOB's start, where the Tegra X1 orders them x5 y2 y1 x4 y0: offset bits 5 and 6 exchanged, (x%64/32)·256 + (y%8/4)·128 + (x%32/16)·64 + (y%4/2)·32 + (y%2)·16 + x%16. Block heights, sizes and level offsets are unchanged (the BNTX headers' block heights and sizes match `nvn_tex_layout`).
-- **Fix:** `nvn_gob_switch2` (`dm/gfx/tex/nvn_deswizzle.h`), set at `nvnDeviceInitialize` when the SDK targets the Switch 2 (`dm_sdk_ounce`): the CPU address formula, the CPU copy tables and both Metal untiling kernels take the Switch 2's order.
+- **Fix:** `nvn_gob_switch2` (`dm/gfx/tex/nvn_deswizzle.h`), defaults to the SDK target at `nvnDeviceInitialize` (`dm_sdk_ounce`). The CPU address formula, the CPU copy tables and the Metal untiling kernels all use the selected order.
 - **Check:** `t_tex` checks the Switch 2's offsets by hand (B2) and both orders where they differ; `t_deswz_gpu` runs every case in both orders, the GPU kernels against the CPU copy.
 - **Found on:** [Donkey Kong Bananza](../../dm/games/040074A01BF12000/README.md#rendering): level 0 of its BNTX textures (BC7 `BaseRock000_Pnrm`, BC4 `ArenaLevelShadowMaskSunbeam00_Smsk`) decoded with every order of the five address bits; the X1's left the weave, this order alone gave clean images (mean neighbour difference 19.5 → 14.9 on the rock normal map, 21.0 → 15.7 on the BC4 mask).
+
+### NVN2 with Tegra X1 texture assets
+
+- **Symptom:** a Switch 2 edition starts and responds to input, but its title logo and menu lettering have regularly spaced gaps and displaced blocks.
+- **Cause:** the SDK target determines the default block order. A title can use an NVN2 SDK with assets tiled in the original Switch order. The two orders exchange offset bits 5 and 6 within each GOB.
+- **Fix:** the local profile can declare `tex_gob_order tegra_x1` when its assets have this layout. NVN uses the selected order for both CPU and Metal texture transfers. Profiles without that declaration derive the order from the SDK target.
+- **Check:** Xenoblade Chronicles X: Definitive Edition – Nintendo Switch 2 Edition 2.0.0 on a Mac with M5. With the original shader library and both GOB orders tested, only Tegra X1 produced a clean title logo and menu. The black background was present with both orders.
 
 ### Packaged texture block dimensions and linear storage rows
 

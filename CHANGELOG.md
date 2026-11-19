@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 1.1.0
+
+- **New Mac game launcher.** A shorter, resizable window with a game header, settings by category and a fixed Play button. Advanced options, cloud saves and controller assignments are available from their own categories.
+- **Studio refresh.** AetherNX has a new icon and startup splash, a clearer library and add-game flow, and removal actions that show which files they will delete.
+- **NUP support in Studio.** Find and build NUP dump folders, including indexed Switch 2 programs and their add-ons.
+- **Xenoblade Chronicles X: Definitive Edition – Nintendo Switch 2 Edition.** The Mac build can read its Monolith archives and NDSR upscaler shaders. On the tested local profile, selecting the correct texture block order restores clean title-screen graphics. Verification covers the title screen and Settings.
+- **Cloud folders by game name.** Use AetherNX’s iCloud document container or Google Drive for desktop. On the Mac, a second provider can keep a standby copy and take over when the primary folder is unavailable. Separate changes to a standby copy are preserved.
+- **New Mac installer.** The notarized disk image includes an illustrated installation window and an Applications shortcut.
 
 - **Metal 4 pipelines on by default on an iPhone or iPad with 10 GB of memory or more** (profile key `pso_mtl4 auto`, the new default; `on` / `off` still pin a tested setting). Without them every new pipeline was built while playing: in Hyrule Warriors: Age of Calamity 18 s of builds in 3 minutes and a black 3D scene at a mission's start. 8 GB devices keep them off, sparing the archive's memory.
 - **The depth mode is learned from a run** when a profile does not say it: the host logs it, and the build reads it from the build folder's record (written by `./aethernx install` from the device's log), this Mac's log of the game, or its own boots. A pipeline archive made for the wrong mode was refused and the device built every base itself at its first start (Hyrule Warriors: 3,176 bases in 170 s, the phone hot before play).

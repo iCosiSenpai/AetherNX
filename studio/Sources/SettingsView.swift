@@ -92,7 +92,7 @@ private struct GeneralSettings: View {
                     Button("Updates…") { model.sidebarSelection = .page(.updates) }
                     if model.engine == nil {
                         Button("Download") { model.downloadEngine() }
-                            .disabled(!model.canStartJob)
+                            .disabled(model.isJobBusy)
                     }
                 }
             } header: {
@@ -156,7 +156,7 @@ private struct LibrarySettings: View {
             } header: {
                 Text("Library Folders")
             } footer: {
-                Text("One folder per game, with its base game, update and DLC (.nsp, .xci, .nsz, .xcz), or an archive of them.")
+                Text("Choose a game folder or a library of game folders. Keep one NUP per game folder.")
             }
 
             BuildsFolderSection()

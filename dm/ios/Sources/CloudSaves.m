@@ -1,6 +1,8 @@
 // See CloudSaves.h.
 
 #import "CloudSaves.h"
+#include <limits.h>
+int32_t dm_cloud_named_game(const char *root, const char *name, const char *id, char *out, int32_t capacity);
 
 static NSString *const kCloudSaves = @"cloudSavesBookmark";
 
@@ -98,6 +100,12 @@ void dm_cloud_container_resolve(void) {
                 fprintf(stderr, "[RED] boot: the iCloud container's Documents folder cannot be made (%s)\n", e.localizedDescription.UTF8String ?: "?");
             else {
                 NSString *path = docs.path;
+                NSDictionary *info = NSBundle.mainBundle.infoDictionary;
+                NSString *title = info[@"DMTitleID"], *name = info[@"CFBundleDisplayName"];
+                char managed[PATH_MAX];
+                if (title.length && name.length && dm_cloud_auto() && ![NSUserDefaults.standardUserDefaults objectForKey:kCloudSaves] &&
+                    !getenv("DM_SAVE_SYNC") && dm_cloud_named_game(path.fileSystemRepresentation, name.UTF8String, title.UTF8String, managed, sizeof managed))
+                    path = [fm stringWithFileSystemRepresentation:managed length:strlen(managed)];
                 os_unfair_lock_lock(&g_clk); g_container = path; os_unfair_lock_unlock(&g_clk);
                 fprintf(stderr, "boot: iCloud container %s\n", path.fileSystemRepresentation);
                 dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:@"DMCloudContainerResolved" object:nil]; });

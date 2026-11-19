@@ -29,20 +29,43 @@ let gameJSON = """
 """
 let game = try JSONDecoder.snakeCase.decode(Game.self, from: Data(gameJSON.utf8))
 
+let nupJSON = """
+{"id": "\(lib)", "kind": "dump", "title_id": "0400000012345001", "name": "Enhanced Game", "folder": "\(lib)",
+ "container": {"name": "Game.nup", "path": "\(lib)/Game.nup", "size": 4}, "build_input_size": 100,
+ "updates": [{"name": "Update 1", "path": "\(lib)/Game.nup", "version": 65536, "size": 100},
+             {"name": "Update 2", "path": "\(lib)/Game.nup", "version": 131072, "size": 120}]}
+"""
+let nup = try JSONDecoder.snakeCase.decode(Game.self, from: Data(nupJSON.utf8))
+expect(nup.isBuildable && !nup.requiresKeys && nup.isSwitch2, "a NUP can be built with no keys")
+expect(nup.totalSize == 4 && nup.firstBuildSpace == 100 + 6 * 1_073_741_824, "a NUP counts its container once and checks space for its unpacked image")
+expect(Set(nup.updates.map(\.id)).count == 2, "updates in the same container have distinct row identities")
+expect(names(RemovalPlan.make(for: nup, libraryFolders: [lib]), .gameFiles) == ["Game.nup"], "the removal plan names the container once")
+
 let shared = RemovalPlan.make(for: game, libraryFolders: [lib])
 expect(names(shared, .gameFiles) == ["Stray [\(title)].nsp"], "a library folder as the game's folder: the game files are its packages, no archive \(names(shared, .gameFiles))")
-expect(names(shared, .apps) == ["Game.app", "Game.app.key"], "a library folder as the game's folder: the app naming its title ID, no IPA \(names(shared, .apps))")
-expect(names(shared, .buildFolder) == ["\(title)-work"], "the build folders that exist \(names(shared, .buildFolder))")
+expect(names(shared, .apps) == ["Game.app", "Game.app.key", "Game.app.key.partial", "Game.app.old"], "the app naming its title ID and its sidecars \(names(shared, .apps))")
+expect(names(shared, .buildFolder) == [".aethernx-build", "\(title)-work"], "build folders and the external build record \(names(shared, .buildFolder))")
 expect(names(shared, .saves) == [title], "the save folder \(names(shared, .saves))")
 expect(names(shared, .logsAndSettings) == ["\(title).log", "\(title).prev.log"], "the log and the previous run's log \(names(shared, .logsAndSettings))")
 expect(!shared.items.flatMap(\.paths).contains { $0.contains("Other.app") }, "another game's app is never in the plan")
 
 let own = RemovalPlan.make(for: game, libraryFolders: [URL(filePath: lib).deletingLastPathComponent().path])
 expect(names(own, .gameFiles) == ["Stray [\(title)].nsp", "random.zip"], "the game's own folder: the archive it came in goes too \(names(own, .gameFiles))")
-expect(names(own, .apps) == ["Game.app", "Game.app.key", "some.ipa"], "the game's own folder: its app and its IPA, still not the other app \(names(own, .apps))")
+expect(names(own, .apps) == ["Game.app", "Game.app.key", "Game.app.key.partial", "Game.app.old", "some.ipa"], "the game's own folder: its app and its IPA, still not the other app \(names(own, .apps))")
 
 let viaLink = RemovalPlan.make(for: game, libraryFolders: ["\(root)/dz/link-to-lib"])
 expect(names(viaLink, .gameFiles) == ["Stray [\(title)].nsp"], "a library folder named through a link is the same folder \(names(viaLink, .gameFiles))")
+
+var cartridge = game
+cartridge.base = try JSONDecoder.snakeCase.decode(PackageFile.self, from: Data("""
+{"name":"Cart.XCI","path":"\(lib)/Cart.XCI","size":4}
+""".utf8))
+expect(names(RemovalPlan.make(for: cartridge, libraryFolders: [lib]), .gameFiles) == ["Cart (Initial Area).bin", "Cart.XCI"],
+       "removing a cartridge takes its exact companion file")
+cartridge.workDir = "/Volumes/Test/Builds/\(title)_build"
+cartridge.workReachable = false
+expect(RemovalPlan.needsConnectedBuildDisk(cartridge, kinds: [.gameFiles, .buildFolder]), "full removal waits for the recorded build disk")
+expect(!RemovalPlan.needsConnectedBuildDisk(cartridge, kinds: [.saves]), "local save removal works with the build disk offline")
 
 let parts = "\(root)/parts"
 func volumes(_ name: String) -> [String] { RemovalPlan.archiveParts("\(parts)/\(name)").map { URL(filePath: $0).lastPathComponent } }
@@ -139,9 +162,37 @@ expect(BuildTarget.menuOrder.contains(.device) && BuildTarget(rawValue: "device"
 
 // MARK: Cloud saves
 
+let cloudTesting = FileManager.default.temporaryDirectory.appendingPathComponent("aethernx-cloud-\(UUID().uuidString)")
+do {
+    let primary = cloudTesting.appendingPathComponent("iCloud"), standby = cloudTesting.appendingPathComponent("Google Drive")
+    let legacy = primary.appendingPathComponent(title)
+    try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: standby, withIntermediateDirectories: true)
+    let packedSave = Data("synthetic save".utf8)
+    try packedSave.write(to: legacy.appendingPathComponent("save.dmsync"))
+    let paths = CloudFolders.destinations(primary: primary.path, fallback: standby.path, name: "Starfall: Tactics", titleID: title)
+    guard let first = paths.primary, let second = paths.fallback else { throw CocoaError(.fileWriteUnknown) }
+    expect(first.lastPathComponent == "Starfall- Tactics" && first.lastPathComponent == second.lastPathComponent,
+           "both providers use the same readable name")
+    expect(CloudFolders.owns(first, titleID: title) && CloudSaves.cloudFile(folder: first.path, titleID: title) == first.appendingPathComponent("save.dmsync").path,
+           "the title marker lets the game sync directly into its named folder")
+    expect((try? Data(contentsOf: first.appendingPathComponent("save.dmsync"))) == packedSave && !FileManager.default.fileExists(atPath: legacy.path),
+           "moving an ID folder preserves the packed save")
+    let pathsWhenOffline = CloudFolders.destinations(primary: cloudTesting.appendingPathComponent("unavailable").path,
+                                                      fallback: standby.path, name: "Renamed Title", titleID: title)
+    expect(pathsWhenOffline.primary == nil && pathsWhenOffline.fallback?.path == second.path,
+           "a missing provider is not created and a changed display name still finds the title")
+    let conflictID = "0100000000000099"
+    let conflict = try CloudFolders.game(in: standby, name: "Starfall: Tactics", titleID: conflictID)
+    expect(conflict != second && CloudFolders.owns(conflict, titleID: conflictID), "distinct titles with the same name use distinct folders")
+    try FileManager.default.removeItem(at: cloudTesting)
+} catch {
+    expect(false, "managed cloud folder checks: \(error)")
+}
+
 let cloudHome = "/Users/jane"
 let drive = "\(cloudHome)/Library/Mobile Documents/com~apple~CloudDocs"
-expect(CloudSaves.displayName(CloudSaves.automaticFolder(home: cloudHome), home: cloudHome) == "iCloud Drive › HorizonNative", "the iCloud container's folder by its name in iCloud Drive")
+expect(CloudSaves.displayName(CloudSaves.automaticFolder(home: cloudHome), home: cloudHome) == "iCloud Drive › AetherNX", "the iCloud container's folder by its name in iCloud Drive")
 expect(CloudSaves.displayName("\(drive)/Games/My Saves", home: cloudHome) == "iCloud Drive › Games › My Saves", "an iCloud Drive folder as the Finder shows it")
 expect(CloudSaves.displayName(CloudSaves.driveFolder(home: cloudHome), home: cloudHome) == "iCloud Drive › HorizonNative Saves", "the folder DM_SAVE_SYNC=icloud names")
 expect(CloudSaves.displayName("\(cloudHome)/Saves", home: cloudHome) == "~/Saves" && CloudSaves.displayName("/Volumes/Drive/Saves", home: cloudHome) == "/Volumes/Drive/Saves",
@@ -157,7 +208,7 @@ expect(CloudSaves.lastNote(inLog: logText) == CloudSaves.LogNote(text: "sent (3 
 expect(CloudSaves.lastNote(inLog: logText + "[dm] [RED] save sync: writing /c to the cloud failed: offline\n")?.isError == true, "a red line is an error")
 expect(CloudSaves.lastNote(inLog: "[dm] frame 60\n") == nil, "a log that says nothing about it")
 let sentTo = "sent: 8 files, to \(CloudSaves.automaticFolder(home: cloudHome))/\(title)/save.dmsync"
-expect(CloudSaves.shortened(sentTo, folder: CloudSaves.automaticFolder(home: cloudHome), home: cloudHome) == "sent: 8 files, to iCloud Drive › HorizonNative/\(title)/save.dmsync",
+expect(CloudSaves.shortened(sentTo, folder: CloudSaves.automaticFolder(home: cloudHome), home: cloudHome) == "sent: 8 files, to iCloud Drive › AetherNX/\(title)/save.dmsync",
        "a log line names the cloud folder as the Finder does")
 expect(CloudSaves.shortened("kept in \(cloudHome)/Library/x", folder: "/c", home: cloudHome) == "kept in ~/Library/x", "and the home folder as ~")
 
@@ -226,7 +277,7 @@ expect(CloudSaves.libraryTarget("/c/Saves", gameName: "X", home: cloudHome) == "
 expect(CloudSaves.folderName(for: " ../ ") == "-" || !CloudSaves.folderName(for: " ../ ").contains("/"), "a name never makes a path")
 expect(GameExtras.isOwnFolder(aether + "/Game", titleID: title, home: cloudHome) && GameExtras.isOwnFolder("/c/\(title)", titleID: title, home: cloudHome)
        && !GameExtras.isOwnFolder("/c/Saves", titleID: title, home: cloudHome), "a game's own folder: AetherNX › its name, or one named by its title ID")
-expect(CloudSaves.displayName(CloudSaves.automaticFolder(home: cloudHome) + "/\(title)/Mods", home: cloudHome) == "iCloud Drive › HorizonNative › \(title) › Mods",
+expect(CloudSaves.displayName(CloudSaves.automaticFolder(home: cloudHome) + "/\(title)/Mods", home: cloudHome) == "iCloud Drive › AetherNX › \(title) › Mods",
        "a folder inside the iCloud container, by its names in iCloud Drive")
 let modsRoot = "\(root)/mods-check/Mods"
 let fm = FileManager.default

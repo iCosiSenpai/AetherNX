@@ -2,6 +2,20 @@
 
 ## Game packages
 
+### Studio misses a NUP or rejects an indexed program
+
+- **Symptom:** adding a folder containing only a NUP leaves the library empty. Building some enhanced editions directly fails with `base program ID … is not a base title ID`.
+- **Cause:** the library scan omitted NUPs. The packer assumed that the NPDM always held program index zero and that the add-ons were numbered from that same title ID.
+- **Fix:** the library uses the same NUP selection and validation as the packer. An indexed program is identified by the full NPDM program ID when the NUP record agrees. Add-on validation and image numbering use `AddOnContentBaseId` from the application control data when present. The index-zero title's usual add-on range is the fallback.
+- **Found on:** Xenoblade Chronicles X: Definitive Edition – Nintendo Switch 2 Edition 2.0.0 (`0400453019AA8001`). Studio listed the game and its two add-ons. The Mac build extracted both add-on images and the 14.6 GiB RomFS.
+
+### The pipeline archive stops on a missing depth mode
+
+- **Symptom:** packaging stops at `Pipeline archive` with `KeyError: … game.tsv has no key depth_mode` after Metal has compiled the shader library.
+- **Cause:** the archive builder queried an optional profile key using the required-key form of `Game.get`.
+- **Fix:** an absent setting uses the existing depth-mode record or boot log, with NVN's default when neither has a measurement. The synthetic depth-mode tests use real game profile objects.
+- **Found on:** the provisional profile for Xenoblade Chronicles X: Definitive Edition – Nintendo Switch 2 Edition 2.0.0. Its build probe had already logged the depth mode.
+
 ### PFS0 file-name table missing its final NUL
 
 - **Symptom:** package identification stops with `ValueError: subsection not found` in `pfs0_names`, or LibHac reports `ResultFsPathNotFound` opening the last file of an NSP.

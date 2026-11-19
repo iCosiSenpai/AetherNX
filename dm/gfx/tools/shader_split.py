@@ -2672,18 +2672,36 @@ def arh_entries(d):
     return out
 
 
+def arh2_entries(d):
+    """ARH2 records store a path hash and size. ARD offsets accumulate aligned sizes.
+
+    Layout checked against XbxDeTool's ArchiveHeaderFile.cs (Nenkai) and the
+    Switch 2 Edition's two archive pairs. Shader extraction needs only hashes.
+    """
+    count, align = field(d, '<II', 4, 'ARH2 header')
+    if not align or align & (align - 1): red('ARH2: invalid alignment')
+    table = span(d, 16, count * 16, 'ARH2 table')
+    entries, offset = [], 0
+    for path_hash, size, _ in struct.iter_unpack('<QII', table):
+        if size: entries.append((f'/{path_hash:016x}', offset, size))
+        offset = (offset + size + align - 1) & -align
+    return entries
+
+
 def arh_jobs(files, parts=64):
     jobs, used = [], set()
     for path, rel in files:
         if not path.endswith('.arh'): continue
         with open(path, 'rb') as f: d = f.read()
-        if d[:4] != b'arh1': continue
+        magic = d[:4]
+        if magic not in (b'arh1', b'arh2'): continue
         ard = path[:-4] + '.ard'
-        if not os.path.isfile(ard): red(f'{rel}: ARH1 index has no ARD data file')
-        entries = arh_entries(d); length = os.path.getsize(ard)
+        if not os.path.isfile(ard): red(f'{rel}: archive index has no ARD data file')
+        entries = arh2_entries(d) if magic == b'arh2' else arh_entries(d)
+        length = os.path.getsize(ard)
         if any(o > length or n > length - o for _, o, n in entries): red(f'{rel}: ARD entry out of bounds')
         step = max(1, (len(entries) + parts - 1) // parts)
-        jobs += [(ard, rel[:-4] + '.ard', (b'ARH1', entries[i:i + step])) for i in range(0, len(entries), step)]
+        jobs += [(ard, rel[:-4] + '.ard', (magic, entries[i:i + step])) for i in range(0, len(entries), step)]
         used.update((path, ard))
     return jobs, used
 
@@ -2746,12 +2764,15 @@ def hcps_shaders(d, base, label):
             if pend > ce or kend > ke: red(f'{label} HCPS: program exceeds SLCT range')
             # A vertex bundle can include a geometry stage (shd_lgt.wishp:
             # 768-byte vertex + 256-byte geometry, two 0x880 controls). NVSD's
-            # vertex size covers both; each NVN control gives its own code size.
+            # vertex size covers both; each control gives its own lengths.
+            # The same NVSD ranges also carry NVN2 controls (0xd0 in the
+            # Xenoblade Chronicles X Switch 2 Edition's standalone SLCT).
             while c < pend:
-                if c + 0x708 > pend: red(f'{label} HCPS: truncated control')
-                nc = struct.unpack_from('<I', ctls, c + 0x20)[0]
-                nk = struct.unpack_from('<I', ctls, c + 0x704)[0]
-                if nc < 0x760 or c + nc > pend or not nk or k + nk > kend: red(f'{label} HCPS: shader exceeds program range')
+                nvn2 = nvn2_ctl(ctls[c:min(pend, c + NVN2_KEY_CTL)])
+                if c + (NVN2_KEY_CTL if nvn2 else 0x708) > pend: red(f'{label} HCPS: truncated control')
+                nc = struct.unpack_from('<I', ctls, c + (0x30 if nvn2 else 0x20))[0]
+                nk = struct.unpack_from('<I', ctls, c + (0x44 if nvn2 else 0x704))[0]
+                if nc < (NVN2_KEY_CTL if nvn2 else 0x760) or c + nc > pend or not nk or k + nk > kend: red(f'{label} HCPS: shader exceeds program range')
                 ctl, code = ctls[c:c + nc], codes[k:k + nk]; c += (nc + 7) & ~7; k += nk
                 st = glslc_stage(ctl, code)
                 why = check(label, st, ctl, code) if st else 'unknown stage'
@@ -2779,7 +2800,10 @@ def slct_shaders(d, base, label):
 
 def monolith_shaders(d, label, out):
     """Scan decoded archive entries and their XBC1 streams without relying on
-    extensions: model streams and map data embed HCPS alongside other assets."""
+    extensions: model streams embed HCPS and the upscaler is a standalone NDSR pack."""
+    if d[:4] == b'NDSR':
+        out.extend(ndsr_shaders(d, label))
+        return
     pos = 0; compressed = []
     # Separate literal scans use Python's fast substring search. Alternation's
     # character-set search is costly across the archive's decoded texture data.
@@ -3290,7 +3314,7 @@ def scan_file_in(args):
     if ext in ('.data', '.patch', '.debug', '.nxpc') and os.path.exists(stem + '.dict'): return rel, {}, set(), {}   # read through its Next Level Games index (nlg_shaders)
     with open(path, 'rb') as f: head = f.read(16)
     found = []; trees = {}
-    if len(args) > 2 and args[2][0] == b'ARH1':
+    if len(args) > 2 and args[2][0] in (b'arh1', b'arh2'):
         arh_shaders(path, rel, args[2][1], found)
         return rel, uniq_keys(found), var_pairs(found), trees
     if head[:4] == NLG_DICT:
