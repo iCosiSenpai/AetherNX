@@ -19,6 +19,10 @@
 //   (16) a send whose upload fails keeps no extra cloud backup and prunes none (the damaged cloud file, the one cloud save a send keeps and replaces by itself)
 //   (17) a pull stopped between its moves (the app ended at each of the four): its journal is already on disk, the Mac launcher's send sends nothing, and the next start
 //        puts this device's save back whole (sync on or off); a pull that ends whole, either way, leaves no journal ((2), (3), (5), (6))
+//   (18) a restore (a front end put a backup back as the cloud's save, with the time in its header): it is a change of the cloud's save made then. Both changed and
+//        nothing asks: by its files' dates the backup is the older one and is replaced; put back by a restore later than this device's save it comes in, and this
+//        device's is kept; a front end that asks still asks. Restored to the very save last synced, it is not "only this one changed", for the start or for a send.
+//        Once a device has synced with it, it counts no more: the device plays on and its save goes out. What a device sends is no restore
 #include <dirent.h>
 #include <errno.h>
 #include <stdatomic.h>
@@ -132,6 +136,34 @@ static int cloud_value(const char *bundle, const char *value) {   // the cloud f
 static int unchanged(const char *p, const struct stat *was) { struct stat st; return !stat(p, &st) && st.st_ino == was->st_ino && st.st_size == was->st_size && st.st_mtimespec.tv_sec == was->st_mtimespec.tv_sec && st.st_mtimespec.tv_nsec == was->st_mtimespec.tv_nsec; }
 static int local_intact(const fixture *f, int device) { return same(f->prog, "LOCAL") && (!device || same(f->isl, "LOCAL_ISLAND")); }
 static int marked(const fixture *f) { char p[1400]; snprintf(p, sizeof p, "%s.pull", f->save); return exists(p); }   // a pull's journal is pending
+// (18) The cloud's file packed again, its files dated `date` (a backup is as old as the save it holds)
+static void pack_remote(const fixture *f, time_t date) {
+    char p[1500]; ss_meta m;
+    snprintf(p, sizeof p, "%s/remote/save/progress", f->dir); set_mtime(p, date);
+    snprintf(p, sizeof p, "%s/remote/save_device/island", f->dir); set_mtime(p, date);
+    snprintf(p, sizeof p, "%s/remote/save", f->dir); ss_pack(p, "0100abc", f->cfile, &m);
+}
+// The restore time as a front end's Restore writes it into a packed save's header (docs/frontends.md, The cloud saves folder): 8 bytes at 136, little-endian
+static void mark_restored(const char *bundle, int64_t when) { FILE *f = fopen(bundle, "r+b"); if (!f) return; fseek(f, 136, SEEK_SET); fwrite(&when, 1, 8, f); fclose(f); }
+static int sync_has(const fixture *f, const char *text) {   // <save>.sync holds this text
+    char p[1400], b[8192] = {0}; snprintf(p, sizeof p, "%s.sync", f->save);
+    FILE *h = fopen(p, "r"); if (!h) return 0;
+    size_t k = fread(b, 1, sizeof b - 1, h); fclose(h); b[k] = 0;
+    return strstr(b, text) != NULL;
+}
+enum { NOT_IN_STEP = 64 };
+// One start of the game on the fixture's device: the first mount, then a flush. 0: in step with the cloud; NOT_IN_STEP: not; 3: the mount refused
+static int start(const fixture *f, const char *choice) {
+    fflush(stdout); fflush(stderr); pid_t c = fork();
+    if (!c) {
+        setenv("DM_SAVE_SYNC", f->cloud, 1);
+        if (choice) setenv("DM_SAVE_SYNC_CHOICE", choice, 1); else unsetenv("DM_SAVE_SYNC_CHOICE");
+        if (save_sync_mount(f->save, "0100abc")) _exit(3);
+        _exit(save_sync_flush(10000) == 1 ? 0 : NOT_IN_STEP);
+    }
+    int st; waitpid(c, &st, 0);
+    return WIFEXITED(st) ? WEXITSTATUS(st) : 99;
+}
 
 int main(void) {
     const char *sp = getenv("TMPDIR"); snprintf(root, sizeof root, "%s/t_save_sync_faults.XXXXXX", sp ? sp : "/private/tmp");
@@ -218,8 +250,8 @@ int main(void) {
 
     printf("(7) the first mount, with a pull that fails\n");
     {   fixture f; make_fixture(&f, "mount_fail", 1);
-        ss_meta mine; ss_scan(f.save, &mine); write_base(f.save, f.cfile, mine.hash);   // in step before: only the cloud's changed, so the mount pulls
-        char base_before[SS_HASH + 1], base_after[SS_HASH + 1]; read_base(f.save, f.cfile, base_before);
+        ss_meta mine; ss_scan(f.save, &mine); write_base(f.save, f.cfile, mine.hash, 0);   // in step before: only the cloud's changed, so the mount pulls
+        char base_before[SS_HASH + 1], base_after[SS_HASH + 1]; read_base(f.save, f.cfile, base_before, NULL);
         fflush(stdout); pid_t c = fork();
         if (!c) {
             setenv("DM_SAVE_SYNC", f.cloud, 1); fail_moves(2, 0);
@@ -227,7 +259,7 @@ int main(void) {
             _exit(hook_calls >= 2 ? 0 : 3);
         }
         int st; waitpid(c, &st, 0);
-        read_base(f.save, f.cfile, base_after);
+        read_base(f.save, f.cfile, base_after, NULL);
         CHECK(WIFEXITED(st) && !WEXITSTATUS(st), "the mount pulled and its second move failed");
         CHECK(local_intact(&f, 1) && !strcmp(base_before, base_after), "this device's save and its sync state are as they were");
         snprintf(p, sizeof p, "%s.sync-tmp", f.save); CHECK(!exists(p) || count_dirs(p, "") == 0, "nothing is left beside the save");
@@ -284,14 +316,14 @@ int main(void) {
 
     printf("(12) a send when both changed\n");
     {   fixture f; make_fixture(&f, "send_both", 1);
-        write_base(f.save, f.cfile, "00000000000000000000000000000000");   // neither side is the last sync's
+        write_base(f.save, f.cfile, "00000000000000000000000000000000", 0);   // neither side is the last sync's
         time_t now = time(NULL); set_mtime(f.prog, now - 1000); set_mtime(f.isl, now - 1000);
         struct stat before; stat(f.cfile, &before);
         snprintf(q, sizeof q, "%s-backups", f.save);
         CHECK(!send_save(f.save, "0100ABC", f.cfile) && unchanged(f.cfile, &before) && count_dirs(q, " cloud") == 0, "the cloud's is newer: not sent, the cloud's file untouched, nothing to keep");
         set_mtime(f.prog, now + 1000);
         CHECK(!send_save(f.save, "0100ABC", f.cfile) && unchanged(f.cfile, &before) && count_dirs(q, " cloud") == 0, "this one newer: not sent either, the next start decides");
-        ss_meta cm; ss_read(f.cfile, NULL, &cm); write_base(f.save, f.cfile, cm.hash);   // what a start that chose this device's save records: the cloud's is the one it replaces
+        ss_meta cm; ss_read(f.cfile, NULL, &cm); write_base(f.save, f.cfile, cm.hash, 0);   // what a start that chose this device's save records: the cloud's is the one it replaces
         CHECK(send_save(f.save, "0100ABC", f.cfile) == 1 && cloud_value(f.cfile, "LOCAL"), "after a start that chose this one, it is sent");
     }
 
@@ -300,12 +332,12 @@ int main(void) {
         char remote[1400]; snprintf(remote, sizeof remote, "%s/remote/save/progress", f.dir);
         setxattr(remote, GUEST_NAME, "Progress", 8, 0, XATTR_NOFOLLOW);
         snprintf(p, sizeof p, "%s/remote/save", f.dir); ss_pack(p, "0100abc", f.cfile, &m);
-        write_base(f.save, f.cfile, "00000000000000000000000000000000");
+        write_base(f.save, f.cfile, "00000000000000000000000000000000", 0);
         set_mtime(f.prog, time(NULL) + 1000);   // this one is the newer: the start chooses it, keeping the cloud's first
         snprintf(q, sizeof q, "%s-backups", f.save);
         for (int i = 0; i < KEEP_BACKUPS; i++) { snprintf(p, sizeof p, "%s/2001-01-01 00.00.%02d cloud", q, i); mkdirs(p); }
         struct stat before; stat(f.cfile, &before);
-        char base_before[SS_HASH + 1], base_after[SS_HASH + 1]; read_base(f.save, f.cfile, base_before);
+        char base_before[SS_HASH + 1], base_after[SS_HASH + 1]; read_base(f.save, f.cfile, base_before, NULL);
         fflush(stdout); pid_t c = fork();
         if (!c) {
             setenv("DM_SAVE_SYNC", f.cloud, 1); unsetenv("DM_SAVE_SYNC_CHOICE");
@@ -315,7 +347,7 @@ int main(void) {
             _exit(!want && failed ? 0 : 7);
         }
         int st; waitpid(c, &st, 0);
-        read_base(f.save, f.cfile, base_after);
+        read_base(f.save, f.cfile, base_after, NULL);
         snprintf(p, sizeof p, "%s/2001-01-01 00.00.00 cloud", q);
         CHECK(WIFEXITED(st) && !WEXITSTATUS(st) && unchanged(f.cfile, &before) && !strcmp(base_before, base_after), "not sent: the cloud's save and the sync state stay");
         CHECK(count_dirs(q, " cloud") == KEEP_BACKUPS && exists(p), "the part of a backup is removed, and the oldest whole one stays (%d)", count_dirs(q, " cloud"));
@@ -323,7 +355,7 @@ int main(void) {
 
     printf("(14) the sync state belongs to one cloud file\n");
     {   fixture f; make_fixture(&f, "send_folder", 1);
-        ss_meta mine; ss_scan(f.save, &mine); write_base(f.save, f.cfile, mine.hash);
+        ss_meta mine; ss_scan(f.save, &mine); write_base(f.save, f.cfile, mine.hash, 0);
         struct stat before; stat(f.cfile, &before);
         CHECK(send_save(f.save, "0100ABC", f.cfile) == 1 && unchanged(f.cfile, &before), "in step with folder A: nothing to send");
         char b[1400]; snprintf(b, sizeof b, "%s/cloudB/0100ABC/save.dmsync", f.dir);
@@ -337,7 +369,7 @@ int main(void) {
 
     printf("(15) a pull that could not be put back refuses the mount until it is\n");
     {   fixture f; make_fixture(&f, "stuck", 1);
-        ss_meta mine; ss_scan(f.save, &mine); write_base(f.save, f.cfile, mine.hash);   // only the cloud's changed: the mount pulls
+        ss_meta mine; ss_scan(f.save, &mine); write_base(f.save, f.cfile, mine.hash, 0);   // only the cloud's changed: the mount pulls
         fflush(stdout); pid_t c = fork();
         if (!c) { setenv("DM_SAVE_SYNC", f.cloud, 1); fail_moves(3, 4); int r = save_sync_mount(f.save, "0100abc"); _exit(r == -1 && !atomic_load(&g_on) ? 0 : 5); }
         int st; waitpid(c, &st, 0);
@@ -360,7 +392,7 @@ int main(void) {
     printf("(16) a send whose upload fails\n");
     {   fixture f; make_fixture(&f, "send_store_fail", 1);
         put(f.cfile, "DAMAGED");   // no save can be read from it: the send keeps the file, then replaces it
-        write_base(f.save, f.cfile, "00000000000000000000000000000000");
+        write_base(f.save, f.cfile, "00000000000000000000000000000000", 0);
         snprintf(q, sizeof q, "%s-backups", f.save);
         for (int i = 0; i < KEEP_BACKUPS; i++) { snprintf(p, sizeof p, "%s/2001-01-01 00.00.%02d cloud", q, i); mkdirs(p); }
         char title_dir[1400]; snprintf(title_dir, sizeof title_dir, "%s/0100ABC", f.cloud);
@@ -379,7 +411,7 @@ int main(void) {
     for (int at = 1; at <= 4; at++) {
         char name[32]; snprintf(name, sizeof name, "pull_ended%d", at);
         fixture f; make_fixture(&f, name, 1);
-        ss_meta mine; ss_scan(f.save, &mine); write_base(f.save, f.cfile, mine.hash);   // only the cloud's changed: a start would pull
+        ss_meta mine; ss_scan(f.save, &mine); write_base(f.save, f.cfile, mine.hash, 0);   // only the cloud's changed: a start would pull
         fflush(stdout); pid_t c = fork();
         if (!c) { hooks_off(); hook_on = 1; hook_end_at = at; pull(f.save, f.bundle, &m, kept, sizeof kept); _exit(0); }
         int st; waitpid(c, &st, 0);
@@ -399,6 +431,103 @@ int main(void) {
                       "the next start, sync on, puts this device's save back, then pulls again: the cloud's in place, this device's whole in one backup");
         else CHECK(WIFEXITED(st) && !WEXITSTATUS(st) && !marked(&f) && local_intact(&f, 1) && count_dirs(q, " local") == 0,
                    "the next start, sync off, puts this device's save back whole: no journal, no backup left of the pull");
+    }
+
+    printf("(18) a backup a front end put back as the cloud's save\n");
+    hooks_off();
+    {   static const char NONE[] = "00000000000000000000000000000000";   // a base that is neither side's: both changed
+        time_t now = time(NULL); char back[1400], line[2048], want[64]; ss_meta r;
+        {   // the time in the header
+            fixture f; make_fixture(&f, "restore_header", 1);
+            CHECK(!ss_read(f.cfile, NULL, &m) && !m.restored, "what a device packs is no restore");
+            mark_restored(f.cfile, 1900000000);
+            CHECK(!ss_read(f.cfile, NULL, &r) && r.restored == 1900000000 && !strcmp(r.hash, m.hash) && !strcmp(r.device, m.device) && r.saved == m.saved && r.files == m.files,
+                  "the restore time is read from the header, and the save is the same save (%lld)", (long long)r.restored);
+            mark_restored(f.cfile, -5);
+            CHECK(!ss_read(f.cfile, NULL, &r) && !r.restored, "a time before 1970 is none");
+            char name[64]; memset(name, 'M', sizeof name);
+            FILE *h = fopen(f.cfile, "r+b"); fseek(h, 80, SEEK_SET); fwrite(name, 1, 63, h); fputc(0, h); fclose(h);
+            CHECK(!ss_read(f.cfile, NULL, &r) && !r.restored && strlen(r.device) == 63, "a file from before with a device name over its 56 bytes: the name whole, no restore time (%zu)", strlen(r.device));
+        }
+        {   // which way (decide: ss_decide with the rule for a restore)
+            ss_meta L = {.hash = "11111111111111111111111111111111", .saved = 100, .files = 1}, R = {.hash = "22222222222222222222222222222222", .saved = 50, .files = 1}, S;
+            static const char B[] = "33333333333333333333333333333333"; int both;
+            CHECK(decide(&L, B, 0, &R, 0, &both) == SS_PUSH && both, "both changed, the cloud's the older by its files and no restore: this device's is the newer");
+            R.restored = 200;
+            CHECK(decide(&L, B, 0, &R, 0, &both) == SS_PULL && both, "the same save put back by a restore after this device last saved: as new as its restore, it comes in");
+            CHECK(decide(&L, B, 0, &R, 1, &both) == SS_ASK && both, "a front end asks: it asks");
+            CHECK(decide(&L, L.hash, 0, &R, 0, &both) == SS_PULL && !both, "only the cloud's changed: it comes in, as after any other change");
+            CHECK(decide(&L, R.hash, 0, &R, 0, &both) == SS_PULL && both, "restored to the save last synced while this device's changed: both changed, not only this one");
+            CHECK(decide(&L, R.hash, 0, &R, 1, &both) == SS_ASK && both, "and a front end asks");
+            CHECK(decide(&L, R.hash, 200, &R, 0, &both) == SS_PUSH && !both, "once this device has synced with that restore it is the save last synced: only this one changed");
+            S = R; S.restored = 0;
+            CHECK(decide(&S, B, 0, &R, 0, &both) == SS_KEEP && !both, "the same save here already: nothing to do");
+            R.restored = 80;
+            CHECK(decide(&L, B, 0, &R, 0, &both) == SS_PUSH && both, "this device saved after the restore: its save is the newer");
+        }
+        {   // the sync state keeps the restore time, for each of two destinations
+            fixture f; make_fixture(&f, "restore_state", 0); char hb[SS_HASH + 1]; int64_t when = -1;
+            setenv("DM_SAVE_SYNC_PAIRED", "1", 1);
+            write_base(f.save, "/a/save.dmsync", "11111111111111111111111111111111", 111); write_base(f.save, "/b/save.dmsync", "22222222222222222222222222222222", 0);
+            unsetenv("DM_SAVE_SYNC_PAIRED");
+            read_base(f.save, "/a/save.dmsync", hb, &when); CHECK(hb[0] == '1' && when == 111, "the standby destination keeps the restore time it was in step with (%lld)", (long long)when);
+            read_base(f.save, "/b/save.dmsync", hb, &when); CHECK(hb[0] == '2' && when == 0, "the active one has none (%lld)", (long long)when);
+        }
+        {   // both changed, nothing asks, and the backup has no restore time: the older one by its files
+            fixture f; make_fixture(&f, "restore_unmarked", 1);
+            write_base(f.save, f.cfile, NONE, 0); pack_remote(&f, now - 5000); set_mtime(f.prog, now - 1000); set_mtime(f.isl, now - 1000);
+            CHECK(start(&f, NULL) == 0 && local_intact(&f, 1) && cloud_value(f.cfile, "LOCAL"), "a backup copied back with no restore time is the older save: this device's replaces it");
+            backup_of_side(f.save, "cloud", back, sizeof back); snprintf(p, sizeof p, "%s/save/progress", back);
+            CHECK(*back && same(p, "REMOTE"), "(kept in this device's backups)");
+        }
+        {   // the same, put back by a restore after this device last saved
+            fixture f; make_fixture(&f, "restore_marked", 1);
+            write_base(f.save, f.cfile, NONE, 0); pack_remote(&f, now - 5000); mark_restored(f.cfile, now - 10); set_mtime(f.prog, now - 1000); set_mtime(f.isl, now - 1000);
+            CHECK(start(&f, NULL) == 0 && same(f.prog, "REMOTE") && same(f.isl, "REMOTE_ISLAND") && cloud_value(f.cfile, "REMOTE"), "put back by a restore: it comes in, and stays the cloud's save");
+            backup_of_side(f.save, "local", back, sizeof back); snprintf(p, sizeof p, "%s/save/progress", back); snprintf(q, sizeof q, "%s-backups", f.save);
+            CHECK(*back && same(p, "LOCAL") && count_dirs(q, " cloud") == 0, "this device's save is kept in its backups");
+            snprintf(want, sizeof want, "restored\t%lld\n", (long long)(now - 10));
+            CHECK(sync_has(&f, want), "the sync state keeps the restore time it is in step with");
+            CHECK(start(&f, NULL) == 0 && same(f.prog, "REMOTE") && count_dirs(q, " local") == 1 && count_dirs(q, " cloud") == 0, "the next start finds the two in step: nothing moves");
+            put(f.prog, "LOCAL2"); set_mtime(f.prog, now - 500);   // older than the restore: counted again, the restore would come back in over it
+            CHECK(start(&f, NULL) == 0 && same(f.prog, "LOCAL2") && cloud_value(f.cfile, "LOCAL2") && count_dirs(q, " local") == 1, "this device plays on: only its save changed, and it goes out");
+            CHECK(!ss_read(f.cfile, NULL, &r) && !r.restored && !sync_has(&f, "restored\t"), "what a device sends is no restore, and the sync state has none");
+        }
+        {   // this device saved after the restore
+            fixture f; make_fixture(&f, "restore_then_played", 1);
+            write_base(f.save, f.cfile, NONE, 0); pack_remote(&f, now - 5000); mark_restored(f.cfile, now - 2000); set_mtime(f.prog, now - 1000); set_mtime(f.isl, now - 1000);
+            CHECK(start(&f, NULL) == 0 && local_intact(&f, 1) && cloud_value(f.cfile, "LOCAL"), "this device saved after the restore: its save is the newer, and goes out");
+            backup_of_side(f.save, "cloud", back, sizeof back); snprintf(p, sizeof p, "%s/save/progress", back);
+            CHECK(*back && same(p, "REMOTE"), "the restored save it replaced is kept in this device's backups");
+        }
+        {   // a front end that asks
+            fixture f; make_fixture(&f, "restore_ask", 1);
+            write_base(f.save, f.cfile, NONE, 0); pack_remote(&f, now - 5000); mark_restored(f.cfile, now - 10); set_mtime(f.prog, now - 1000); set_mtime(f.isl, now - 1000);
+            snprintf(q, sizeof q, "%s-backups", f.save); snprintf(want, sizeof want, " crestored=%lld", (long long)(now - 10));
+            CHECK(!save_sync_report(f.save, "0100abc", f.cloud, 0, line, sizeof line) && strstr(line, "conflict=1") && strstr(line, want), "the report: a conflict, and when the cloud's was restored (%s)", line);
+            CHECK(start(&f, "ask") == NOT_IN_STEP && local_intact(&f, 1) && cloud_value(f.cfile, "REMOTE") && !exists(q), "a front end asks and no choice yet: neither replaces the other");
+            ss_read(f.cfile, NULL, &r); char choice[64]; snprintf(choice, sizeof choice, "cloud:%s", r.hash);
+            CHECK(start(&f, choice) == 0 && same(f.prog, "REMOTE") && cloud_value(f.cfile, "REMOTE"), "the player picks the restored save: it comes in");
+        }
+        {   // restored to the very save this device last synced with, while this device played on
+            fixture f; make_fixture(&f, "restore_to_base", 1);
+            pack_remote(&f, now - 5000); ss_read(f.cfile, NULL, &r); write_base(f.save, f.cfile, r.hash, 0); set_mtime(f.prog, now - 1000); set_mtime(f.isl, now - 1000);
+            CHECK(!save_sync_report(f.save, "0100abc", f.cloud, 0, line, sizeof line) && strstr(line, "conflict=0") && strstr(line, " crestored=0"), "before the restore only this device's changed: no conflict (%s)", line);
+            mark_restored(f.cfile, now - 10);
+            struct stat before; stat(f.cfile, &before);
+            CHECK(!send_save(f.save, "0100ABC", f.cfile) && unchanged(f.cfile, &before), "a send does not replace a save restored since the last sync, though its content is the one last synced");
+            CHECK(!save_sync_report(f.save, "0100abc", f.cloud, 0, line, sizeof line) && strstr(line, "conflict=1"), "the report says both changed (%s)", line);
+            CHECK(start(&f, NULL) == 0 && same(f.prog, "REMOTE") && cloud_value(f.cfile, "REMOTE"), "the start decides: the restore is the later, and comes in");
+            backup_of_side(f.save, "local", back, sizeof back); snprintf(p, sizeof p, "%s/save/progress", back);
+            CHECK(*back && same(p, "LOCAL"), "this device's save is kept in its backups");
+        }
+        {   // the same, but this device saved after the restore
+            fixture f; make_fixture(&f, "restore_to_base_played", 1);
+            pack_remote(&f, now - 5000); ss_read(f.cfile, NULL, &r); write_base(f.save, f.cfile, r.hash, 0); mark_restored(f.cfile, now - 2000); set_mtime(f.prog, now - 1000); set_mtime(f.isl, now - 1000);
+            CHECK(start(&f, NULL) == 0 && local_intact(&f, 1) && cloud_value(f.cfile, "LOCAL"), "this device saved after it: the start chooses its save, and the send replaces the restored one");
+            backup_of_side(f.save, "cloud", back, sizeof back); snprintf(p, sizeof p, "%s/save/progress", back);
+            CHECK(*back && same(p, "REMOTE"), "which is kept in this device's backups first");
+        }
     }
 
     printf("== save sync faults: %d checks, %d failed ==\n", checks, fails);

@@ -357,6 +357,7 @@ int main(void) {
     CHECK(REPORT(R2, cloud4) && strstr(line, "conflict=1") && strstr(line, "cfiles=1 ") && strstr(line, cdev),
           "both changed: the report says conflict, with the cloud's device (%s)", line);
     CHECK(strstr(line, " pull=0") != NULL, "no pull pending (%s)", line);
+    CHECK(strstr(line, " crestored=0") != NULL, "the cloud's save is as a device sent it, not a backup put back (%s)", line);
     {   // a pull that did not finish: what is in place may be half the cloud's, so no comparison is offered; the start's mount puts this device's save back first
         char J[1300]; snprintf(J, sizeof J, "%s.pull", R2); put(J, "kept\t\nfolder\t0\t1\t0\t0\nfolder\t1\t0\t0\t0\n");
         CHECK(REPORT(R2, cloud4) && strstr(line, " pull=1") && strstr(line, "conflict=0"), "a pending pull: said so, and no conflict offered (%s)", line);

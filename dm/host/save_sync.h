@@ -10,6 +10,10 @@
 // read_choice): with no choice, neither replaces the other, the game plays on with this device's and nothing is sent; with one, the chosen save wins. Without
 // DM_SAVE_SYNC_CHOICE the newer one wins. Only the start decides: a send replaces a cloud save only when it is no save, the one last synced, damaged, or the one the start
 // chose against. A cloud that changed since (or that the start could not read) waits for the next start.
+// A restore: a front end (the companion's Restore, docs/companion.md) puts a backup back as the cloud's save and writes when into the file's header (ss_meta.restored).
+// That is a change of the cloud's save made at the time of the restore, whatever the dates of the files in it, and even when its content is the save last synced:
+// against a device's save that changed too it is as new as its restore, not as old as the backup, and no send replaces it as "the one last synced". <DM_SAVE>.sync keeps
+// the restore time of the cloud's save it is in step with, so a restore counts once for each device (save_sync.c, decide).
 // Every save this replaces, here or in the cloud, is kept first in <DM_SAVE>-backups/<date> <side>; the newest 10 of each side stay (pruned only once the backup is whole and,
 // when the send replaces the save, once the replacement went through).
 // A save folder that cannot be read is an error, never "no save": the mount turns sync off, a pull moves nothing and a send sends nothing. A pull writes its journal,
@@ -29,6 +33,7 @@ typedef struct {
     char title[24], device[64];
     int files;                // regular files; 0 = no save
     int64_t bytes;            // their contents' size: tells the player a new game's save from one with progress (save_sync_report)
+    int64_t restored;         // a packed save's header: when a front end put this save back from a backup (seconds since 1970); 0: it is as a device sent it
 } ss_meta;
 
 // ---- the parts (dm/host/tests/t_save_sync.c calls them) ----
@@ -48,8 +53,10 @@ ss_way ss_decide(const char *local, const char *base, const char *remote, int64_
 // Before the start, the two saves as the game's first mount will compare them, in one line of key=value pairs (no newline):
 //   sync=<0 off | 1 on> cloud=<1 read | 0 no save there (or a damaged file, which the mount replaces) | -1 not read within wait_ms>
 //   local=<hash|-> saved=<secs> files=<n> size=<bytes> chash=<hash|-> csaved=<secs> cfiles=<n> csize=<bytes> cdevice=<model, e.g. iPhone17,1|-> sametitle=<0|1> conflict=<0|1> pull=<0|1>
+//   crestored=<secs, when the cloud's save was put back from a backup | 0 it was not>
 // pull = a pull of the cloud's save did not finish (<save>.pull): what is in place may be half the cloud's, so conflict is 0; the start's mount puts this device's save back first
-// conflict = both changed since the last sync (or this device has never synced and both have a save): the case the front end shows both saves for and answers with
+// conflict = both changed since the last sync (or this device has never synced and both have a save; a restore this device has not synced with is a change of the
+// cloud's, also back to the save last synced): the case the front end shows both saves for and answers with
 // DM_SAVE_SYNC_CHOICE=local:<local> or cloud:<chash>; with no conflict it passes `ask`, and with cloud=-1 `offline` (the mount does not wait again).
 // `save` is the committed save folder (DM_SAVE), `title` the title ID, `folder` the cloud folder as DM_SAVE_SYNC would name it (NULL: DM_SAVE_SYNC itself), and
 // `wait_ms` how long the cloud's file may take to come (<= 0: as long as the mount waits). Blocks that long at most: call it off the main thread.
