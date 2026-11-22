@@ -625,6 +625,7 @@ struct SettingRow: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                     .tint(.secondary)
+                    .fixedSize()   // the menu keeps its value's width, and a long note wraps beside it: sharing the row cut the value ("American…", or only "…" beside a longer translation)
                 } label: { settingLabel }
 #else
                 Picker(selection: m.binding(s)) {
