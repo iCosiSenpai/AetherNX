@@ -234,19 +234,22 @@ if var followed = BuildProgress(jobLine) {
 
 // MARK: The live link: the phone's end with a scripted Mac (no connection; link_check.swift has the real one)
 
-let scripted = MacLink(store: MemoryPairingStore(), phoneID: "P1", deviceName: "iPhone", deviceKind: "iPhone")
-var endedJobs: [BuildProgress] = []
-scripted.onJobEnded = { endedJobs.append($0) }
-expect(!scripted.isConnected && scripted.status == .off && !scripted.requestInstall(titleId: title), "no Mac: nothing to ask")
-scripted.play([#"{"link": "hello", "format": 1, "mac": "M1", "name": "Studio Mac", "app": "1.1.0"}"#, jobLine.encoded()] + stageLines, from: "A Mac")
-expect(scripted.status == .connected("Studio Mac") && scripted.job?.stageIndex == 3 && scripted.job?.game == "Starfall Tactics", "the Mac's name from its hello, its job and where it is")
-expect(scripted.requestInstall(titleId: title.lowercased()) && scripted.answers[title]?.state == "asked", "an install asked of the scripted Mac")
-var succeededLine = jobLine
-succeededLine.state = "succeeded"
-scripted.play([succeededLine.encoded(), succeededLine.encoded()], from: "A Mac")
-expect(scripted.job?.state == .succeeded && endedJobs.map(\.id) == ["J1"], "a job that ends while it is followed is announced, once")
-scripted.dismissJob()
-expect(scripted.job == nil, "a job that ended is put away")
+// MacLink lives on the main actor, and this file's top level is not async: the main thread says so itself.
+MainActor.assumeIsolated {
+    let scripted = MacLink(store: MemoryPairingStore(), phoneID: "P1", deviceName: "iPhone", deviceKind: "iPhone")
+    var endedJobs: [BuildProgress] = []
+    scripted.onJobEnded = { endedJobs.append($0) }
+    expect(!scripted.isConnected && scripted.status == .off && !scripted.requestInstall(titleId: title), "no Mac: nothing to ask")
+    scripted.play([#"{"link": "hello", "format": 1, "mac": "M1", "name": "Studio Mac", "app": "1.1.0"}"#, jobLine.encoded()] + stageLines, from: "A Mac")
+    expect(scripted.status == .connected("Studio Mac") && scripted.job?.stageIndex == 3 && scripted.job?.game == "Starfall Tactics", "the Mac's name from its hello, its job and where it is")
+    expect(scripted.requestInstall(titleId: title.lowercased()) && scripted.answers[title]?.state == "asked", "an install asked of the scripted Mac")
+    var succeededLine = jobLine
+    succeededLine.state = "succeeded"
+    scripted.play([succeededLine.encoded(), succeededLine.encoded()], from: "A Mac")
+    expect(scripted.job?.state == .succeeded && endedJobs.map(\.id) == ["J1"], "a job that ends while it is followed is announced, once")
+    scripted.dismissJob()
+    expect(scripted.job == nil, "a job that ended is put away")
+}
 
 print("companion check: \(failures) failed")
 exit(failures == 0 ? 0 : 1)
