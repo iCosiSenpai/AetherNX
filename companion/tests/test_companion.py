@@ -1,5 +1,6 @@
 """AetherNX Companion (docs/companion.md): its game-folder logic compiled for the Mac and run by companion_check.swift against synthetic folders
-(the demo library among them), and every string the app shows has its Italian. No Simulator, window, iCloud or game file is needed."""
+(the demo library among them), its live link run against Studio's own server over the loopback interface (link_check.swift), and every string the
+app shows has its Italian. No Simulator, window, iCloud, local network or game file is needed."""
 import json
 from pathlib import Path
 import re
@@ -50,6 +51,27 @@ class CompanionTests(unittest.TestCase):
         ran = subprocess.run([str(check), str(scratch)], capture_output=True, text=True, timeout=120)
         self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
         self.assertIn('companion check: 0 failed', ran.stdout)
+
+    def test_link_between_the_phone_and_the_mac(self):
+        """The live link end to end on this Mac: Studio's own server and the companion's own client, compiled into one library and joined over the
+        loopback interface by link_check.swift. No Bonjour, no local network and no device."""
+        lib = self.dir / 'link'
+        lib.mkdir()
+        sources = sorted(map(str, (COMPANION / 'Sources/Core').glob('*.swift'))) + [str(COMPANION.parent / 'studio/Sources/CompanionServer.swift')]
+        built = subprocess.run(['xcrun', 'swiftc', '-emit-library', '-enable-testing', '-swift-version', '5', '-target', MAC_TARGET, *self.cache,
+                                '-module-name', 'LinkLoopback', '-emit-module', '-emit-module-path', str(lib / 'LinkLoopback.swiftmodule'),
+                                *sources, '-o', str(lib / 'libLinkLoopback.dylib')], capture_output=True, text=True, timeout=600)
+        self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+        check = self.dir / 'link_check'
+        built = subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-target', MAC_TARGET, *self.cache, '-I', str(lib), '-L', str(lib), '-lLinkLoopback',
+                                '-Xlinker', '-rpath', '-Xlinker', str(lib), str(Path(__file__).with_name('link_check.swift')), '-o', str(check)],
+                               capture_output=True, text=True, timeout=600)
+        self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+        scratch = self.dir / 'link-scratch'
+        scratch.mkdir()
+        ran = subprocess.run([str(check), str(scratch)], capture_output=True, text=True, timeout=300)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        self.assertIn('link check: 0 failed', ran.stdout)
 
     @unittest.skipUnless(simulator_sdk(), 'needs the iOS Simulator SDK')
     def test_every_string_has_its_italian(self):

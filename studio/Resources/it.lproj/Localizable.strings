@@ -758,3 +758,34 @@
 "Use Google Drive as fallback" = "Usa Google Drive come riserva";
 "The selected cloud folder is unavailable." = "La cartella cloud selezionata non è disponibile.";
 "Each provider uses an AetherNX folder with a folder for each game. Select My Drive from Google Drive for desktop. The fallback is used when the primary folder is unavailable. Separate changes are kept for review. Rebuild existing Mac game apps to use the new routing." = "Ogni servizio usa una cartella AetherNX con una sottocartella per gioco. Seleziona Il mio Drive in Google Drive per desktop. La riserva si usa se la cartella principale non è disponibile. Le modifiche indipendenti si conservano per il confronto. Ricompila le app di gioco per Mac per usare il nuovo percorso.";
+
+/* The live link with AetherNX Companion (the card on the Devices page, the pairing sheet, the alert of an install a phone asks for) */
+
+"AetherNX Companion" = "AetherNX Companion";
+"Live link with AetherNX Companion" = "Collegamento live con AetherNX Companion";
+"The live link is off" = "Il collegamento live è spento";
+"On the local network as %@" = "Sulla rete locale come %@";
+"Not on the network now" = "Non in rete in questo momento";
+"Turn it on to let AetherNX Companion on your iPhone or iPad find this Mac on the local network, follow its builds and installs as they run, and ask for an install. A device pairs once, with a code shown here." = "Attivalo per permettere ad AetherNX Companion sul tuo iPhone o iPad di trovare questo Mac sulla rete locale, seguire build e installazioni mentre sono in corso e chiedere un'installazione. Un dispositivo si abbina una volta sola, con un codice mostrato qui.";
+"No iPhone or iPad paired yet. Install AetherNX Companion on the device, then pair it here." = "Nessun iPhone o iPad ancora abbinato. Installa AetherNX Companion sul dispositivo, poi abbinalo qui.";
+"Pair an iPhone or iPad…" = "Abbina un iPhone o iPad…";
+"Connected now" = "Collegato ora";
+"Paired %@" = "Abbinato il %@";
+"Installs without asking" = "Installa senza chiedere";
+"An install this device asks for starts at once, without your OK on this Mac" = "Un'installazione chiesta da questo dispositivo parte subito, senza il tuo OK su questo Mac";
+"Forget" = "Dimentica";
+"This device has to pair again before it connects" = "Questo dispositivo dovrà abbinarsi di nuovo prima di collegarsi";
+"Pair an iPhone or iPad" = "Abbina un iPhone o iPad";
+"In AetherNX Companion on the device, open Mac, choose %@ and type this code. The device and this Mac must be on the same network." = "In AetherNX Companion sul dispositivo, apri Mac, scegli %@ e digita questo codice. Il dispositivo e questo Mac devono essere sulla stessa rete.";
+"The code is good for one device and for two minutes. Paired devices that are not connected yet wait while it shows." = "Il codice vale per un solo dispositivo e per due minuti. I dispositivi abbinati non ancora collegati aspettano finché è mostrato.";
+"%@ is paired." = "%@ è abbinato.";
+"An install it asks for waits for your OK on this Mac, until you choose Always Allow for it." = "Le installazioni che chiede aspettano il tuo OK su questo Mac, finché non scegli Consenti sempre per questo dispositivo.";
+"This code is no longer good: its two minutes passed, or it met too many wrong tries." = "Questo codice non è più valido: sono passati i due minuti, oppure ci sono stati troppi tentativi sbagliati.";
+"Show a New Code" = "Mostra un nuovo codice";
+"Install %@ on %@?" = "Installare %1$@ su %2$@?";
+"%@ asked for it through AetherNX Companion. It is the same install as the Install button's." = "Lo ha chiesto %@ tramite AetherNX Companion. È la stessa installazione del pulsante Installa.";
+"%@ asked for it. Open AetherNX to answer." = "Lo ha chiesto %@. Apri AetherNX per rispondere.";
+"Always Allow %@" = "Consenti sempre a %@";
+"Don't Install" = "Non installare";
+"AetherNX Companion: %@ is paired with this Mac." = "AetherNX Companion: %@ è abbinato a questo Mac.";
+"AetherNX Companion: %@ asks to install %@ on %@." = "AetherNX Companion: %1$@ chiede di installare %2$@ su %3$@.";

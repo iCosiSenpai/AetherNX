@@ -4,6 +4,7 @@ import SwiftUI
 struct GameView: View {
     let id: GameFolder.ID
     @Environment(LibraryStore.self) private var store
+    @Environment(MacLink.self) private var link
     @Environment(\.openURL) private var openURL
     @State private var notAnswering = false
     @State private var editMode: EditMode = .inactive
@@ -74,6 +75,10 @@ struct GameView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .disabled(game.titleId == nil)
+                // Offered once this device paired with a Mac: before that the Mac's page, from the library, is where the link starts
+                if let title = game.titleId, link.isConnected || !link.pairings.isEmpty {
+                    InstallFromMac(titleId: title)
+                }
             }
             .padding(.vertical, 4)
         }

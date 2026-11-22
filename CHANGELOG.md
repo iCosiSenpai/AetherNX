@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **A live link between Studio and AetherNX Companion** (first version, not yet tried on a device). Turn on AetherNX Companion on Studio's Devices page and pair an iPhone or iPad with the six digits it shows: the companion then follows the Mac's builds and installs as they run ("Step 3 of 7: Signing for your device"), and its *Install from the Mac* asks the Mac to install a game on that device. The Mac asks for your OK, until you choose Always Allow for that device. The link stays on the local network (Bonjour, TLS with a pre-shared key) and is off until you turn it on ([the companion](docs/companion.md#the-links-first-version)).
+
 ## 1.1.0
 
 - **New Mac game launcher.** A shorter, resizable window with a game header, settings by category and a fixed Play button. Advanced options, cloud saves and controller assignments are available from their own categories.
