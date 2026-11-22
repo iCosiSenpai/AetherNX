@@ -16,6 +16,7 @@
 - **Save backups.** The Saves section of a game's page lists the backups beside the save (the cloud sync's, made before it replaces a save, and yours), with **Back Up Now** and **Restore**: a restore sets this Mac's save aside first, and the game sends the restored save to iCloud Drive at its next start.
 - **Cartridge dumps with No-Intro names.** An XCI without a title ID in its name ("Game (USA, Europe) (En,…).xci") beside its update is the game's base, where the scan said "no base game NSP found"; a bare `v327680` in a name is the version.
 - The game apps on the iPhone and iPad read the game folder's Mods and Cheats, and open with an `aethernx-<title ID>://` link (`…://play` presses Play).
+- **The game apps in Italian.** The launcher, the in-game menu and the app's notices on the iPhone and iPad, and the Mac app's settings window, follow the system language: English or Italian, the settings' names and notes included. The Mac game window's own menus and the engine's messages stay in English.
 
 ## 1.0.0
 

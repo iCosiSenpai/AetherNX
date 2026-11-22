@@ -59,6 +59,17 @@ def fixups_keys(path):   # '# KEY<TAB>value' header rows of a rewriter table, as
 UNKNOWN_LANGUAGES = 'This game\'s files do not list its languages, so some of these may not be in the game. It may then show another one.'
 
 
+def texts():
+    """Every text a list can carry, as written here in English: the sections, each row's label and note, each choice's labels, the languages' names and their note.
+    The launchers show them in the player's language from their Settings.strings (dm/ios/Sources/<language>.lproj, the English as the key), which
+    dm/tools/tests/test_launcher_strings.py holds to this list: a text added to settings.tsv needs its translations there"""
+    out = set(SECTIONS) | {UNKNOWN_LANGUAGES} | {name for _, name in nacp.LANGUAGES}
+    for _, (_var, kind, values, _default, _cond, _section, label, note, _extra) in rows():
+        out |= {label, note}
+        if kind == 'choice' and values != 'languages': out |= {v.split('?', 1)[0].split('=', 1)[-1] for v in values.split(',')}
+    return sorted(out - {''})
+
+
 # Profile defaults that depend on the device, as the launcher resolves them (dm/ios/Sources/LauncherSettings.swift Setting.resolve): mem>=<GB>?<value>:<value> takes the first value on a
 # device with at least that much memory. pso_mtl4 auto (DM_GAME_PSO_MTL4 2): Metal 4 pipelines on a device with 10 GB or more; the host applies the same rule (nvn_mtl.m pso4_on)
 MEMORY_DEFAULTS = {'DM_GAME_PSO_MTL4': {'2': 'mem>=10?1:0'}}

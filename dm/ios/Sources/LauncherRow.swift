@@ -61,7 +61,7 @@ struct ControllerInfo: Identifiable, Equatable {
                 if p >= 0 && lit[id] != p { Self.lights(c, p); lit[id] = p }
             }
         }
-        let updated = now.map { c in ControllerInfo(id: ObjectIdentifier(c), name: c.vendorName ?? "Controller", kind: Self.kind(c), battery: Self.battery(c), player: player(c), supported: c.extendedGamepad != nil) }
+        let updated = now.map { c in ControllerInfo(id: ObjectIdentifier(c), name: c.vendorName ?? String(localized: "Controller"), kind: Self.kind(c), battery: Self.battery(c), player: player(c), supported: c.extendedGamepad != nil) }
         if updated != rows { rows = updated }
     }
     func move(_ id: ObjectIdentifier, to p: Int) {
@@ -102,14 +102,14 @@ struct ControllerInfo: Identifiable, Equatable {
         // Apple's category constants have no Nintendo entries; older drivers can expose only a vendor name.
         if name.contains("Joy-Con") || name.contains("JoyCon") { return "Joy-Con" }
         if (name.contains("Nintendo") && name.contains("Pro Controller")) || name == "Pro Controller" { return "Switch Pro Controller" }
-        return "Other"
+        return String(localized: "Other")
     }
     private static func battery(_ c: GCController) -> String {
         guard let b = c.battery else { return "" }
         var parts: [String] = []
         if b.batteryLevel.isFinite && (0...1).contains(b.batteryLevel) { parts.append("\(Int((b.batteryLevel * 100).rounded())) %") }
-        if b.batteryState == .charging { parts.append("Charging") }
-        if b.batteryState == .full { parts.append("Full") }
+        if b.batteryState == .charging { parts.append(String(localized: "Charging")) }
+        if b.batteryState == .full { parts.append(String(localized: "Full")) }
         return parts.joined(separator: " · ")
     }
 }
@@ -509,7 +509,7 @@ struct SummaryStrip: View {
         .focusRing(nav.isFocused(it.focus), tint, radius: 10)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(it.caption)
-        .accessibilityValue(it.value + (it.locked ? ", fixed" : it.changed ? ", changed from the tested default" : ""))
+        .accessibilityValue(it.value + (it.locked ? String(localized: ", fixed") : it.changed ? String(localized: ", changed from the tested default") : ""))
         .accessibilityHint("Shows this setting")
         .accessibilityAddTraits(.isButton)
     }
@@ -563,7 +563,7 @@ struct SettingRow: View {
     private var changed: Bool { !locked && m.isChanged(s) }
     private var note: String {
         guard locked else { return s.note }
-        return (s.note.isEmpty ? "" : s.note + " · ") + (m.fromLaunch.contains(s.env) ? "Set at launch" : "Set by an env file")
+        return (s.note.isEmpty ? "" : s.note + " · ") + (m.fromLaunch.contains(s.env) ? String(localized: "Set at launch") : String(localized: "Set by an env file"))
     }
     private var bounds: ClosedRange<Double> {
         let lo = s.min ?? 0, hi = s.max ?? 1
@@ -591,14 +591,16 @@ struct SettingRow: View {
     private var readout: some View { Text(m.valueLabel(s)).monospacedDigit().foregroundStyle(.secondary).contentTransition(.numericText()) }
     // The problem and the way out: which line to change, and the values it may take
     private var invalidHelp: String {
-        let where_ = m.fromLaunch.contains(s.env) ? "the launch environment" : "env.txt"
+        let where_ = m.fromLaunch.contains(s.env) ? String(localized: "the launch environment") : "env.txt"
         let takes: String
         switch s.kind {
-        case "range": takes = "a number from \(s.min.map { String($0) } ?? "?") to \(s.max.map { String($0) } ?? "?")"
+        case "range":
+            let low = s.min.map { String($0) } ?? "?", high = s.max.map { String($0) } ?? "?"
+            takes = String(localized: "a number from \(low) to \(high)")
         case "choice": takes = (s.options ?? []).compactMap(\.first).joined(separator: ", ")
-        default: takes = "\(s.onValue) or \(s.offValue)"
+        default: takes = String(localized: "\(s.onValue) or \(s.offValue)")
         }
-        return "Not a value this setting offers; the game gets it as set. Remove \(s.env) from \(where_), or set it to \(takes)."
+        return String(localized: "Not a value this setting offers; the game gets it as set. Remove \(s.env) from \(where_), or set it to \(takes).")
     }
 
     @ViewBuilder private var control: some View {
@@ -618,7 +620,7 @@ struct SettingRow: View {
 #if os(macOS)
                 LabeledContent {
                     Picker(s.label, selection: m.binding(s)) {
-                        ForEach(s.options ?? [], id: \.self) { o in Text(o.count > 1 ? o[1] : o.first ?? "").tag(o.first ?? "") }
+                        ForEach(s.options ?? [], id: \.self) { o in Text(Setting.label(of: o)).tag(o.first ?? "") }
                     }
                     .labelsHidden()
                     .pickerStyle(.menu)
@@ -626,7 +628,7 @@ struct SettingRow: View {
                 } label: { settingLabel }
 #else
                 Picker(selection: m.binding(s)) {
-                    ForEach(s.options ?? [], id: \.self) { o in Text(o.count > 1 ? o[1] : o.first ?? "").tag(o.first ?? "") }
+                    ForEach(s.options ?? [], id: \.self) { o in Text(Setting.label(of: o)).tag(o.first ?? "") }
                 } label: { settingLabel }
                 .pickerStyle(.menu)
                 .tint(.secondary)   // the value reads as the row's value, as on the Mac: the game's tint marks only what changed or has the focus

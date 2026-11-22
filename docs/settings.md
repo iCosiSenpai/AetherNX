@@ -4,6 +4,8 @@ The screen before the game starts shows the game, **Play**, and what Play starts
 
 A dot beside a setting means it differs from the game's tested default; touch and hold it (right-click on the Mac) for **Use tested default**. A lock means a file or the program that started the app sets it ([Settings in a file](#settings-in-a-file)); a value there that the setting does not offer is shown as it is, with a warning, and the game gets it as the file says. The buttons and the summary row take the game icon's colour.
 
+The screen, the Mac window and the in-game menu follow the system language: English or Italian. This page uses the English names.
+
 **With a game controller**: up and down move through the screen, left and right change the setting that is selected (or move along the summary row), A chooses (opens a menu's next value, turns a switch on or off, follows a summary entry to its setting), B goes back to **Play**, and + (Menu) starts the game from anywhere. The selected item has a coloured ring, and a line under the summary row shows the buttons in your controller's own symbols. The same works in the Mac window, where the controller also reaches **Show this window at launch** and **Quit**.
 
 - [Tested defaults](#tested-defaults)

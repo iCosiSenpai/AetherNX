@@ -60,20 +60,18 @@ struct SaveSyncReport {
         if cloudDevice.hasPrefix("iPhone") { return "iPhone" }
         if cloudDevice.hasPrefix("iPad") { return "iPad" }
         if cloudDevice.contains("Mac") { return "Mac" }
-        return cloudDevice.isEmpty ? "another device" : cloudDevice
+        return cloudDevice.isEmpty ? String(localized: "another device") : cloudDevice
     }
 
-    /// `here`: "iPhone" or "Mac"
-    func localLabel(here: String) -> String { "This \(here)'s: \(Self.when(localSaved)), \(Self.size(localSize))" }
-    var cloudLabel: String { "The \(cloudDeviceKind)'s in iCloud: \(Self.when(cloudSaved)), \(Self.size(cloudSize))" }
-    static let chooseTitle = "Which save do you want to play?"
+    /// `here`: "iPhone" or "Mac". Each text is one literal, since it is the key of its translation (<language>.lproj/Localizable.strings)
+    func localLabel(here: String) -> String { String(localized: "This \(here)'s: \(Self.when(localSaved)), \(Self.size(localSize))") }
+    var cloudLabel: String { String(localized: "The \(cloudDeviceKind)'s in iCloud: \(Self.when(cloudSaved)), \(Self.size(cloudSize))") }
+    static var chooseTitle: String { String(localized: "Which save do you want to play?") }
     func chooseMessage(here: String) -> String {
-        "Both this \(here)'s save and the one in iCloud changed since they were last the same. The newer one is not always the one with more progress: "
-            + "a new game saved a minute later is newer. The one you don't pick is kept in the save's backups folder."
+        String(localized: "Both this \(here)'s save and the one in iCloud changed since they were last the same. The newer one is not always the one with more progress: a new game saved a minute later is newer. The one you don't pick is kept in the save's backups folder.")
     }
-    static let unreadableTitle = "The cloud save didn't come"
+    static var unreadableTitle: String { String(localized: "The cloud save didn't come") }
     func unreadableMessage(here: String) -> String {
-        "iCloud didn't deliver this game's save in \(Self.waitMs / 1000) seconds. If you play this \(here)'s save now, it is not sent to iCloud "
-            + "until it has been compared with the cloud's at a later start."
+        String(localized: "iCloud didn't deliver this game's save in \(Int(Self.waitMs / 1000)) seconds. If you play this \(here)'s save now, it is not sent to iCloud until it has been compared with the cloud's at a later start.")
     }
 }

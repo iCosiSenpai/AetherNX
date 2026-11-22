@@ -40,7 +40,7 @@ private let cloudOverride: String? = {
         folder = dm_cloud_saves_path(&stale) ?? ""
         container = dm_cloud_container_path() ?? ""
         auto = dm_cloud_auto()
-        if stale.boolValue && folder.isEmpty { note = "The folder chosen before can no longer be read (the app is signed differently now). Choose it again." }
+        if stale.boolValue && folder.isEmpty { note = String(localized: "The folder chosen before can no longer be read (the app is signed differently now). Choose it again.") }
     }
     /// No folder picked, automatic iCloud on and available: the game syncs through the app's iCloud container
     var usingICloud: Bool { folder.isEmpty && auto && !container.isEmpty }
@@ -50,10 +50,10 @@ private let cloudOverride: String? = {
         return !folder.isEmpty ? folder : usingICloud ? container : nil
     }
     func turnOff() { dm_clear_cloud_saves(); dm_cloud_set_auto(false); refresh(); note = "" }
-    func useICloud() { dm_clear_cloud_saves(); dm_cloud_set_auto(true); refresh(); note = "Saved. The game syncs through iCloud when you press Play." }
+    func useICloud() { dm_clear_cloud_saves(); dm_cloud_set_auto(true); refresh(); note = String(localized: "Saved. The game syncs through iCloud when you press Play.") }
     var summary: String {
-        if let o = cloudOverride { return o == "0" || o.isEmpty ? "Off" : "env.txt" }
-        return !folder.isEmpty ? "On" : usingICloud ? "iCloud" : "Off"
+        if let o = cloudOverride { return o == "0" || o.isEmpty ? String(localized: "Off") : "env.txt" }
+        return !folder.isEmpty ? String(localized: "On") : usingICloud ? "iCloud" : String(localized: "Off")
     }
 }
 
@@ -68,12 +68,12 @@ private struct CloudSavesSection: View {
     var body: some View {
         Section {
             if let o = cloudOverride {
-                LabeledContent("Folder") { Text(o == "0" || o.isEmpty ? "Off" : o == "icloud" ? "icloud (the Mac's iCloud Drive: off here)" : o).lineLimit(2).truncationMode(.head) }
+                LabeledContent("Folder") { Text(o == "0" || o.isEmpty ? String(localized: "Off") : o == "icloud" ? String(localized: "icloud (the Mac's iCloud Drive: off here)") : o).lineLimit(2).truncationMode(.head) }
                 Label("DM_SAVE_SYNC is set by an env file or at launch, so this start uses it.", systemImage: "lock.fill")
                     .font(.footnote).foregroundStyle(.secondary)
             } else {
                 LabeledContent("Folder") {
-                    Text(!state.folder.isEmpty ? (state.folder as NSString).lastPathComponent : state.usingICloud ? "iCloud (automatic)" : "Off").lineLimit(1).truncationMode(.middle)
+                    Text(!state.folder.isEmpty ? (state.folder as NSString).lastPathComponent : state.usingICloud ? String(localized: "iCloud (automatic)") : String(localized: "Off")).lineLimit(1).truncationMode(.middle)
                 }
                 Button(state.folder.isEmpty ? "Choose a Cloud Folder…" : "Choose a Different Folder…") { state.picking = true }
                     .focusRing(focused, tint)
@@ -83,8 +83,8 @@ private struct CloudSavesSection: View {
                         // folder that is not there (a game Studio names otherwise) is not checked on a device yet: the player can still go to any folder from it
                         DocumentPicker(types: [.folder], directory: GameExtras.suggestedFolder(gameName: name)) { url in
                             state.picking = false
-                            if dm_store_cloud_saves(url) { state.note = "Saved. The game uses this folder when you press Play."; state.refresh() }
-                            else { state.note = "That folder could not be remembered. Try a different one." }
+                            if dm_store_cloud_saves(url) { state.note = String(localized: "Saved. The game uses this folder when you press Play."); state.refresh() }
+                            else { state.note = String(localized: "That folder could not be remembered. Try a different one.") }
                         } onCancel: { state.picking = false }
                     }
                 if !state.container.isEmpty && !state.usingICloud {
@@ -100,8 +100,8 @@ private struct CloudSavesSection: View {
             Text("Cloud Saves")
         } footer: {
             Text(!state.note.isEmpty ? state.note : !state.container.isEmpty
-                 ? "Saves sync through iCloud by themselves (iCloud Drive › AetherNX): on the Mac, choose that folder in the app's Cloud Saves. Or choose this game's folder in iCloud Drive › AetherNX (\(GameExtras.folderName(for: name))), which AetherNX on the Mac keeps: its mods and cheats then come with the save. The save comes in when the game starts and goes out after each save; a save that is replaced is kept in save-backups."
-                 : "Choose this game's folder in iCloud Drive › AetherNX (\(GameExtras.folderName(for: name))), which AetherNX on the Mac keeps: its mods and cheats then come with the save. Any folder in iCloud Drive works for the save, with the same one in the Mac app's Cloud Saves. The save comes in when the game starts and goes out after each save; a save that is replaced is kept in save-backups.")
+                 ? String(localized: "Saves sync through iCloud by themselves (iCloud Drive › AetherNX): on the Mac, choose that folder in the app's Cloud Saves. Or choose this game's folder in iCloud Drive › AetherNX (\(GameExtras.folderName(for: name))), which AetherNX on the Mac keeps: its mods and cheats then come with the save. The save comes in when the game starts and goes out after each save; a save that is replaced is kept in save-backups.")
+                 : String(localized: "Choose this game's folder in iCloud Drive › AetherNX (\(GameExtras.folderName(for: name))), which AetherNX on the Mac keeps: its mods and cheats then come with the save. Any folder in iCloud Drive works for the save, with the same one in the Mac app's Cloud Saves. The save comes in when the game starts and goes out after each save; a save that is replaced is kept in save-backups."))
         }
         .id("cloud")
     }
@@ -159,32 +159,33 @@ private struct GameExtrasSection: View {
     }
 
     private func status(_ m: GameExtras.Mod, _ f: GameExtras.Folder) -> String {
-        if m.romfs == nil { return m.hasCode ? "Code mod: not run" : "No romfs folder" }
-        if f.stateWaiting { return "Waiting for iCloud" }
-        if m.off { return "Off" }
-        if m.waiting > 0 { return "Downloading (\(m.waiting) files)" }
-        if m.hasColon { return "Not used: “:” in its path" }
-        return m.hasCode ? "On (files only)" : "On"
+        if m.romfs == nil { return m.hasCode ? String(localized: "Code mod: not run") : String(localized: "No romfs folder") }
+        if f.stateWaiting { return String(localized: "Waiting for iCloud") }
+        if m.off { return String(localized: "Off") }
+        if m.waiting > 0 { return String(localized: "Downloading (\(m.waiting) files)") }
+        if m.hasColon { return String(localized: "Not used: “:” in its path") }
+        return m.hasCode ? String(localized: "On (files only)") : String(localized: "On")
     }
 
     private func cheats(_ f: GameExtras.Folder) -> String {
-        guard f.cheats != nil else { return "No Cheats folder" }
-        if f.cheatsOff { return "Off" }
-        guard f.cheatFile != nil else { return mainBuildID == nil ? "Build unknown" : "None for this version" }
-        if f.cheatWaiting { return "Downloading" }
-        return f.cheatsOn == 1 ? "1 on" : "\(f.cheatsOn) on"
+        guard f.cheats != nil else { return String(localized: "No Cheats folder") }
+        if f.cheatsOff { return String(localized: "Off") }
+        guard f.cheatFile != nil else { return mainBuildID == nil ? String(localized: "Build unknown") : String(localized: "None for this version") }
+        if f.cheatWaiting { return String(localized: "Downloading") }
+        return f.cheatsOn == 1 ? String(localized: "1 on") : String(localized: "\(f.cheatsOn) on")
     }
 
     private func footer(_ f: GameExtras.Folder, cloud: String) -> String {
-        var t = "From \(GameExtras.displayName(f.base))."
+        var t = [String(localized: "From \(GameExtras.displayName(f.base)).")]   // one sentence each, so each has its translation
         if let up = GameExtras.gameFolderAbove(cloud, titleID: titleID) {
-            t += " This is the save's own folder inside \(GameExtras.displayName(up)): choose that one in Cloud Saves to bring the game's mods and cheats too."
+            t.append(String(localized: "This is the save's own folder inside \(GameExtras.displayName(up)): choose that one in Cloud Saves to bring the game's mods and cheats too."))
         }
-        if f.stateWaiting { t += " mods.json is not on this iPhone yet: no mod is used until iCloud brings it." }
-        if f.stateUnread { t += " mods.json cannot be read, so every mod is on." }
-        if !f.mods.isEmpty { t += " Mods higher in the list win when two change the same file." }
-        if f.cheatFile != nil, let b = mainBuildID { t += " Cheats: \(b).txt; they change data only on the iPhone." }
-        return t + " Turn them on and off in AetherNX on the Mac or in AetherNX Companion: they apply at the next Play."
+        if f.stateWaiting { t.append(String(localized: "mods.json is not on this iPhone yet: no mod is used until iCloud brings it.")) }
+        if f.stateUnread { t.append(String(localized: "mods.json cannot be read, so every mod is on.")) }
+        if !f.mods.isEmpty { t.append(String(localized: "Mods higher in the list win when two change the same file.")) }
+        if f.cheatFile != nil, let b = mainBuildID { t.append(String(localized: "Cheats: \(b).txt; they change data only on the iPhone.")) }
+        t.append(String(localized: "Turn them on and off in AetherNX on the Mac or in AetherNX Companion: they apply at the next Play."))
+        return t.joined(separator: " ")
     }
 }
 
@@ -244,11 +245,11 @@ private struct LauncherView: View {
 
     private let icon = appIcon()
     private let tint = GameTint.from(appIcon()?.cgImage)
-    private let name = (info("CFBundleDisplayName") as? String) ?? (info("CFBundleName") as? String) ?? "Game"
+    private let name = (info("CFBundleDisplayName") as? String) ?? (info("CFBundleName") as? String) ?? String(localized: "Game")
     private let version = (info("CFBundleShortVersionString") as? String) ?? ""
 
     private var items: [SummaryItem] {
-        m.summaryItems() + [SummaryItem(id: "cloud", value: cloud.summary, caption: "Cloud saves", locked: cloudOverride != nil)]
+        m.summaryItems() + [SummaryItem(id: "cloud", value: cloud.summary, caption: String(localized: "Cloud saves"), locked: cloudOverride != nil)]
     }
     private var focusOrder: [LauncherFocus] {
         var o: [LauncherFocus] = [.play]
@@ -366,7 +367,7 @@ private struct LauncherView: View {
                         ForEach(m.sections, id: \.self) { section in
                             let rows = m.rows(in: section)
                             if !rows.isEmpty {
-                                Section(section) {
+                                Section(Setting.text(section)) {   // the list's own name stays what the code compares ("Controls")
                                     ForEach(rows) { SettingRow(s: $0, m: m, tint: tint, focused: nav.isFocused(.row($0.env))) }
                                     if section == "Controls" { ConnectedControllers(controllers: controllers, tint: tint) { nav.isFocused(.controller($0)) } }
                                 }
