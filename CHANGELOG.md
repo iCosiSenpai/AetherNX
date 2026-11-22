@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Restore a backup from the companion.** In AetherNX Companion, each backup in a game's Saves has **Restore**: it puts the backup back as the save in iCloud Drive, after copying the save it replaces to Backups. The engine takes a restored save for a change made at the time of the restore, so a device's own save no longer replaces it for having newer files: each device brings it in at the game's next start and keeps its own in its backups, and a device with progress it has not sent asks which one to play. The rule is in game apps built from this version on.
+
 ## 1.1.0
 
 - **New Mac game launcher.** A shorter, resizable window with a game header, settings by category and a fixed Play button. Advanced options, cloud saves and controller assignments are available from their own categories.

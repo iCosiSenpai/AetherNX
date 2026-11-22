@@ -35,6 +35,8 @@ struct GameFolder: Identifiable, Equatable, Sendable {
     /// The title ID: game.json's, else the name of the folder the save is in.
     var titleId: String?
     var save: CloudSave?
+    /// Where the cloud's save is, or goes when there is none yet: `<title ID>/save.dmsync`. nil without a title ID.
+    var saveFile: URL?
     var backups: [SaveBackup] = []
     var mods: [Mod] = []
     var modState = ModState()
@@ -95,6 +97,7 @@ enum LibraryReader {
         }
         if let id = game.titleId {
             let folder = saveFolders.first { $0.caseInsensitiveCompare(id) == .orderedSame } ?? id
+            game.saveFile = url.appending(path: folder).appending(path: "save.dmsync")
             game.save = cloudSave(url.appending(path: folder))
             if game.save?.pending == true { game.pending.append("\(folder)/save.dmsync") }
         }
@@ -222,9 +225,50 @@ enum GameActions {
         let device = (save.header?.device ?? "").replacingOccurrences(of: "/", with: "-")
         var dest = game.backupsFolder.appending(path: device.isEmpty ? "\(when).dmsync" : "\(when) \(device).dmsync")
         if FileManager.default.fileExists(atPath: dest.path) {
-            if let a = FileAccess.read(dest), let b = FileAccess.read(save.url), a == b { return dest }   // that save is backed up already
+            if let a = FileAccess.read(dest), let b = FileAccess.read(save.url), SaveHeader.sameSave(a, b) { return dest }   // that save is backed up already
             dest = game.backupsFolder.appending(path: "\(when) \(device) \(UUID().uuidString.prefix(4)).dmsync")
         }
         return FileAccess.copy(save.url, to: dest) ? dest : nil
+    }
+
+    /// Why a backup was not put back. In every case but `notWritten` nothing in the game's folder changed, and there only the copy in Backups was made.
+    enum RestoreFailure: Error, Equatable {
+        /// The game has no title ID, so no place for its save.
+        case noTitle
+        /// The backup cannot be read: gone, or not on this device yet.
+        case backupMissing
+        /// Not a whole packed save (PackedSave.check): a device would replace it with its own.
+        case damaged
+        /// Another game's save.
+        case otherTitle
+        /// A packed save with no file in it.
+        case empty
+        /// The cloud's save is not on this device yet, so it cannot be kept first.
+        case cloudPending
+        /// The cloud's save could not be copied to Backups.
+        case notKept
+        case notWritten
+    }
+
+    /// Restore: puts a backup back as the cloud's save, `<title ID>/save.dmsync`, with the time of the restore in its header (SaveHeader.restored).
+    /// The engine takes that for a change of the cloud's save made now (dm/host/save_sync.h, A restore): each device brings it in at the game's next
+    /// start and keeps its own save in its backups, and a device whose save changed too decides as for any two changed saves, with the restored one
+    /// as new as its restore. The save it replaces is copied to Backups first, as Back Up Now does; the backup itself stays where it is.
+    /// The folder is read again first: the page's copy may be older than what iCloud has brought since.
+    /// Returns the copy of the save it replaced, nil when the cloud had none.
+    static func restore(_ backup: SaveBackup, in game: GameFolder, now: Date = Date()) -> Result<URL?, RestoreFailure> {
+        let game = LibraryReader.readGame(game.url) ?? game
+        guard let title = game.titleId, let target = game.saveFile else { return .failure(.noTitle) }
+        guard let data = FileAccess.read(backup.url) else { return .failure(.backupMissing) }
+        guard let checked = PackedSave.check(data) else { return .failure(.damaged) }
+        guard checked.header.titleId.caseInsensitiveCompare(title) == .orderedSame else { return .failure(.otherTitle) }
+        guard checked.files > 0, let restored = SaveHeader.marking(data, restored: now) else { return .failure(.empty) }
+        var kept: URL?
+        if let save = game.save {
+            guard !save.pending else { return .failure(.cloudPending) }
+            guard let copy = backUp(game) else { return .failure(.notKept) }
+            kept = copy
+        }
+        return FileAccess.write(restored, to: target) ? .success(kept) : .failure(.notWritten)
     }
 }
