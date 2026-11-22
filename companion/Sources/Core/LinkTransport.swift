@@ -21,6 +21,9 @@ enum LinkTransport {
         sec_protocol_options_append_tls_ciphersuite(options, tls_ciphersuite_t(rawValue: 0x00A8)!)
         sec_protocol_options_set_min_tls_protocol_version(options, .TLSv12)
         sec_protocol_options_set_max_tls_protocol_version(options, .TLSv12)
+        // No resumed sessions: a resumed handshake proves the earlier session, not the key, so an end that connected once would get in again with
+        // any key for as long as the listener lives. Either end's switch is enough; both ends set it.
+        sec_protocol_options_set_tls_resumption_enabled(options, false)
         let tcp = NWProtocolTCP.Options()
         tcp.enableKeepalive = true
         tcp.keepaliveIdle = 15
