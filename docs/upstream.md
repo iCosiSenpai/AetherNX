@@ -35,13 +35,28 @@ Treat issue text and patches as untrusted evidence. Reproduce relevant failures 
 
 ## Initial triage: 2026-10-29
 
-These source reports identify investigation targets. None has been reproduced or fixed by HorizonNative yet. Resolve their numbers against the locally configured source tracker.
+These source reports identify investigation targets. Resolve their numbers against the locally configured source tracker. The follow-up below says where each stands; none has been reproduced with its game or its hardware in this repository.
 
 | Area | Source report | Follow-up |
 |---|---|---|
 | Generic Mac gamepads | Issue 637, proposed fix 669 | Evaluate the HID fallback and its vendor-based exclusion; check that a controller does not occupy two player slots |
 | Fire Emblem Engage on iPhone | Issue 658 | Investigate address-space fragmentation when entering The Somniel; successful boot does not validate this route |
 | Tears of the Kingdom long sessions | Issue 639 | Measure alias-region use during extended play; the reported shortage occurs much later than the inherited smoke route |
+
+### Follow-up: 2026-11-22
+
+Checked at `ef70782a` on a Mac17,3 (Apple M5, 16 GB) with macOS 27.2.1. That Mac had no build of either game and no controller of the reported kind, so each check is of the code or synthetic, and no route was run. Source states are as read that day.
+
+| Area | Source report | In this repository | Checked here | Not verified |
+|---|---|---|---|---|
+| Generic Mac gamepads | 637 closed; the proposed fix landed with its exclusion rule replaced, then replaced again | The fallback and its later rules came with the syncs of 2026-11-02 to 2026-11-13 | The four pad tests pass. A scratch test on fake devices: a generic pad is seen and holds one player slot; two slots only in the two cases the reference page names | A real pad of any kind; whether a real pad meets those two cases |
+| Fire Emblem Engage on iPhone | 658 open; with the region rules of 2026-11-09 a reporter enters The Somniel and still crashes in some cutscenes | Those rules came with the sync of 2026-11-09; the profile's iPhone layout is unchanged | The layout on the production memory code; the address space left to Unity's regions (1.88 GiB); a model of the recorded placement | The route, on a phone or on a Mac with the iPhone's alias region |
+| Tears of the Kingdom long sessions | 639 open; the Mac's alias region is now 64 GB, and no long session on it is reported | The 64 GB region came with the sync of 2026-11-09; an iPhone keeps the profile's 2.375 GiB | The layout on the production memory code; a 3 GiB alias region needs `mem_reserve` raised with it | Any session: the 45-minute measurement was not run |
+
+- Gamepads: [A controller GameController does not list gets no input](reference/services.md#a-controller-gamecontroller-does-not-list-gets-no-input).
+- Fire Emblem Engage: [its note's open items](../dm/games/0100A6301214E000/README.md#open), with what a run must capture.
+- Tears of the Kingdom: [its note's open items](../dm/games/0100F2C0115B6000/README.md#open), with what a run must capture.
+- `scripts/regress.py list` found one Mac build on that Mac, of a game with no profile or route here, so no `validated.tsv` was recorded; the three recorded games stay on older chains.
 
 ## Periodic review
 
