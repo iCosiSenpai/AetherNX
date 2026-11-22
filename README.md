@@ -102,7 +102,7 @@ Use your own game files and, for encrypted packages, the `prod.keys` from your o
 <details>
 <summary><b>From a terminal, or installing the tools by hand</b></summary>
 
-The tools the Setup Assistant installs, if you prefer to do it yourself ([Xcode](https://developer.apple.com/download/all/?q=Xcode%2027.2) 27.2 first, selected with `sudo xcode-select -s /Applications/Xcode.app`; building for iPhone also needs its iOS platform, in Xcode → Settings → Components; with several Xcode versions installed, select 27.2, whose Metal compiler builds the shaders):
+The tools the Setup Assistant installs, if you prefer to do it yourself ([Xcode](https://developer.apple.com/download/all/?q=Xcode%2027.2) 27.2 first, selected with `sudo xcode-select -s /Applications/Xcode.app`; building for iPhone also needs its iOS platform, in Xcode → Settings → Components; with several Xcode versions installed, select Xcode 27.2, whose Metal compiler builds the shaders):
 
 ```bash
 xcodebuild -downloadComponent MetalToolchain
