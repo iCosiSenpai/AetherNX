@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import Network
 import Observation
+import dnssd
 
 // The phone's end of the live link (docs/companion.md, How it talks to the Mac): it finds AetherNX Studio on the local network, pairs with the
 // six digits the Mac shows, then follows the Mac's builds and installs and asks for an install. No UIKit or SwiftUI here: companion/tests runs
@@ -109,6 +110,11 @@ final class MacLink {
     @ObservationIgnored private var isLooking = false
     @ObservationIgnored private var channel: LinkChannel?
     @ObservationIgnored private var pairingChannel: LinkChannel?
+    /// Finds a service's host and port, and returns what stops the search. The tests give their own, which needs no Bonjour.
+    @ObservationIgnored var resolve: (_ service: NWEndpoint, _ done: @escaping (NWEndpoint?) -> Void) -> () -> Void = ServiceResolver.resolve
+    /// Stops the search for the Mac a connection is about to be made to; nil when none runs.
+    @ObservationIgnored private var stopLocating: (() -> Void)?
+    @ObservationIgnored private var searches = 0
     @ObservationIgnored private var failures = 0
     @ObservationIgnored private var requests: [String: String] = [:]
     @ObservationIgnored private var retry: Task<Void, Never>?
@@ -188,6 +194,27 @@ final class MacLink {
         channel = nil
         pairingChannel = nil
         for channel in old { channel?.close() }   // their callbacks find another channel in their place and say nothing
+        stopLocating?()
+        stopLocating = nil
+        searches += 1   // an answer on its way finds another search in its place and says nothing
+    }
+
+    /// Where to connect to for a Mac in sight: its service's host and port, asked of Bonjour first. A connection made to the service itself
+    /// never says that its handshake failed (Network.framework keeps it preparing), so a wrong code would look like a Mac that does not answer.
+    /// One made to a host and a port fails at once. An endpoint that is no service (the tests') is taken as it is. nil: the service was not found.
+    private func locate(_ mac: FoundMac, then: @escaping (NWEndpoint?) -> Void) {
+        guard case .service = mac.endpoint else {
+            then(mac.endpoint)
+            return
+        }
+        stopLocating?()
+        searches += 1
+        let search = searches
+        stopLocating = resolve(mac.endpoint) { [weak self] endpoint in
+            guard let self, self.searches == search else { return }
+            self.stopLocating = nil
+            then(endpoint)
+        }
     }
 
     private func browserChanged(_ state: NWBrowser.State) {
@@ -238,7 +265,7 @@ final class MacLink {
     }
 
     private func connectIfPaired() {
-        guard isLooking, channel == nil, pairingChannel == nil, failures < Self.maxFailures else { return }
+        guard isLooking, channel == nil, pairingChannel == nil, stopLocating == nil, pairing != .working, failures < Self.maxFailures else { return }
         for mac in macs where !mac.isPairing {
             if let pairing = known(mac) {
                 connect(mac, pairing)
@@ -248,10 +275,21 @@ final class MacLink {
     }
 
     private func connect(_ mac: FoundMac, _ pairing: MacPairing) {
-        let parameters = LinkTransport.parameters(key: pairing.key, identity: LinkTransport.linkIdentity)
-        let channel = LinkChannel(NWConnection(to: mac.endpoint, using: parameters))
-        self.channel = channel
         status = .connecting(mac.name)
+        locate(mac) { [weak self] endpoint in
+            guard let self, self.pairings.contains(pairing) else { return }
+            guard let endpoint else {
+                self.lost(nil, wasReady: false, notFound: true)
+                return
+            }
+            self.connect(to: endpoint, pairing)
+        }
+    }
+
+    private func connect(to endpoint: NWEndpoint, _ pairing: MacPairing) {
+        let parameters = LinkTransport.parameters(key: pairing.key, identity: LinkTransport.linkIdentity)
+        let channel = LinkChannel(NWConnection(to: endpoint, using: parameters))
+        self.channel = channel
         channel.onReady = { [weak self, weak channel] in
             guard let self, let channel, self.channel === channel else { return }
             var hello = LinkLine.phone("hello")
@@ -327,13 +365,16 @@ final class MacLink {
         if job?.isRunning == false { job = nil }
     }
 
-    private func lost(_ error: NWError?, wasReady: Bool) {
+    /// `notFound`: Bonjour did not say where the Mac's service is, so no connection was tried.
+    private func lost(_ error: NWError?, wasReady: Bool, notFound: Bool = false) {
         let wasConnected = isConnected
         connectedMac = nil
         status = isLooking ? .looking : .off
         guard failures < Self.maxFailures else { return }   // refused: the Mac said why
         failures += 1
-        if !wasReady, MacLink.isHandshakeFailure(error) {
+        if notFound {
+            problem = .network("")
+        } else if !wasReady, MacLink.isHandshakeFailure(error) {
             problem = .keyRefused
         } else if let error {
             problem = .network(error.localizedDescription)
@@ -367,7 +408,7 @@ final class MacLink {
 
     /// Pairs with a Mac that shows a code: `typed` is what the person typed, with or without spaces.
     func pair(with mac: FoundMac, typed: String) {
-        guard pairingChannel == nil else { return }
+        guard pairingChannel == nil, pairing != .working else { return }
         guard let code = LinkKeys.code(typed: typed) else {
             pairing = .failed(.wrongCode)
             return
@@ -376,11 +417,23 @@ final class MacLink {
         dropChannels()
         connectedMac = nil
         status = isLooking ? .looking : .off
+        pairing = .working
+        locate(mac) { [weak self] endpoint in
+            guard let self, self.pairing == .working, self.pairingChannel == nil else { return }
+            guard let endpoint else {
+                self.pairing = .failed(.network(""))
+                self.connectIfPaired()
+                return
+            }
+            self.pair(to: endpoint, mac, code: code)
+        }
+    }
+
+    private func pair(to endpoint: NWEndpoint, _ mac: FoundMac, code: String) {
         let mine = LinkPairing.newKey()
         let parameters = LinkTransport.parameters(key: LinkKeys.pairingKey(code: code), identity: LinkTransport.pairingIdentity)
-        let channel = LinkChannel(NWConnection(to: mac.endpoint, using: parameters))
+        let channel = LinkChannel(NWConnection(to: endpoint, using: parameters))
         pairingChannel = channel
-        pairing = .working
         channel.onReady = { [weak self, weak channel] in
             guard let self, let channel, self.pairingChannel === channel else { return }
             var line = LinkLine.phone("pair")
@@ -481,5 +534,65 @@ final class MacLink {
         status = .connected(name)
         let pairing = MacPairing(mac: "demo", name: name, key: Data(), token: "", paired: Date())
         for line in lines { received(line, from: pairing) }
+    }
+}
+
+/// Asks Bonjour where a service is: the name of its host and its port. Everything here runs on the main queue.
+final class ServiceResolver: @unchecked Sendable {
+    private var ref: DNSServiceRef?
+    private var done: ((NWEndpoint?) -> Void)?
+
+    /// How long Bonjour is given to answer. On a local network it takes a moment.
+    static let timeout: TimeInterval = 5
+
+    /// Finds the host and port of a service endpoint, as `NWBrowser` gives it. `done` is called once on the main queue: with the host and port,
+    /// or with nil when Bonjour gave none in time. The closure returned stops the search, and `done` is then not called.
+    static func resolve(_ service: NWEndpoint, _ done: @escaping (NWEndpoint?) -> Void) -> () -> Void {
+        let resolver = ServiceResolver()
+        resolver.start(service, done)
+        return { resolver.finish(nil, tell: false) }
+    }
+
+    private func start(_ service: NWEndpoint, _ done: @escaping (NWEndpoint?) -> Void) {
+        self.done = done
+        guard case .service(let name, let type, let domain, _) = service else {
+            DispatchQueue.main.async { self.finish(nil) }
+            return
+        }
+        // The context is this object, kept alive by `done`'s owner until the search ends (`finish` lets go of the reference Bonjour holds)
+        let context = Unmanaged.passRetained(self).toOpaque()
+        let reply: DNSServiceResolveReply = { _, _, _, error, _, host, port, _, _, context in
+            guard let context else { return }
+            let resolver = Unmanaged<ServiceResolver>.fromOpaque(context).takeUnretainedValue()
+            var found: NWEndpoint?
+            if error == kDNSServiceErr_NoError, let host, let port = NWEndpoint.Port(rawValue: UInt16(bigEndian: port)) {
+                var name = String(cString: host)
+                if name.hasSuffix(".") { name.removeLast() }
+                if !name.isEmpty { found = .hostPort(host: NWEndpoint.Host(name), port: port) }
+            }
+            resolver.finish(found)
+        }
+        var ref: DNSServiceRef?
+        guard DNSServiceResolve(&ref, 0, 0, name, type, domain.isEmpty ? "local." : domain, reply, context) == kDNSServiceErr_NoError, let ref,
+              DNSServiceSetDispatchQueue(ref, .main) == kDNSServiceErr_NoError else {
+            if let ref { DNSServiceRefDeallocate(ref) }
+            Unmanaged<ServiceResolver>.fromOpaque(context).release()
+            DispatchQueue.main.async { self.finish(nil) }
+            return
+        }
+        self.ref = ref
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.timeout) { [weak self] in self?.finish(nil) }
+    }
+
+    /// Ends the search once: the first answer, the time running out, or the owner stopping it.
+    private func finish(_ endpoint: NWEndpoint?, tell: Bool = true) {
+        let done = self.done
+        self.done = nil
+        if let ref {
+            self.ref = nil
+            DNSServiceRefDeallocate(ref)   // no answer comes after this
+            Unmanaged.passUnretained(self).release()
+        }
+        if tell { done?(endpoint) }
     }
 }

@@ -175,6 +175,51 @@ server.remove(phone: "PHONE-1")
 expect(await wait(15) { again.problem == .unpaired }, "a phone removed on the Mac is refused when it comes back \(String(describing: again.problem))")
 expect(again.pairings.isEmpty && store.load().isEmpty && server.identity.phones.isEmpty && saved.last?.phones.isEmpty == true, "and both ends forget the pairing")
 
+// MARK: A Mac found by Bonjour
+
+// The Mac as NWBrowser gives it: a service, with no host and no port. The phone asks Bonjour where the service is before it connects, because a
+// connection made to the service itself never says that its handshake failed, and a wrong code then looks like a Mac that does not answer (seen
+// with the companion in the Simulator and Studio's server on the same Mac). Here the answer is scripted, so no Bonjour is involved.
+let service = NWEndpoint.service(name: "Test Mac", type: LinkWire.serviceType, domain: "local.", interface: nil)
+@MainActor
+func foundMac(pairing: Bool) -> FoundMac {
+    FoundMac(id: identity.id, name: "Test Mac", isPairing: pairing, endpoint: service)
+}
+var askedFor: [NWEndpoint] = []
+var isPlaced = false
+let visitor = MacLink(store: MemoryPairingStore(), phoneID: "PHONE-4", deviceName: "Visitor", deviceKind: "iPad")
+visitor.resolve = { endpoint, done in
+    askedFor.append(endpoint)
+    let answer = isPlaced ? mac(pairing: true).endpoint : nil   // the listener's port of the moment
+    DispatchQueue.main.async { done(answer) }
+    return {}
+}
+code = await showCode()
+visitor.pair(with: foundMac(pairing: true), typed: code)
+expect(await wait { visitor.pairing != .working } && visitor.pairing == .failed(.network("")) && askedFor == [service],
+       "a service Bonjour cannot place: the Mac did not answer, and no connection was tried \(visitor.pairing)")
+isPlaced = true
+visitor.pair(with: foundMac(pairing: true), typed: code == "000000" ? "000001" : "000000")
+expect(await wait { visitor.pairing != .working } && visitor.pairing == .failed(.wrongCode), "a wrong code for a Mac found as a service is told as a wrong code \(visitor.pairing)")
+visitor.pair(with: foundMac(pairing: true), typed: code)
+expect(await wait { isPaired(visitor) } && server.identity.phones.map(\.id) == ["PHONE-4"], "the right code pairs with it \(visitor.pairing)")
+expect(await wait { server.pairingCode == nil && server.state == .listening && server.port != nil }, "the Mac listens with the link's key again")
+visitor.look(at: [foundMac(pairing: false)])
+expect(await wait { visitor.isConnected } && server.connectedPhones == ["PHONE-4"], "the phone then connects to the service's host and port \(visitor.status) \(String(describing: visitor.problem))")
+visitor.stop()
+expect(await wait { server.connectedPhones.isEmpty }, "and leaves")
+var heldAnswer: ((NWEndpoint?) -> Void)?
+visitor.resolve = { _, done in
+    heldAnswer = done
+    return {}
+}
+visitor.look(at: [foundMac(pairing: false)])
+expect(heldAnswer != nil && visitor.status == .connecting("Test Mac"), "while Bonjour is asked, the phone says it is connecting")
+visitor.stop()
+heldAnswer?(mac(pairing: false).endpoint)
+_ = await wait(0.5) { false }
+expect(visitor.status == .off && server.connectedPhones.isEmpty, "an answer that comes after the phone stopped looking opens no connection")
+
 again.stop()
 server.stop()
 expect(server.state == .off && server.port == nil, "the link turned off: no listener")
