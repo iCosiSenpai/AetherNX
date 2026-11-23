@@ -7,13 +7,17 @@ struct GameView: View {
     @Environment(\.openURL) private var openURL
     @State private var notAnswering = false
     @State private var editMode: EditMode = .inactive
+    /// The backup a row's Restore asked for. The page asks to confirm, not the row: a List makes its rows as they come on screen, and one off screen shows no alert.
+    @State private var restoring: SaveBackup?
+    /// A backup or a restore is being written.
+    @State private var savesWorking = false
 
     var body: some View {
         if let game = store.game(id) {
             ScrollViewReader { proxy in
                 List {
                     header(game)
-                    SavesSection(game: game).id("saves")
+                    SavesSection(game: game, restoring: $restoring, working: $savesWorking).id("saves")
                     ModsSection(game: game, editMode: $editMode).id("mods")
                     CheatsSections(game: game).id("cheats")
                     folderSection(game).id("folder")
@@ -35,6 +39,16 @@ struct GameView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("Open it from the Home Screen. Game apps built by a later AetherNX open from here: they learn the link aethernx-\(game.titleId?.lowercased() ?? "…")://.")
+            }
+            .alert("Restore This Backup?", isPresented: Binding(get: { restoring != nil }, set: { if !$0 { restoring = nil } }), presenting: restoring) { backup in
+                Button("Restore", role: .destructive) {
+                    savesWorking = true
+                    Task { await store.restore(backup, in: game); savesWorking = false }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { backup in
+                let saved = backup.header.map { $0.saved.formatted(date: .abbreviated, time: .shortened) } ?? backup.url.deletingPathExtension().lastPathComponent
+                Text("The save in iCloud is replaced by this one, saved \(saved). A copy of the save it replaces is kept in Backups. Each device takes the restored save at the game's next start and keeps its own in its backups; a device with progress it has not sent asks which one to play.")
             }
         } else {
             ContentUnavailableView("This Game Is Gone", systemImage: "questionmark.folder", description: Text("Its folder is no longer in the library."))
@@ -114,8 +128,10 @@ struct GameView: View {
 
 private struct SavesSection: View {
     let game: GameFolder
+    /// Set by a row's Restore; the page asks to confirm and starts it (GameView).
+    @Binding var restoring: SaveBackup?
+    @Binding var working: Bool
     @Environment(LibraryStore.self) private var store
-    @State private var working = false
 
     var body: some View {
         Section {
@@ -150,6 +166,14 @@ private struct SavesSection: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
+                    if isInCloud(backup) {
+                        Text("In iCloud now")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Button("Restore") { restoring = backup }
+                            .buttonStyle(.borderless)
+                            .disabled(backup.header == nil || game.saveFile == nil || game.save?.pending == true || working)
+                    }
                     ShareLink(item: backup.url) { Image(systemName: "square.and.arrow.up") }
                         .buttonStyle(.borderless)
                 }
@@ -157,8 +181,14 @@ private struct SavesSection: View {
         } header: {
             Text("Saves")
         } footer: {
-            Text("Backups are copies of the cloud's save in this game's Backups folder. Each device also keeps the save a sync replaced. Restoring a backup from here comes later: the engine would take an older copy for an older save.")
+            Text("Backups are copies of the cloud's save in this game's Backups folder. Each device also keeps the save a sync replaced. Restore puts a backup back as the cloud's save and keeps a copy of the one it replaces: each device takes it at the game's next start.")
         }
+    }
+
+    /// The backup that is the cloud's save now: nothing to restore.
+    private func isInCloud(_ backup: SaveBackup) -> Bool {
+        guard let hash = backup.header?.hash, !hash.isEmpty else { return false }
+        return hash == game.save?.header?.hash
     }
 
     private var lines: [String] {
@@ -167,10 +197,14 @@ private struct SavesSection: View {
         }
         if save.pending { return [String(localized: "On its way from iCloud: read again in a moment.")] }
         guard let header = save.header else { return [String(localized: "save.dmsync is there, but it is not a save the engine wrote.")] }
-        return [
+        var text = [
             String(localized: "Saved \(header.saved.formatted(date: .abbreviated, time: .shortened)) on \(header.deviceKind) (\(header.device))"),
             String(localized: "\(Int(header.entries)) files and folders · \(save.size.formatted(.byteCount(style: .file)))"),
         ]
+        if let restored = header.restored {
+            text.insert(String(localized: "Restored from a backup \(restored.formatted(date: .abbreviated, time: .shortened))"), at: 1)
+        }
+        return text
     }
 }
 
