@@ -67,7 +67,7 @@ struct MacView: View {
                     Button("Open Settings") {
                         if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
                     }
-                } else if !link.isConnected {
+                } else if !link.isConnected, problem != .unpaired {   // unpaired: trying again cannot help, pairing again can
                     Button("Try Again") { link.reconnect() }
                 }
             }
@@ -177,7 +177,7 @@ private struct PairView: View {
                     }
                 }
             }
-            .navigationTitle("Pair with \(mac.name)")
+            .navigationTitle("Pair with the Mac")   // short: the Mac's name, in the footer, would be cut in an inline title
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
