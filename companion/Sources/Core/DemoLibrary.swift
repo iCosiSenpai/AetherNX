@@ -72,10 +72,11 @@ enum DemoLibrary {
             if let ago = game.saved {
                 let saves = folder.appending(path: game.titleId)
                 try fm.createDirectory(at: saves, withIntermediateDirectories: true)
-                let hash = String(repeating: String(game.titleId.prefix(8)), count: 4)
-                var data = SaveHeader.encode(entries: 12, hash: hash, saved: now.addingTimeInterval(-ago), titleId: game.titleId, device: game.device)
-                data.append(Data(count: 180_000))   // stands for the entries
-                data.append(Data("DMSYNCE\n".utf8))
+                // A whole packed save, as the engine writes one: Back Up Now and Restore work on it as on a real one
+                let slots = (1...12).map { slot in
+                    (path: String(format: "save/slot%02d.sav", slot), contents: Data(repeating: UInt8(slot), count: 15_000))
+                }
+                let data = PackedSave.pack(files: slots, saved: now.addingTimeInterval(-ago), titleId: game.titleId, device: game.device)
                 try data.write(to: saves.appending(path: "save.dmsync"))
             }
             let mods = folder.appending(path: "Mods"), cheats = folder.appending(path: "Cheats")

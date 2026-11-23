@@ -3,7 +3,19 @@ import Foundation
 import Combine
 
 struct Setting: Decodable, Identifiable {
-    let env, kind, label, note: String
+    let env, kind: String
+    private let rawLabel, rawNote: String
+    /// The setting's name and the line under it, in the player's language (Setting.text)
+    var label: String { Setting.text(rawLabel) }
+    var note: String { Setting.text(rawNote) }
+    /// A text of the settings list (a section, a label, a note, an option's label) in the player's language. dm/games/settings.tsv writes them in English, and the app's
+    /// Settings.strings (dm/ios/Sources/<language>.lproj) has each one's translation under that English; dm/tools/tests/test_launcher_strings.py checks that none is missing.
+    /// A text the table does not have (a list from another build, a front end's own section) is shown as written
+    static func text(_ english: String) -> String {
+        english.isEmpty ? english : Bundle.main.localizedString(forKey: english, value: english, table: "Settings")
+    }
+    /// An option's label ([value, label]) as the player reads it
+    static func label(of option: [String]) -> String { option.count > 1 ? text(option[1]) : option.first ?? "" }
     private let rawDefault: String
     /// The default, with a device-dependent one resolved: mem>=<GB>?<a>:<b> (dm/games/settings.py MEMORY_DEFAULTS) is <a> on a device with at least that much memory, else <b>
     var def: String { Setting.resolve(rawDefault) }
@@ -38,7 +50,7 @@ struct Setting: Decodable, Identifiable {
         default: return true
         }
     }
-    enum CodingKeys: String, CodingKey { case env, kind, label, note, rawDefault = "default", section, needs, level, base, options, min, max, step, on, off }
+    enum CodingKeys: String, CodingKey { case env, kind, rawLabel = "label", rawNote = "note", rawDefault = "default", section, needs, level, base, options, min, max, step, on, off }
 }
 struct SettingsFile: Decodable { let settings: [Setting] }
 
@@ -104,19 +116,19 @@ final class LauncherModel: ObservableObject {
     // The value as the player reads it: a choice's label, a range's percentage (or size in pixels), On or Off
     func valueLabel(_ s: Setting) -> String {
         let v = value(s)
-        if isInvalid(s) { return v.isEmpty ? "(empty)" : v }
+        if isInvalid(s) { return v.isEmpty ? String(localized: "(empty)") : v }
         switch s.kind {
-        case "choice": return s.options?.first { $0.count > 1 && $0[0] == v }?[1] ?? v
+        case "choice": return s.options?.first { $0.count > 1 && $0[0] == v }.map(Setting.label(of:)) ?? v
         case "range": return rangeLabel(s, Double(v) ?? .nan)
-        default: return v == s.onValue ? "On" : "Off"
+        default: return v == s.onValue ? String(localized: "On") : String(localized: "Off")
         }
     }
     // The tested default as the player reads it ("Use tested default (60 fps)")
     func defaultLabel(_ s: Setting) -> String {
         switch s.kind {
-        case "choice": return s.options?.first { $0.count > 1 && $0[0] == s.def }?[1] ?? s.def
+        case "choice": return s.options?.first { $0.count > 1 && $0[0] == s.def }.map(Setting.label(of:)) ?? s.def
         case "range": return rangeLabel(s, Double(s.def) ?? .nan)
-        default: return s.def == s.onValue ? "On" : "Off"
+        default: return s.def == s.onValue ? String(localized: "On") : String(localized: "Off")
         }
     }
     func useDefault(_ s: Setting) { if !fixed.contains(s.env) { values[s.env] = s.def } }

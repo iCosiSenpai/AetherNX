@@ -158,6 +158,20 @@ final class LibraryStore {
         await refresh(game)
     }
 
+    /// Restore: a backup back as the cloud's save, the one it replaces kept in Backups first (GameActions.restore).
+    func restore(_ backup: SaveBackup, in game: GameFolder) async {
+        let result = await Task.detached(priority: .userInitiated) { GameActions.restore(backup, in: game) }.value
+        if case .failure(let why) = result {
+            switch why {
+            case .backupMissing: message = String(localized: "The backup could not be read: it may not be on this device yet.")
+            case .damaged, .otherTitle, .empty: message = String(localized: "This backup is not a whole save of this game: nothing was changed.")
+            case .cloudPending, .notKept: message = String(localized: "The save in iCloud could not be copied to Backups first (it may not be on this device yet): nothing was changed.")
+            case .noTitle, .notWritten: message = String(localized: "The restored save could not be written to the game's folder.")   // noTitle: no place for it (the row's Restore is off then)
+            }
+        }
+        await refresh(game)
+    }
+
     private func change(_ game: GameFolder, _ write: @escaping @Sendable () -> Bool) async {
         let ok = await Task.detached(priority: .userInitiated) { write() }.value
         if !ok { message = String(localized: "The change could not be written to the game's folder.") }

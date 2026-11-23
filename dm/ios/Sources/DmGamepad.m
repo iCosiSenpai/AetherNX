@@ -234,7 +234,7 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
         _swap = shape(self.layer);
         _swapIcon = [CAShapeLayer layer]; _swapIcon.fillColor = nil; _swapIcon.strokeColor = k_text.CGColor; _swapIcon.lineCap = kCALineCapRound; [_swap addSublayer:_swapIcon];
         _menuAX = [[DmMenuAX alloc] initWithAccessibilityContainer:self];
-        _menuAX.accessibilityLabel = @"Menu"; _menuAX.accessibilityHint = @"Pauses the game and opens the in-game menu"; _menuAX.accessibilityTraits = UIAccessibilityTraitButton;
+        _menuAX.accessibilityLabel = NSLocalizedString(@"Menu", nil); _menuAX.accessibilityHint = NSLocalizedString(@"Pauses the game and opens the in-game menu", nil); _menuAX.accessibilityTraits = UIAccessibilityTraitButton;
         self.accessibilityElements = @[_menuAX];
         NSNumber *saved = [NSUserDefaults.standardUserDefaults objectForKey:k_layout_key];
         int l = saved ? (int)saved.integerValue : DM_GAME_PAD_LAYOUT;
@@ -571,11 +571,11 @@ int front_web_touch(void);
     if (!_editBar) {   // a bar in the middle of the screen: what to do, Reset and Done
         UIVisualEffectView *bar = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
         bar.layer.cornerRadius = 22; bar.layer.cornerCurve = kCACornerCurveContinuous; bar.clipsToBounds = YES;
-        UILabel *l = [UILabel new]; l.text = @"Drag the controls where you want them"; l.textColor = UIColor.whiteColor;
+        UILabel *l = [UILabel new]; l.text = NSLocalizedString(@"Drag the controls where you want them", nil); l.textColor = UIColor.whiteColor;
         l.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline]; l.adjustsFontForContentSizeCategory = YES; l.numberOfLines = 2;
-        UIButtonConfiguration *cc = [UIButtonConfiguration plainButtonConfiguration]; cc.title = @"Cancel"; cc.baseForegroundColor = UIColor.whiteColor;
-        UIButtonConfiguration *rc = [UIButtonConfiguration grayButtonConfiguration]; rc.title = @"Reset"; rc.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
-        UIButtonConfiguration *dc = [UIButtonConfiguration filledButtonConfiguration]; dc.title = @"Done"; dc.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+        UIButtonConfiguration *cc = [UIButtonConfiguration plainButtonConfiguration]; cc.title = NSLocalizedString(@"Cancel", nil); cc.baseForegroundColor = UIColor.whiteColor;
+        UIButtonConfiguration *rc = [UIButtonConfiguration grayButtonConfiguration]; rc.title = NSLocalizedString(@"Reset", nil); rc.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
+        UIButtonConfiguration *dc = [UIButtonConfiguration filledButtonConfiguration]; dc.title = NSLocalizedString(@"Done", nil); dc.cornerStyle = UIButtonConfigurationCornerStyleCapsule;
         __weak DmGamepad *weak = self;
         UIButton *cancel = [UIButton buttonWithConfiguration:cc primaryAction:[UIAction actionWithHandler:^(UIAction *a) { (void)a; [weak editCancel]; }]];
         UIButton *reset = [UIButton buttonWithConfiguration:rc primaryAction:[UIAction actionWithHandler:^(UIAction *a) { (void)a; [weak resetOffsets]; }]];

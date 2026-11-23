@@ -18,7 +18,7 @@
 "Always on" = "Sempre attivo";
 "Asking the Mac…" = "Richiesta al Mac…";
 "Back Up Now" = "Fai un backup ora";
-"Backups are copies of the cloud's save in this game's Backups folder. Each device also keeps the save a sync replaced. Restoring a backup from here comes later: the engine would take an older copy for an older save." = "I backup sono copie del salvataggio nel cloud, nella cartella Backups del gioco. Ogni dispositivo tiene anche il salvataggio sostituito da una sincronizzazione. Il ripristino di un backup da qui arriverà più avanti: il motore prenderebbe una copia vecchia per un salvataggio più vecchio.";
+"Backups are copies of the cloud's save in this game's Backups folder. Each device also keeps the save a sync replaced. Restore puts a backup back as the cloud's save and keeps a copy of the one it replaces: each device takes it at the game's next start." = "I backup sono copie del salvataggio nel cloud, nella cartella Backups del gioco. Ogni dispositivo tiene anche il salvataggio sostituito da una sincronizzazione. Ripristina rimette un backup come salvataggio nel cloud e conserva una copia di quello sostituito: ogni dispositivo lo prende al prossimo avvio del gioco.";
 "Build %@" = "Build %@";
 "Building the app" = "Compilazione dell'app";
 "Building the engine" = "Compilazione del motore";
@@ -52,6 +52,7 @@
 "Identifying the game version" = "Identificazione della versione del gioco";
 "In each game's app, choose that game's folder in Cloud saves, so the save goes through it." = "Nell'app di ogni gioco, scegli la cartella di quel gioco in Salvataggi cloud, così il salvataggio passa da lì.";
 "In iCloud" = "In iCloud";
+"In iCloud now" = "Ora in iCloud";
 "Install from the Mac" = "Installa dal Mac";
 "Installed on iPhone or iPad" = "Installato su iPhone o iPad";
 "Installing on the device" = "Installazione sul dispositivo";
@@ -108,6 +109,9 @@
 "Queued on the Mac: it starts when the running job ends." = "In coda sul Mac: parte quando finisce l'operazione in corso.";
 "Read Again" = "Rileggi";
 "Reorder" = "Riordina";
+"Restore" = "Ripristina";
+"Restore This Backup?" = "Ripristinare questo backup?";
+"Restored from a backup %@" = "Ripristinato da un backup il %@";
 "Coming from iCloud…" = "In arrivo da iCloud…";
 "Running on the Mac" = "In corso sul Mac";
 "Saved %@ on %@ (%@)" = "Salvato il %@ su %@ (%@)";
@@ -126,6 +130,7 @@
 "The Mac is showing another request: answer it there first." = "Il Mac sta mostrando un'altra richiesta: rispondi prima a quella.";
 "The Mac started the install." = "Il Mac ha avviato l'installazione.";
 "The Mac's library does not have this game." = "La libreria del Mac non ha questo gioco.";
+"The backup could not be read: it may not be on this device yet." = "Non è stato possibile leggere il backup: forse non è ancora su questo dispositivo.";
 "The build is done." = "La build è terminata.";
 "The change could not be written to the game's folder." = "Non è stato possibile scrivere la modifica nella cartella del gioco.";
 "The code on the Mac" = "Il codice sul Mac";
@@ -134,11 +139,15 @@
 "The games stay their own apps: iOS lets no app install or run another app's code. This one keeps their folders in order and opens them." = "I giochi restano app a sé: iOS non permette a nessuna app di installare o eseguire il codice di un'altra. Questa tiene in ordine le loro cartelle e li apre.";
 "The install is done." = "L'installazione è terminata.";
 "The library folder could not be found again: choose it once more." = "Non è stato possibile ritrovare la cartella della libreria: sceglila di nuovo.";
+"The restored save could not be written to the game's folder." = "Non è stato possibile scrivere il salvataggio ripristinato nella cartella del gioco.";
 "The save could not be copied: it may not be on this device yet." = "Non è stato possibile copiare il salvataggio: forse non è ancora su questo dispositivo.";
+"The save in iCloud could not be copied to Backups first (it may not be on this device yet): nothing was changed." = "Non è stato possibile copiare prima in Backups il salvataggio in iCloud (forse non è ancora su questo dispositivo): non è stato cambiato nulla.";
+"The save in iCloud is replaced by this one, saved %@. A copy of the save it replaces is kept in Backups. Each device takes the restored save at the game's next start and keeps its own in its backups; a device with progress it has not sent asks which one to play." = "Il salvataggio in iCloud viene sostituito da questo, salvato il %@. Una copia del salvataggio sostituito resta in Backups. Ogni dispositivo prende il salvataggio ripristinato al prossimo avvio del gioco e conserva il proprio nei suoi backup; un dispositivo con progressi non ancora inviati chiede quale usare.";
 "This Game Is Gone" = "Questo gioco non c'è più";
 "This Mac shows no code now. On the Mac, open AetherNX → Devices and choose Pair an iPhone or iPad." = "Questo Mac non mostra alcun codice in questo momento. Sul Mac, apri AetherNX → Dispositivi e scegli Abbina un iPhone o iPad.";
 "This device is no longer paired with the Mac. Pair it again." = "Questo dispositivo non è più abbinato al Mac. Abbinalo di nuovo.";
 "This game's app does not answer yet" = "L'app di questo gioco non risponde ancora";
+"This backup is not a whole save of this game: nothing was changed." = "Questo backup non è un salvataggio completo di questo gioco: non è stato cambiato nulla.";
 "This game's folder" = "La cartella del gioco";
 "Title ID" = "Title ID";
 "Translating the shaders to Metal" = "Traduzione degli shader in Metal";

@@ -59,8 +59,8 @@ enum SaveCheck {
             let a = NSAlert()
             a.messageText = SaveSyncReport.unreadableTitle
             a.informativeText = r?.unreadableMessage(here: "Mac") ?? ""
-            a.addButton(withTitle: "Play This Mac's Save")
-            a.addButton(withTitle: "Try Again")
+            a.addButton(withTitle: String(localized: "Play This Mac's Save"))
+            a.addButton(withTitle: String(localized: "Try Again"))
             a.addButton(withTitle: cancel)
             a.buttons[2].keyEquivalent = "\u{1b}"
             switch a.runModal() {
@@ -93,10 +93,10 @@ enum SaveCheck {
             if sem.wait(timeout: .now() + 0.5) == .timedOut {   // a cloud file to download: say so, and let the player go on without it
                 app.setActivationPolicy(.regular); app.activate(ignoringOtherApps: true)
                 let a = NSAlert()
-                a.messageText = "Checking the cloud save…"
-                a.informativeText = "Waiting for iCloud to deliver this game's save."
-                a.addButton(withTitle: "Play Without It")
-                a.addButton(withTitle: "Quit")
+                a.messageText = String(localized: "Checking the cloud save…")
+                a.informativeText = String(localized: "Waiting for iCloud to deliver this game's save.")
+                a.addButton(withTitle: String(localized: "Play Without It"))
+                a.addButton(withTitle: String(localized: "Quit"))
                 box.waiting = true
                 let answer = a.runModal()
                 box.waiting = false
@@ -107,7 +107,7 @@ enum SaveCheck {
             box.lock.lock(); let r = box.report; box.lock.unlock()
             if case .play(let choice) = SaveSyncReport.step(r) { apply(choice); return true }
             app.setActivationPolicy(.regular); app.activate(ignoringOtherApps: true)
-            switch ask(r, cancel: "Quit") {
+            switch ask(r, cancel: String(localized: "Quit")) {
             case .play(let choice): apply(choice); return true
             case .retry: continue
             case .cancel: return false
@@ -130,9 +130,9 @@ struct LauncherView: View {
 
         var title: String {
             switch self {
-            case .settings(let name): name
-            case .cloud: "Cloud Saves"
-            case .support: "Support"
+            case .settings(let name): Setting.text(name)   // the section's name is its identity (symbol, "Controls"); only what is shown is translated
+            case .cloud: String(localized: "Cloud Saves")
+            case .support: String(localized: "Support")
             }
         }
 
@@ -165,7 +165,7 @@ struct LauncherView: View {
 
     @ObservedObject var m: LauncherModel
     var problem: String? = nil
-    var name = info("CFBundleName") ?? "Game"
+    var name = info("CFBundleName") ?? String(localized: "Game")
     var version = info("CFBundleShortVersionString") ?? ""
     let done: (Bool) -> Void
     @AppStorage("window.show") private var show = true
@@ -228,7 +228,7 @@ struct LauncherView: View {
             DispatchQueue.main.async {
                 guard checking, check == mine else { return }
                 checking = false
-                switch SaveCheck.ask(report, cancel: "Cancel") {
+                switch SaveCheck.ask(report, cancel: String(localized: "Cancel")) {
                 case .play(let choice): SaveCheck.apply(choice); play()
                 case .retry: start()
                 case .cancel: break
@@ -516,7 +516,7 @@ struct CloudSavesSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             LabeledContent("Folder") {
-                Text(Self.fixed.map { $0 == "0" || $0.isEmpty ? "Off" : Self.shown($0) } ?? (folder.isEmpty ? "Off" : Self.shown(folder)))
+                Text(Self.fixed.map { $0 == "0" || $0.isEmpty ? String(localized: "Off") : Self.shown($0) } ?? (folder.isEmpty ? String(localized: "Off") : Self.shown(folder)))
                     .foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
             }
             if Self.fixed != nil {
@@ -545,8 +545,8 @@ struct CloudSavesSection: View {
     private func pick() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false; panel.canCreateDirectories = true
-        panel.prompt = "Use for Cloud Saves"
-        panel.message = "The folder the iPhone app chose in its launcher's Cloud Saves"
+        panel.prompt = String(localized: "Use for Cloud Saves")
+        panel.message = String(localized: "The folder the iPhone app chose in its launcher's Cloud Saves")
         panel.directoryURL = URL(fileURLWithPath: folder.isEmpty ? Self.drive : folder)
         if panel.runModal() == .OK, let url = panel.url { clearRouting(); folder = url.path }
     }
@@ -573,10 +573,10 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
     init(_ model: LauncherModel, problem: String?) { self.model = model; self.problem = problem }
 
     func applicationDidFinishLaunching(_ n: Notification) {
-        let name = info("CFBundleName") ?? "Game"
+        let name = info("CFBundleName") ?? String(localized: "Game")
         let menu = NSMenu(), item = NSMenuItem(), app = NSMenu()
-        app.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
-        app.addItem(withTitle: "Quit \(name)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        app.addItem(withTitle: String(localized: "Close Window"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        app.addItem(withTitle: String(localized: "Quit \(name)"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.submenu = app; menu.addItem(item); NSApp.mainMenu = menu
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 510), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         w.title = "AetherNX"; w.isReleasedWhenClosed = false; w.delegate = self

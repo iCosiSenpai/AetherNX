@@ -50,10 +50,19 @@ static int info_string(const char *key, char *out, size_t n) {   // a string key
     return v && CFGetTypeID(v) == CFStringGetTypeID() && CFStringGetCString(v, out, (CFIndex)n, kCFStringEncodingUTF8) && *out;
 }
 
-static void alert(const char *title, const char *msg) {   // a dialog (the app has no window of its own), and the same line on stderr
+// A dialog (the app has no window of its own), and the same line on stderr. The log keeps the English; the dialog shows the player's language when the app's
+// Localizable.strings has the message under its English (dm/ios/Sources/<language>.lproj, which pack_app.py copies into the app; dm/tools/tests/test_launcher_strings.py)
+static void alert(const char *title, const char *msg) {
     fprintf(stderr, "[RED] %s\n", msg);
+    char shown[1024]; snprintf(shown, sizeof shown, "%s", msg);
+    CFBundleRef b = CFBundleGetMainBundle(); CFStringRef k = b ? CFStringCreateWithCString(NULL, msg, kCFStringEncodingUTF8) : NULL;
+    if (k) {
+        CFStringRef t = CFBundleCopyLocalizedString(b, k, k, NULL);
+        if (t) { if (!CFStringGetCString(t, shown, (CFIndex)sizeof shown, kCFStringEncodingUTF8)) snprintf(shown, sizeof shown, "%s", msg); CFRelease(t); }
+        CFRelease(k);
+    }
     char *script = "on run argv\ndisplay alert (item 1 of argv) message (item 2 of argv) as critical\nend run";
-    char *argv[] = {"osascript", "-e", script, (char *)title, (char *)msg, NULL}; pid_t pid; int st;
+    char *argv[] = {"osascript", "-e", script, (char *)title, shown, NULL}; pid_t pid; int st;
     if (!posix_spawnp(&pid, "osascript", NULL, NULL, argv, environ)) while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
 }
 
