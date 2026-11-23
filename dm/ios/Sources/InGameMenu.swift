@@ -75,7 +75,7 @@ enum MenuItem: Hashable { case controller(ObjectIdentifier), buttons, deadzone, 
     func changed(_ env: String, on: Bool) -> Bool { choices.setting(env).map { !$0.isDefault(on ? $0.onValue : $0.offValue) } ?? false }
 
     var anisoOptions: [[String]] { choices.setting("DM_ANISO")?.options?.filter { $0.count == 2 } ?? [] }
-    var layoutOptions: [(Int, String)] { [(0, "2D"), (1, "3D")] + (tapAllowed ? [(2, "Tap")] : []) }
+    var layoutOptions: [(Int, String)] { [(0, "2D"), (1, "3D")] + (tapAllowed ? [(2, String(localized: "Tap"))] : []) }
 
     /// The rows a controller moves through, in screen order
     var order: [MenuItem] {
@@ -196,7 +196,7 @@ private struct ChangedDot: View {
 /// control (a segmented choice) sits beside the name when both fit and under it when they do not, so a row reflows rather than clips (the launcher's Whole Row Rule);
 /// a slider always goes under. VoiceOver reads the control, which carries the name: the visible name and readout are not read again
 private struct MenuRow<Control: View>: View {
-    let title: String
+    let title: LocalizedStringKey
     var value: String? = nil
     var note: String? = nil
     var changed = false
@@ -234,7 +234,7 @@ private struct MenuRow<Control: View>: View {
 
 /// A choice: segmented while its labels fit at the reader's text size, a menu at the accessibility sizes, where a segmented control would truncate them
 private struct ChoicePicker<Value: Hashable, Content: View>: View {
-    let title: String
+    let title: LocalizedStringKey
     @Binding var selection: Value
     @ViewBuilder let content: Content
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -246,7 +246,7 @@ private struct ChoicePicker<Value: Hashable, Content: View>: View {
 
 /// A switch on the panel: the name (after the changed dot) beside the switch, the note under it
 private struct MenuToggle: View {
-    let title: String
+    let title: LocalizedStringKey
     @Binding var isOn: Bool
     var note: String? = nil
     var disabled = false
@@ -277,8 +277,8 @@ struct InGameMenuView: View {
     @StateObject private var controllers = ControllerListModel(live: true)
     @Environment(\.dynamicTypeSize) private var typeSize
 
-    private static let nextStart = "Applies at the next start."
-    private func fixedNote(_ env: String) -> String? { model.choices.isFixed(env) ? "Set by env.txt or at launch." : nil }
+    private static let nextStart = String(localized: "Applies at the next start.")
+    private func fixedNote(_ env: String) -> String? { model.choices.isFixed(env) ? String(localized: "Set by env.txt or at launch.") : nil }
     private func percent(_ v: Double) -> String { "\(Int((v * 100).rounded())) %" }
 
     var body: some View {
@@ -341,11 +341,11 @@ struct InGameMenuView: View {
                         pictureRows
                         sectionTitle("Controllers")
                         controllerRows
-                        sectionTitle("Touch controls", note: controllers.rows.contains(where: { $0.player >= 0 }) ? "Hidden while a controller is connected." : nil)
+                        sectionTitle("Touch controls", note: controllers.rows.contains(where: { $0.player >= 0 }) ? String(localized: "Hidden while a controller is connected.") : nil)
                         controlRows
                         if model.choices.offers("DM_PSO_MTL4") {
                             sectionTitle("Performance")
-                            MenuToggle(title: "Metal 4 pipelines", isOn: $model.metal4, note: fixedNote("DM_PSO_MTL4") ?? "Draws with stand-ins while new pipelines build, so scenes do not freeze. " + Self.nextStart,
+                            MenuToggle(title: "Metal 4 pipelines", isOn: $model.metal4, note: fixedNote("DM_PSO_MTL4") ?? String(localized: "Draws with stand-ins while new pipelines build, so scenes do not freeze.") + " " + Self.nextStart,
                                        disabled: model.choices.isFixed("DM_PSO_MTL4"), changed: model.changed("DM_PSO_MTL4", on: model.metal4), focused: nav.isFocused(.metal4), tint: tint).id(MenuItem.metal4)
                         }
                     }
@@ -391,7 +391,7 @@ struct InGameMenuView: View {
         .id(MenuItem.resume)
     }
 
-    private func sectionTitle(_ t: String, note: String? = nil) -> some View {
+    private func sectionTitle(_ t: LocalizedStringKey, note: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(t).font(.headline)
             if let note { Text(note).font(.footnote).foregroundStyle(.secondary) }
@@ -401,18 +401,18 @@ struct InGameMenuView: View {
     }
 
     @ViewBuilder private var pictureRows: some View {
-        MenuRow(title: "Upscaling", note: model.upscaleSupported ? (fixedNote("DM_PRESENT_UPSCALE") ?? "MetalFX uses more GPU time and can increase heat.") : "This GPU has no MetalFX spatial scaler.",
+        MenuRow(title: "Upscaling", note: model.upscaleSupported ? (fixedNote("DM_PRESENT_UPSCALE") ?? String(localized: "MetalFX uses more GPU time and can increase heat.")) : String(localized: "This GPU has no MetalFX spatial scaler."),
                 changed: model.changed("DM_PRESENT_UPSCALE", model.upscale ? "metalfx" : "off"), inline: true, focused: nav.isFocused(.upscale), tint: tint) {
             ChoicePicker(title: "Upscaling", selection: $model.upscale) { Text("Standard").tag(false); Text("MetalFX").tag(true) }
                 .disabled(!model.upscaleSupported || model.choices.isFixed("DM_PRESENT_UPSCALE"))
         }.id(MenuItem.upscale)
-        MenuRow(title: "Sharpness", value: model.sharpen > 0 ? percent(model.sharpen) : "Off", note: fixedNote("DM_PRESENT_SHARPEN"),
+        MenuRow(title: "Sharpness", value: model.sharpen > 0 ? percent(model.sharpen) : String(localized: "Off"), note: fixedNote("DM_PRESENT_SHARPEN"),
                 changed: model.changed("DM_PRESENT_SHARPEN", String(format: "%.2f", model.sharpen)), focused: nav.isFocused(.sharpen), tint: tint) {
             Slider(value: $model.sharpen, in: 0...1, step: 0.05) { Text("Sharpness") }
                 .disabled(model.choices.isFixed("DM_PRESENT_SHARPEN"))
-                .accessibilityValue(model.sharpen > 0 ? percent(model.sharpen) : "Off")
+                .accessibilityValue(model.sharpen > 0 ? percent(model.sharpen) : String(localized: "Off"))
         }.id(MenuItem.sharpen)
-        MenuRow(title: "Pixels", note: fixedNote("DM_PRESENT_FILTER") ?? (model.sharpPixels ? "Each pixel as the game draws it; MetalFX is not used." : nil),
+        MenuRow(title: "Pixels", note: fixedNote("DM_PRESENT_FILTER") ?? (model.sharpPixels ? String(localized: "Each pixel as the game draws it; MetalFX is not used.") : nil),
                 changed: model.changed("DM_PRESENT_FILTER", model.sharpPixels ? "nearest" : "linear"), inline: true, focused: nav.isFocused(.pixels), tint: tint) {
             ChoicePicker(title: "Pixels", selection: $model.sharpPixels) { Text("Smooth").tag(false); Text("Sharp").tag(true) }
                 .disabled(model.choices.isFixed("DM_PRESENT_FILTER"))
@@ -429,16 +429,16 @@ struct InGameMenuView: View {
                        changed: model.changed("DM_METAL_HUD", on: model.metalHUD), focused: nav.isFocused(.hud), tint: tint).id(MenuItem.hud)
         }
         if !model.anisoOptions.isEmpty {
-            MenuRow(title: "Texture filtering", note: fixedNote("DM_ANISO") ?? "Sharper textures seen at an angle. " + Self.nextStart,
+            MenuRow(title: "Texture filtering", note: fixedNote("DM_ANISO") ?? String(localized: "Sharper textures seen at an angle.") + " " + Self.nextStart,
                     changed: model.changed("DM_ANISO", model.aniso), focused: nav.isFocused(.aniso), tint: tint) {
-                ChoicePicker(title: "Texture filtering", selection: $model.aniso) { ForEach(model.anisoOptions, id: \.[0]) { o in Text(o[1]).tag(o[0]) } }
+                ChoicePicker(title: "Texture filtering", selection: $model.aniso) { ForEach(model.anisoOptions, id: \.[0]) { o in Text(Setting.label(of: o)).tag(o[0]) } }
                     .disabled(model.choices.isFixed("DM_ANISO"))
             }.id(MenuItem.aniso)
         }
     }
 
     @ViewBuilder private var controllerRows: some View {
-        MenuRow(title: "Button layout", note: fixedNote("DM_PAD_BUTTONS") ?? "Nintendo controllers always use Switch positions.",
+        MenuRow(title: "Button layout", note: fixedNote("DM_PAD_BUTTONS") ?? String(localized: "Nintendo controllers always use Switch positions."),
                 changed: model.changed("DM_PAD_BUTTONS", model.buttonsByLabel ? "label" : "position"), focused: nav.isFocused(.buttons), tint: tint) {
             ChoicePicker(title: "Button layout", selection: $model.buttonsByLabel) { Text("Switch: A on the right").tag(false); Text("Xbox / PlayStation: A at the bottom").tag(true) }
                 .disabled(model.choices.isFixed("DM_PAD_BUTTONS"))
@@ -475,7 +475,7 @@ struct InGameMenuView: View {
         .accessibilityHint("Closes the menu; drag the controls, then Done resumes the game")
         MenuToggle(title: "Touch feedback", isOn: $model.haptics, note: fixedNote("DM_TOUCH_HAPTICS"), disabled: model.choices.isFixed("DM_TOUCH_HAPTICS"),
                    changed: model.changed("DM_TOUCH_HAPTICS", on: model.haptics), focused: nav.isFocused(.haptics), tint: tint).id(MenuItem.haptics)
-        MenuToggle(title: "Show touch controls", isOn: $model.controlsShown, note: model.controlsShown ? nil : "Only the menu button stays; every other touch goes to the game.",
+        MenuToggle(title: "Show touch controls", isOn: $model.controlsShown, note: model.controlsShown ? nil : String(localized: "Only the menu button stays; every other touch goes to the game."),
                    focused: nav.isFocused(.shown), tint: tint).id(MenuItem.shown)
         Button(action: model.resetControls) {
             Label("Reset touch controls", systemImage: "arrow.counterclockwise")
@@ -494,7 +494,7 @@ public func dmShowIngameMenu(_ viewController: UnsafeMutableRawPointer, _ closed
 }
 @MainActor private func showIngameMenu(_ parent: UIViewController, _ closed: @convention(c) () -> Void) -> Bool {
     let icon = appIcon()
-    let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Game"
+    let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? String(localized: "Game")
     weak var host: UIViewController?
     var finished = false
     let finish: (Bool) -> Void = { editing in

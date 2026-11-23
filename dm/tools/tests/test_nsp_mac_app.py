@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import signal
 import subprocess
@@ -30,6 +31,17 @@ spec = importlib.util.spec_from_file_location('pack_app', REPO / 'dm/mac/pack_ap
 pack_app = importlib.util.module_from_spec(spec); spec.loader.exec_module(pack_app)
 TID = '01008CF01BAAC000'
 TEST_ROOT = Path(os.environ.get('HORIZONNATIVE_TEST_ROOT', tempfile.gettempdir()))
+MISSING_DATA = ('The game data inside this app is missing or incomplete (Contents/Resources/romfs.img, Contents/Resources/dm or Contents/MacOS/dmhost): '
+                'pack it again with build_ipa_from_nsp.py --platform mac-app.')   # launcher.c's alert, as its log has it
+
+
+def alert_texts(english):
+    """What launcher.c's alert may show for a message: the dialog is in the language of the Mac that runs the test, so the English or its translation in one of the app's tables."""
+    texts = {english}
+    for table in (REPO / 'dm/ios/Sources').glob('*.lproj/Localizable.strings'):
+        m = re.search(r'^"%s"\s*=\s*"((?:[^"\\]|\\.)*)";' % re.escape(english), table.read_text(encoding='utf-8'), re.M)
+        if m: texts.add(m.group(1))
+    return texts
 
 HOST_C = r'''#include <signal.h>
 #include <stdio.h>
@@ -110,7 +122,7 @@ class PackReuse(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix='pack-reuse-', dir=TEST_ROOT)).resolve()
         self.addCleanup(shutil.rmtree, self.tmp)
         t = self.tmp
-        for d in ('patched', 'romfs/empty', 'msl', 'profile', 'font', 'aoc/1', 'pso', 'bin', 'sdk', 'source', 'host', 'tools', 'ios/Sources'):
+        for d in ('patched', 'romfs/empty', 'msl', 'profile', 'font', 'aoc/1', 'pso', 'bin', 'sdk', 'source', 'host', 'tools', 'ios/Sources/en.lproj', 'ios/Sources/it.lproj'):
             (t / d).mkdir(parents=True)
         files = {
             'dmhost': b'host', 'patched/main.patched.bin': b'code', 'patched/main.fixups.tsv': b'fixups',
@@ -122,6 +134,7 @@ class PackReuse(unittest.TestCase):
             'env.txt': b'DM_TEST=1', 'split.tsv': b'split', 'icon.jpg': b'jpeg', 'source/launcher.c': b'launcher',
             'host/env_file.h': b'env filter', 'host/romfs_image.h': b'validator', 'host/save_sync.c': b'sync', 'host/save_sync.h': b'sync api', 'tools/romfs.py': b'reader',
             'source/Launcher.swift': b'window', 'ios/Sources/LauncherSettings.swift': b'model', 'ios/Sources/LauncherRow.swift': b'rows', 'ios/Sources/SupportLinks.swift': b'support', 'ios/Sources/SaveSyncReport.swift': b'report', 'ios/Sources/GameExtras.swift': b'extras', 'ios/Sources/CloudFolders.swift': b'cloud',
+            'ios/Sources/en.lproj/Localizable.strings': b'english', 'ios/Sources/it.lproj/Localizable.strings': b'italian', 'ios/Sources/it.lproj/Settings.strings': b'settings',
         }
         for n in pack_app.TABLES: files['profile/' + n] = n.encode()
         for n, content in files.items(): (t / n).write_bytes(content)
@@ -207,6 +220,7 @@ class PackReuse(unittest.TestCase):
                  'patched/main.obs.tsv', 'patched/nro.tsv', 'msl/k.metallib', 'msl/k.json', 'msl/inputs.tsv', 'font/nintendo_ext.ttf',
                  'pso/gpu.mtl4a', 'pso/prebuilt.tsv', 'pso/rest_pairs.tsv', 'pso/archive.tsv', 'pso/gpu-prewarm-00.mtl4a', 'pso/gpu-prewarm-00.keys', 'pso/prewarm.tsv', 'env.txt', 'icon.jpg', 'source/launcher.c',
                  'source/Launcher.swift', 'ios/Sources/LauncherSettings.swift', 'ios/Sources/LauncherRow.swift', 'ios/Sources/SupportLinks.swift', 'ios/Sources/SaveSyncReport.swift', 'ios/Sources/GameExtras.swift', 'ios/Sources/CloudFolders.swift',   # the settings window's sources
+                 'ios/Sources/en.lproj/Localizable.strings', 'ios/Sources/it.lproj/Localizable.strings', 'ios/Sources/it.lproj/Settings.strings',   # and its texts in each language
                  'host/save_sync.c', 'host/save_sync.h']   # the cloud-save code the launcher links (its send after the host exits)
         names += ['profile/' + n for n in pack_app.TABLES]
         for name in names:
@@ -268,6 +282,20 @@ class PackReuse(unittest.TestCase):
         sync = next(c for c in self.commands if Path(c[0]).name == 'clang' and '-o' in c and c[-1].endswith('save_sync.c'))
         self.assertIn(sync[sync.index('-o') + 1], s)   # save_sync.c's object: the launcher sends the save once the host has exited
         self.assertEqual([Path(x).name for x in s if x.endswith('.swift')], ['Launcher.swift', 'LauncherSettings.swift', 'LauncherRow.swift', 'SupportLinks.swift', 'SaveSyncReport.swift', 'GameExtras.swift', 'CloudFolders.swift'])
+
+    def test_string_tables_go_into_the_app_and_name_its_languages(self):
+        (self.tmp / 'ios/Sources/it.lproj/._Localizable.strings').write_bytes(b'appledouble')   # an exFAT checkout's extended attributes: not a table
+        self.pack()
+        c = Path(self.args.out) / 'Contents'
+        self.assertEqual(sorted(str(p.relative_to(c / 'Resources')) for p in (c / 'Resources').glob('*.lproj/*')),
+                         ['en.lproj/Localizable.strings', 'it.lproj/Localizable.strings', 'it.lproj/Settings.strings'])
+        self.assertEqual((c / 'Resources/it.lproj/Settings.strings').read_bytes(), b'settings')
+        info = plistlib.loads((c / 'Info.plist').read_bytes())
+        self.assertEqual((info['CFBundleDevelopmentRegion'], info['CFBundleLocalizations']), ('en', ['en', 'it']))
+        self.assert_reused()
+        (self.tmp / 'ios/Sources/fr.lproj').mkdir(); (self.tmp / 'ios/Sources/fr.lproj/Localizable.strings').write_bytes(b'french')
+        self.assert_repacked()   # another language is another input
+        self.assertEqual(plistlib.loads((c / 'Info.plist').read_bytes())['CFBundleLocalizations'], ['en', 'fr', 'it'])
 
     def test_selected_file_modes_and_file_additions_and_removals_invalidate(self):
         self.pack()
@@ -488,6 +516,9 @@ class App(unittest.TestCase):
         self.assertTrue((c / 'Resources/aoc/1/x').is_file()); self.assertTrue((c / 'Resources/dm/font/nintendo_ext.ttf').is_file())
         self.assertEqual(sorted(p.name for p in (c / 'Resources/pso').iterdir()), ['applegpu_g14s.mtl4a', 'prebuilt.tsv'])   # the pipeline archive and its stamp only
         self.assertEqual((c / 'Resources/AppIcon.icns').read_bytes()[:4], b'icns')
+        tables = sorted((REPO / 'dm/ios/Sources').glob('*.lproj/*.strings'))   # the launcher's texts in each language, the iPhone app's own tables
+        self.assertEqual(sorted(p.relative_to(c / 'Resources') for p in (c / 'Resources').glob('*.lproj/*')), [t.relative_to(REPO / 'dm/ios/Sources') for t in tables])
+        for t in tables: self.assertEqual((c / 'Resources' / t.parent.name / t.name).read_bytes(), t.read_bytes())
 
     def test_pipeline_pair_tables(self):   # the pipeline prebuild reads them beside DM_NVN_SHMAP: without them it builds nothing, though every shader library is there
         dm = self.app / 'Contents/Resources/dm'
@@ -511,6 +542,7 @@ class App(unittest.TestCase):
         self.assertEqual(p['DMSettings'], [])   # launcher.json's settings, as the saved choices they accept: none here
         self.assertRegex(p['DMCommit'], r'^[0-9a-f]{12}(\+dirty)?$')   # the packing checkout (scripts/bug_report.py, the host's start line)
         self.assertEqual(p['DMChain'], '0123456789ab')   # the chain of the libraries packed (msl/b-<chain>)
+        self.assertEqual((p['CFBundleDevelopmentRegion'], p['CFBundleLocalizations']), ('en', ['en', 'it']))   # the languages of Resources/<language>.lproj
 
     def test_packed_language_is_the_lists(self):   # --lang a game lacks: the Game language row's default (settings.py: the game's first), with or without the window
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as d:
@@ -636,7 +668,9 @@ class App(unittest.TestCase):
         (self.tmp / 'home/alert.txt').unlink(missing_ok=True)
         p = subprocess.run([broken / 'Contents/MacOS/HorizonNative'], env=dict(HOME=str(self.tmp / 'home'), PATH=f'{self.tmp / "bin"}:/usr/bin:/bin'), capture_output=True, text=True, timeout=30)
         self.assertEqual(p.returncode, 1)
-        self.assertIn('game data inside this app is missing', (self.tmp / 'home/alert.txt').read_text())
+        self.assertIn('[RED] ' + MISSING_DATA, p.stderr)   # the log is English whatever the dialog's language
+        shown = (self.tmp / 'home/alert.txt').read_text()
+        self.assertTrue(any(t in shown for t in alert_texts(MISSING_DATA)), shown)
 
     def test_missing_modules(self):
         for missing in (('main.patched.bin',), ('main.fixups.tsv',), ('main.patched.bin', 'main.fixups.tsv')):
@@ -650,7 +684,8 @@ class App(unittest.TestCase):
                                    capture_output=True, text=True, timeout=30)
                 self.assertEqual(p.returncode, 1)
                 self.assertFalse((home / 'host_run.txt').exists())
-                self.assertIn('game data inside this app is missing', (home / 'alert.txt').read_text())
+                shown = (home / 'alert.txt').read_text()
+                self.assertTrue(any(t in shown for t in alert_texts(MISSING_DATA)), shown)
 
     def test_alert_title(self):
         broken = self.tmp / 'Quoted name.app'; shutil.copytree(self.app, broken)
@@ -666,7 +701,7 @@ class App(unittest.TestCase):
         self.assertTrue((home / 'alert.scpt').exists(), (home / 'alert.error').read_text())
         args = (home / 'alert.args').read_bytes().decode().split('\0')[:-1]
         self.assertEqual(args[2], title)   # data is passed separately from the compiled script
-        self.assertIn('game data inside this app is missing', args[3])
+        self.assertIn(args[3], alert_texts(MISSING_DATA))
 
     def test_relocated(self):   # run with the entire build folder unavailable
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as dst:

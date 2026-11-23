@@ -24,9 +24,9 @@ enum SupportLink: String, CaseIterable, Identifiable {
     }
     var subtitle: String {
         switch self {
-        case .github: return "Source, updates and bug reports"
-        case .paypal: return "Donate any amount"
-        case .coffee: return "Support development"
+        case .github: return String(localized: "Source, updates and bug reports")
+        case .paypal: return String(localized: "Donate any amount")
+        case .coffee: return String(localized: "Support development")
         }
     }
     /// The brand's chip and the colour of its mark on it
@@ -215,7 +215,7 @@ struct SupportSection: View {
 #endif
                 .focusRing(focused(link), tint, radius: 10)
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(link.title), \(link.subtitle)")
+                .accessibilityLabel(Text(verbatim: "\(link.title), \(link.subtitle)"))
                 .accessibilityHint("Opens in the browser")
                 .id(LauncherFocus.support(link.rawValue).scrollID)
             }

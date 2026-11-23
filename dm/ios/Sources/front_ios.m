@@ -129,7 +129,7 @@ static void launcher_done(void) { [g_root startGame]; }
     front_ios_notify_setup();
     if (!front_ios_boot_ok()) {   // No game files: show a hint and do not start the host
         const char *why = front_ios_boot_message();
-        [self showHint:why ? [NSString stringWithFormat:@"Game files unusable.\n%s", why] : @"Game files not found.\nPut the RomFS folder into this App's Documents as \"romfs\" (Files app), then restart."]; return;
+        [self showHint:why ? [NSString stringWithFormat:NSLocalizedString(@"Game files unusable.\n%s", nil), why] : NSLocalizedString(@"Game files not found.\nPut the RomFS folder into this App's Documents as \"romfs\" (Files app), then restart.", nil)]; return;
     }
     front_ios_audio_watch();
 #if defined(__IPHONE_27_0)   // compiled only with an SDK that has the scene accessory API
@@ -159,7 +159,7 @@ static void launcher_done(void) { [g_root startGame]; }
     dm_game_extras_env();   // the mods and cheats of the game's folder beside it, before the host's cheats (main.c, after the loading) and the RomFS mount read them
     front_hud_env();   // before the process's first Metal device, which reads MTL_HUD_ENABLED (an env file's DM_METAL_HUD sets it in main.m already; GitHub issue #840)
     const char *dev = front_ios_device_check();   // that first device: a GPU without BC textures is refused here, not at launch, so the launcher's HUD switch counts
-    if (dev) { [self showHint:[NSString stringWithFormat:@"This device is not supported.\n%s", dev]]; return; }   // the host does not start
+    if (dev) { [self showHint:[NSString stringWithFormat:NSLocalizedString(@"This device is not supported.\n%s", nil), dev]]; return; }   // the host does not start
     {   // Picture shape "auto" (the launcher's Match screen): the app window's own shape when it is taller than 16:9 (an iPad's 4:3, an unfolded iPhone Duo's 1.43:1; loader.c
         // takes 1.3 to 1.77), else 16:9. The window's, not the screen's: on an iPad under Stage Manager or Split View the app does not fill the screen. Resolved here, before the
         // host writes the state page (main.c dm_fps_state_apply)
@@ -227,8 +227,8 @@ static void launcher_done(void) { [g_root startGame]; }
 - (void)viewDidAppear:(BOOL)a {
     [super viewDidAppear:a];
     if (!front_ios_boot_ok() && front_ios_boot_message() && !self.presentedViewController) {   // a slim build whose game file image is missing or another version (main.m)
-        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Game files" message:@(front_ios_boot_message()) preferredStyle:UIAlertControllerStyleAlert];
-        [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Game files", nil) message:@(front_ios_boot_message()) preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", nil) style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:a animated:YES completion:nil];
     }
     if (self.launched || !front_ios_boot_ok()) return;
@@ -421,7 +421,7 @@ void front_progress(const char *title, long done, long total) {
             [root addSubview:g_prog];
         }
         g_prog_title.text = tt; g_prog_bar.progress = total > 0 ? (float)done / (float)total : 0;
-        g_prog_count.text = [NSString stringWithFormat:@"%@ of %@", [NSNumberFormatter localizedStringFromNumber:@(done) numberStyle:NSNumberFormatterDecimalStyle],
+        g_prog_count.text = [NSString stringWithFormat:NSLocalizedString(@"%@ of %@", nil), [NSNumberFormatter localizedStringFromNumber:@(done) numberStyle:NSNumberFormatterDecimalStyle],
                              [NSNumberFormatter localizedStringFromNumber:@(total) numberStyle:NSNumberFormatterDecimalStyle]];
     });
 }
@@ -484,19 +484,19 @@ static void handoff_notice(NSString *text) {   // the game is ending: no sound, 
 }
 void front_program_handoff(int index, const char *name) {   // front.h; on the guest thread that called oe::ExecuteProgram or oe::RequestToRelaunchApplication, before the graceful exit
     if (!multi_program()) {
-        handoff_notice(@"The game restarts.\nOpen the app again to continue.");
+        handoff_notice(NSLocalizedString(@"The game restarts.\nOpen the app again to continue.", nil));
         LOG("front end: the app ends to start again; the player is asked to open it again");
         usleep(3000 * 1000); return;
     }
-    NSString *nm = name && *name ? @(name) : [NSString stringWithFormat:@"program %d", index];
+    NSString *nm = name && *name ? @(name) : [NSString stringWithFormat:NSLocalizedString(@"program %d", nil), index];
     if (!notify_allowed()) {
-        handoff_notice([NSString stringWithFormat:@"Open the app again to start %@.", nm]);
+        handoff_notice([NSString stringWithFormat:NSLocalizedString(@"Open the app again to start %@.", nil), nm]);
         LOG("front end: program %d starts at the next start of the app (notifications not allowed)", index);
         usleep(3000 * 1000); return;
     }
-    handoff_notice([NSString stringWithFormat:@"Starting %@\u2026", nm]);
+    handoff_notice([NSString stringWithFormat:NSLocalizedString(@"Starting %@…", nil), nm]);
     usleep(1500 * 1000);
-    UNMutableNotificationContent *c = [UNMutableNotificationContent new]; c.body = [NSString stringWithFormat:@"Tap to start %@", nm];
+    UNMutableNotificationContent *c = [UNMutableNotificationContent new]; c.body = [NSString stringWithFormat:NSLocalizedString(@"Tap to start %@", nil), nm];
     UNNotificationRequest *r = [UNNotificationRequest requestWithIdentifier:@"dm.program" content:c trigger:[UNTimeIntervalNotificationTrigger triggerWithTimeInterval:1.0 repeats:NO]];
     __block NSError *err = nil; dispatch_semaphore_t added = dispatch_semaphore_create(0);
     [UNUserNotificationCenter.currentNotificationCenter addNotificationRequest:r withCompletionHandler:^(NSError *e) { err = e; dispatch_semaphore_signal(added); }];
@@ -542,8 +542,8 @@ int front_text_input(const char *title, const char *sub, const char *guide, cons
         UIAlertController *ac = [UIAlertController alertControllerWithTitle:t message:m preferredStyle:UIAlertControllerStyleAlert];
         [ac addTextFieldWithConfigurationHandler:^(UITextField *f) { f.text = init; f.placeholder = ph; }];
         __weak UIAlertController *weak = ac;
-        [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) { (void)x; r = 1; text = weak.textFields.firstObject.text; dispatch_semaphore_signal(done); }]];
-        [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(UIAlertAction *x) { (void)x; dispatch_semaphore_signal(done); }]];
+        [ac addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", nil) style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) { (void)x; r = 1; text = weak.textFields.firstObject.text; dispatch_semaphore_signal(done); }]];
+        [ac addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", nil) style:UIAlertActionStyleCancel handler:^(UIAlertAction *x) { (void)x; dispatch_semaphore_signal(done); }]];
         present_when_free(ac, ^{ LOG("[RED] front end: no window for the text input; answered as cancelled"); dispatch_semaphore_signal(done); });
     });
     // The guest clock keeps running meanwhile, as on the Switch (hle_swkbd.c): a freeze here as well stopped Octopath Traveler 0's frame loop for as long as the box was up and made its sound stutter
@@ -559,10 +559,10 @@ int front_text_input(const char *title, const char *sub, const char *guide, cons
 void front_save_failed(int err) {
     LOG("front end: save data write failed errno=%d, telling the player", err);
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSString *m = err == ENOSPC ? @"Storage is full, so progress was not saved. Free up space and save again."
-                                    : [NSString stringWithFormat:@"Saving failed (errno %d); progress was not saved.", err];
-        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Save failed" message:m preferredStyle:UIAlertControllerStyleAlert];
-        [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        NSString *m = err == ENOSPC ? NSLocalizedString(@"Storage is full, so progress was not saved. Free up space and save again.", nil)
+                                    : [NSString stringWithFormat:NSLocalizedString(@"Saving failed (errno %d); progress was not saved.", nil), err];
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Save failed", nil) message:m preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", nil) style:UIAlertActionStyleDefault handler:nil]];
         present_when_free(a, ^{ LOG("[RED] front end: no window for the save-failure alert errno=%d", err); });
     });
 }

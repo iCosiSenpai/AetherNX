@@ -31,7 +31,7 @@ Each launcher belongs to one game: the game's own name, icon and tested defaults
 
 - Contracts in `docs/frontends.md` and `docs/settings.md` must hold: only choices that differ from the tested default are saved (`launcher.<VAR>` in the app's preferences), reset forgets them only when Play applies, precedence launch environment > env.txt > bundle env.txt > saved choices > tested defaults, `DM_LAUNCHER=0` skips the screen, `DM_SAVED_CHOICES=0` ignores saved choices.
 - C entry points `dm_show_launcher` (iOS) and `dm_mac_launcher` (Mac) and the cloud-saves functions in `CloudSaves.h` stay as they are.
-- Strings are English (project rule); no localisation exists yet.
+- Strings are written in English in the sources (project rule) and shown in the player's language: English and Italian, from the tables in `dm/ios/Sources/<language>.lproj` (`Localizable.strings` for the sources' texts, `Settings.strings` for the settings list's), which the Mac app carries too. A new text needs its Italian; `dm/tools/tests/test_launcher_strings.py` checks it.
 - The Mac window is measured in `dm/ios/tests/launcher_layout_check.swift`; the model in `launcher_storage_check.swift`.
 
 ## Brand Commitments

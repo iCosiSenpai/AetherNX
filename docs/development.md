@@ -248,6 +248,22 @@ also checks that every string the app shows has its Italian translation, with no
 key given twice and none left unused. The command-line tool's own tests are
 `dm/tools/tests/test_aethernx_cli.py`.
 
+The game apps are in English and Italian as well: the launcher, the in-game menu
+and the app's notices on the iPhone and iPad, the settings window and the alerts
+on the Mac. Their sources keep the English text, which is the key of its
+translation in `dm/ios/Sources/<language>.lproj`: `Localizable.strings` for the
+texts in the sources (`String(localized:)`, SwiftUI's literals,
+`NSLocalizedString` in `front_ios.m` and `DmGamepad.m`, the messages of
+`launcher.c`'s alert), and `Settings.strings` for the settings list's texts
+(`dm/games/settings.tsv`), which the app looks up when it shows them
+(`Setting.text` in `LauncherSettings.swift`). The Xcode project takes the tables
+with the `Sources` folder, and `pack_app.py` copies them into the Mac app.
+`dm/tools/tests/test_launcher_strings.py` checks, in the tool tests, that every
+text has its Italian and that no key is left unused: the settings list's and the
+Objective-C and C notices anywhere, the Swift sources' with the compiler's own
+list on a Mac. The Mac host's own menus and the engine's messages (`dm/host`)
+are in English.
+
 `.github/workflows/lint-python.yml` lints `scripts/` and the Python tools under
 `dm/` with ruff (rules for bugs, never reformatting) and type-checks them with
 pyright in basic mode (`pyproject.toml`). It is a ratchet: today's findings are
@@ -612,6 +628,7 @@ The bundle holds what the IPA holds, with the Mac's shader libraries:
   Resources/pso/             an NVN game's pipeline archive made offline for this Mac's GPU (<arch>.mtl4a, prebuilt.tsv; --gpu none leaves it out)
   Resources/dm/              the rewritten modules and their rewriter tables, nro.tsv, the profile's shader_map.tsv, pso_manifest.tsv, c1_full.tsv, cb_extent.tsv, shader_pairs.tsv and pso_pairs.tsv, font/, env.txt (--env-file)
   Resources/AppIcon.icns
+  Resources/<language>.lproj/   the launcher's texts in each language (dm/ios/Sources/<language>.lproj: en, it), which Info.plist lists in CFBundleLocalizations
 ```
 
 The shader pairs are what the pipeline prebuild and the hybrid pipelines read ([Hybrid pipelines](#hybrid-pipelines)), as in the IPA; a profile without `pso_pairs.tsv` gets the shader split's copy (`--pso-pairs`). An app without them builds no base: [Shader-pair tables in a Mac app](reference/shaders.md#shader-pair-tables-in-a-mac-app).
