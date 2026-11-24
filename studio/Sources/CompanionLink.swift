@@ -37,12 +37,21 @@ final class CompanionHost {
 
     @ObservationIgnored private weak var model: AppModel?
     @ObservationIgnored private var server: CompanionServer?
+    /// A link of its own in place of the app's, for studio/tools/snapshots.swift to draw the card with: nil is the app's own link.
+    @ObservationIgnored var stand: Stand?
     @ObservationIgnored private var resolved: Set<UUID> = []
 
     /// Where the Mac keeps its link key and its paired phones (LinkIdentity): the app's own folder in Application Support.
     nonisolated static var identityFile: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: Bundle.main.bundleIdentifier ?? "io.github.icosisenpai.aethernx").appending(path: "companion-link.json")
+    }
+
+    /// A link that is not the app's: its own identity file and name, on the loopback interface only and with no Bonjour, so the app's link key and
+    /// phones are neither read nor shown on the network.
+    struct Stand {
+        var identityFile: URL
+        var name: String
     }
 
     /// The computer's name from System Settings › General › Sharing.
@@ -66,7 +75,7 @@ final class CompanionHost {
             refresh()
             return
         }
-        let file = Self.identityFile
+        let file = stand?.identityFile ?? Self.identityFile
         let identity: LinkIdentity
         switch LinkIdentity.load(file) {
         case .identity(let kept):
@@ -82,13 +91,14 @@ final class CompanionHost {
             identity.save(file)
         }
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
-        let server = CompanionServer(identity: identity, name: Self.macName, appVersion: version)
+        let shown = stand?.name ?? Self.macName
+        let server = CompanionServer(identity: identity, name: shown, appVersion: version, advertises: stand == nil, loopbackOnly: stand != nil)
         server.onSave = { identity in identity.save(file) }
         server.onChange = { [weak self] in self?.refresh() }
         server.onPaired = { [weak self] phone in self?.paired(phone) }
         server.onRequest = { [weak self] phone, line in self?.received(line, from: phone) }
         self.server = server
-        name = Self.macName
+        name = shown
         server.start()
         if let job = model?.job, job.isRunning { jobStarted(job) }   // turned on during a build: the phones hear of it from here on
         refresh()
@@ -389,7 +399,7 @@ private struct PairedPhoneRow: View {
 }
 
 /// The code a phone types to pair: shown while the sheet is open, good for one device and for two minutes.
-private struct PairingSheet: View {
+struct PairingSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 

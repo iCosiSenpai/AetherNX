@@ -44,6 +44,8 @@ MainActor.assumeIsolated {
     UserDefaults.standard.set(true, forKey: Pref.setupCompleted)
     if let root = ProcessInfo.processInfo.environment["AETHERNX_ROOT"] { UserDefaults.standard.set(root, forKey: Pref.enginePath) }   // the app finds it beside itself
     UserDefaults.standard.set(false, forKey: Pref.checkUpdatesAtLaunch)
+    // Never the app's own live link: it would read the app's link key and phones and show this Mac on the network. The card below has its own.
+    UserDefaults.standard.set(false, forKey: Pref.companionLink)
     NSApplication.shared.setActivationPolicy(.prohibited)
     try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
 
@@ -81,4 +83,26 @@ MainActor.assumeIsolated {
     }
     render(VStack { JobCard(job: job, showsGameName: model.games.first?.name) }.padding(24).frame(width: 760).environment(model),
            name: "progress", size: NSSize(width: 808, height: 360))
+
+    // The AetherNX Companion card of the Devices page and its pairing sheet, from a link of this program's own (CompanionHost.Stand): a scratch
+    // identity file with two phones, the loopback interface only, no Bonjour. The sheet shows a real code of that link.
+    let link = FileManager.default.temporaryDirectory.appending(path: "aethernx-snapshots-link-\(UUID().uuidString)")
+    var identity = LinkIdentity.new()
+    identity.phones = [PairedPhone(id: "SNAPSHOT-1", name: "iPhone", token: LinkKeys.newToken(), paired: Date(timeIntervalSinceNow: -3 * 86400), installsWithoutAsking: false),
+                       PairedPhone(id: "SNAPSHOT-2", name: "iPad", token: LinkKeys.newToken(), paired: Date(timeIntervalSinceNow: -20 * 86400), installsWithoutAsking: true)]
+    let stand = CompanionHost.Stand(identityFile: link.appending(path: "companion-link.json"), name: "Mac")
+    if identity.save(stand.identityFile) {
+        model.companion.stand = stand
+        UserDefaults.standard.set(true, forKey: Pref.companionLink)   // the card's switch reads it; setOn below starts the link
+        model.companion.setOn(true)
+        for _ in 0..<20 where model.companion.state != .listening { pump(0.25) }
+        render(VStack { CompanionCard() }.padding(24).frame(width: 760).environment(model), name: "companion", size: NSSize(width: 808, height: 300))
+        render(PairingSheet().environment(model), name: "companion-pairing", size: NSSize(width: 440, height: 290))
+        model.companion.setOn(false)
+        model.companion.stand = nil
+        UserDefaults.standard.set(false, forKey: Pref.companionLink)
+    } else {
+        print("companion: the scratch identity file could not be written")
+    }
+    try? FileManager.default.removeItem(at: link)
 }
