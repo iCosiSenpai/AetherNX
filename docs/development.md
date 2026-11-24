@@ -166,6 +166,9 @@ Python standard library; LZ4 is loaded when decoding NSO files.
 
 `.github/workflows/tests.yml` runs host and CPU graphics tests, Python tool
 tests, Mac builds for NVN/Vulkan/OpenGL profiles, and iOS source compilation.
+It builds AetherNX Studio and runs `studio/tests/test_studio.py`, and builds
+AetherNX Companion for the iOS Simulator and runs
+`companion/tests/test_companion.py`, the live link's loopback check among it.
 It also runs the CPU texture layout/deswizzle test (`dm/gfx/tex/tests/t_tex`)
 and the host's `tsan` and `memory-tsan` targets for audio and memory races.
 The texture format test (`t_fmt_mtl`) creates Metal textures and stays local.

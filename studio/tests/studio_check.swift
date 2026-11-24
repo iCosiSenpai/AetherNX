@@ -151,6 +151,17 @@ expect(DeviceCenter.team(chosen: "", among: list.teams) == "A1B2C3D4E5", "no tea
 expect(DeviceCenter.team(chosen: " z9y8x7w6v5 ", among: list.teams) == "Z9Y8X7W6V5", "a team ID typed in is taken as it is")
 expect(DeviceCenter.team(chosen: "", among: list.teams + list.teams) == nil && DeviceCenter.team(chosen: "nonsense", among: []) == nil, "several teams or none, and no valid choice: none")
 
+// An install AetherNX Companion asks for (CompanionLink.swift): the device the asking phone means, among those this Mac installs on
+expect(CompanionHost.device(named: "phone", kind: "iPad", chosen: nil, among: two)?.udid == "U1", "a companion's request: the reachable device with the phone's name, whatever its case")
+expect(CompanionHost.device(named: "iPhone", kind: "iPad", chosen: list.devices[0], among: two)?.udid == "U2",
+       "the name iOS gives every app decides nothing: the only reachable device of the phone's kind")
+var third = two[0]
+third.udid = "U3"
+third.name = "Other Phone"
+expect(CompanionHost.device(named: "iPhone", kind: "iPhone", chosen: two[1], among: two + [third])?.udid == "U2", "two reachable devices of its kind: the one chosen in Settings")
+expect(CompanionHost.device(named: nil, kind: nil, chosen: nil, among: two) == nil && CompanionHost.device(named: "Tablet", kind: "iPad", chosen: nil, among: list.devices) == nil,
+       "nothing to go by, or a device that is not reachable, and none chosen: none")
+
 let installedJSON = """
 {"id": "/g", "kind": "packages", "title_id": "\(title)", "name": "Stray", "folder": "/g",
  "device_install": {"team": "A1B2C3D4E5", "bundle_id": "io.example.game", "device": "U1", "device_name": "Phone", "installed": "2026-11-12T10:30:00Z"}}

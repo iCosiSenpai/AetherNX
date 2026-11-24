@@ -1,0 +1,3 @@
+/* AetherNX Studio, Italian: what macOS shows when it asks for the local network. */
+
+"NSLocalNetworkUsageDescription" = "AetherNX Companion sul tuo iPhone o iPad trova questo Mac sulla rete locale per seguirne build e installazioni.";

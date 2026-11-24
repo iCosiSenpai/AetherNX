@@ -182,6 +182,25 @@ jobs:
           if ./aethernx no-such-command 2> /dev/null; then echo "::error::an unknown command must fail"; exit 1; fi
           ./aethernx scan --json "$RUNNER_TEMP" | python3 -c 'import json, sys; d = json.load(sys.stdin); assert d["games"] == [] and d["errors"] == []'
 
+  companion:
+    name: AetherNX Companion (Simulator build, its logic and the live link)
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install XcodeGen
+        run: command -v xcodegen || brew install xcodegen
+      - name: Build the app for the iOS Simulator (unsigned)
+        env:
+          COMPANION_BUILD: ${{ runner.temp }}/companion
+        run: bash companion/build.sh
+      # Its game-folder logic against synthetic folders, the live link between Studio's own server and the companion's own client over the loopback
+      # interface (no Bonjour, no local network, no device), and an Italian string for every string it shows
+      - name: The app's own logic, the live link and its Italian
+        run: python3 -m unittest -v companion/tests/test_companion.py
+
   tool-tests:
     name: Tool tests
     runs-on: xcode-27

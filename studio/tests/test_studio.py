@@ -1,6 +1,6 @@
 """Compile AetherNX Studio's sources as a library and run studio_check.swift against them: the Danger Zone's removal plan, the folders it
 never removes whole, the build command, commands the app waits for, and the release archives its updater unpacks; and check that every string
-the app shows has its Italian. Synthetic folders and archives only: no window, network or game files."""
+the app shows has its Italian, and that the snapshot tool compiles. Synthetic folders and archives only: no window, network or game files."""
 import json
 from pathlib import Path
 import plistlib
@@ -18,6 +18,8 @@ import zlib
 STUDIO = Path(__file__).resolve().parents[1]
 TITLE = '0100000000990000'
 TARGET = 'arm64-apple-macos26.0'   # studio/build.sh's
+# The live link's wire format and transport, which Studio shares with the companion (studio/build.sh compiles them too)
+SHARED_LINK = [str(STUDIO.parent / 'companion/Sources/Core' / name) for name in ('LinkWire.swift', 'LinkTransport.swift')]
 
 
 def write_plist(path, values):
@@ -173,7 +175,7 @@ class StudioTests(unittest.TestCase):
         cls.built = subprocess.run(['xcrun', 'swiftc', '-emit-library', '-enable-testing', '-parse-as-library', '-swift-version', '5', '-target', TARGET, *cls.cache,
                                     '-module-name', 'AetherNXStudio', '-emit-module', '-emit-module-path', str(cls.library / 'AetherNXStudio.swiftmodule'),
                                     '-emit-localized-strings', '-emit-localized-strings-path', str(cls.strings),
-                                    *sorted(map(str, (STUDIO / 'Sources').glob('*.swift'))), str(STUDIO.parent / 'dm/ios/Sources/CloudFolders.swift'), '-o', str(cls.library / 'libAetherNXStudio.dylib')],
+                                    *sorted(map(str, (STUDIO / 'Sources').glob('*.swift'))), str(STUDIO.parent / 'dm/ios/Sources/CloudFolders.swift'), *SHARED_LINK, '-o', str(cls.library / 'libAetherNXStudio.dylib')],
                                    capture_output=True, text=True, timeout=900)
 
     @classmethod
@@ -199,6 +201,15 @@ class StudioTests(unittest.TestCase):
             result = subprocess.run([str(check), str(fixtures)], capture_output=True, text=True, timeout=120)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('studio check: 0 failed', result.stdout)
+
+    def test_snapshot_tool_compiles(self):
+        """studio/tools/snapshots.swift, compiled against the same library and not run: it draws with this Mac's own settings and library, and
+        snapshots.sh is its only other builder."""
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-target', TARGET, *self.cache, '-I', str(self.library), '-L', str(self.library),
+                                     '-lAetherNXStudio', '-Xlinker', '-rpath', '-Xlinker', str(self.library), str(STUDIO / 'tools/snapshots.swift'),
+                                     '-o', str(Path(tmp) / 'snapshots')], capture_output=True, text=True, timeout=300)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_every_string_has_its_italian(self):
         # A key with no Italian shows in English; a key given twice shows only its later translation (the Settings tab "Building" read "In compilazione",

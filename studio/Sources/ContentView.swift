@@ -42,6 +42,7 @@ struct ContentView: View {
         } message: { confirmation in
             Text(confirmation.message)
         }
+        .modifier(CompanionRequestAlert())
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.showsActivity)
         .onChange(of: model.page) { old, _ in if old == .updates { model.dismissUpdateNotice() } }
         .onChange(of: model.consoleRequested) { _, requested in

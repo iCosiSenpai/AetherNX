@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 @testable import CompanionCore
 
@@ -212,6 +213,121 @@ try? PackedSave.pack(files: [(path: "save/a", contents: Data([1]))], saved: save
 let far = LibraryReader.readGame(pending)!
 expect(GameActions.restore(far.backups[0], in: far) == .failure(.cloudPending) && !fm.fileExists(atPath: pending.appending(path: "0100DDDD00000000/save.dmsync").path),
        "the cloud's save not on this device yet: it cannot be kept first, so nothing replaces it")
+
+// MARK: The live link: its lines (docs/companion.md, How it talks to the Mac)
+
+var helloLine = LinkLine.phone("hello")
+helloLine.format = LinkWire.format
+helloLine.phone = "P1"
+helloLine.token = "t"
+expect(helloLine.encoded() == #"{"do":"hello","format":1,"phone":"P1","token":"t"}"#, "a line is one JSON object: its keys sorted, the ones it does not have left out")
+if case .line(let back)? = LinkMessage.parse(helloLine.encoded() + "\n") {
+    expect(back == helloLine, "read back as it was written")
+} else {
+    expect(false, "a line of the link is read")
+}
+if case .line(let later)? = LinkMessage.parse(#"{"link": "hello", "format": 1, "name": "Mac", "a key of a later build": [1, 2]}"#) {
+    expect(later.link == "hello" && later.name == "Mac", "a key this build does not know is skipped, the line kept")
+} else {
+    expect(false, "a line with a key of a later build is read")
+}
+if case .event(let event)? = LinkMessage.parse(#"{"ev": "stage", "k": 3, "n": 7, "name": "sign for the device", "step": "", "t": 12.5}"#) {
+    expect(event["k"] as? Int == 3 && event["name"] as? String == "sign for the device", "an event of the script is kept as the script wrote it")
+} else {
+    expect(false, "an event of the script is read")
+}
+expect(LinkMessage.parse("[12:00:01] plain text") == nil && LinkMessage.parse(#"{"other": 1}"#) == nil && LinkMessage.parse(#"{"link": "job", "state": 5}"#) == nil,
+       "plain text, an object that is no line, a key of the wrong kind: skipped")
+
+var lineBuffer = LineBuffer()
+expect(lineBuffer.append(Data("{\"a\":1}\n{\"b\"".utf8)) == ["{\"a\":1}"], "a line is whole at its newline")
+expect(lineBuffer.append(Data(":2}\n\n".utf8)) == ["{\"b\":2}"], "a line that came in two pieces; an empty line is none")
+expect(lineBuffer.append(Data(repeating: 0x41, count: LinkWire.maxLine + 1)) == nil, "a line longer than the limit ends the connection")
+
+// MARK: The live link: its keys
+
+expect(LinkKeys.code(typed: " 123 456 ") == "123456" && LinkKeys.code(typed: "12345") == nil && LinkKeys.code(typed: "1234567") == nil
+       && LinkKeys.code(typed: "\u{FF11}23456") == nil, "the code as typed: six ASCII digits, with or without spaces")
+let codes = Set((0..<200).map { _ in LinkKeys.newCode() })
+expect(codes.allSatisfy { $0.count == 6 && LinkKeys.code(typed: $0) == $0 } && codes.count > 150, "a new code is six digits, and not the same one each time")
+expect(LinkKeys.pairingKey(code: "123456").count == 32 && LinkKeys.pairingKey(code: "123456") == LinkKeys.pairingKey(code: "123456")
+       && LinkKeys.pairingKey(code: "123456") != LinkKeys.pairingKey(code: "123457"), "the pairing key comes from the code alone")
+expect(LinkKeys.newKey().count == 32 && LinkKeys.newKey() != LinkKeys.newKey() && LinkKeys.same("abc", "abc") && !LinkKeys.same("abc", "abd") && !LinkKeys.same("abc", "abcd"),
+       "the link key is 32 random bytes; tokens compared whole")
+let macKey = LinkPairing.newKey(), phoneKey = LinkPairing.newKey()
+let linkSecret = LinkPairing.Secret(key: LinkKeys.newKey(), token: LinkKeys.newToken())
+let linkBox = try? LinkPairing.seal(linkSecret, mine: macKey, theirs: phoneKey.publicKey.rawRepresentation, code: "123456")
+expect(linkBox != nil && linkBox.flatMap { try? LinkPairing.open($0, mine: phoneKey, theirs: macKey.publicKey.rawRepresentation, code: "123456") } == linkSecret,
+       "the link key the Mac seals is opened by the phone that typed the code")
+expect(linkBox.flatMap { try? LinkPairing.open($0, mine: phoneKey, theirs: macKey.publicKey.rawRepresentation, code: "123457") } == nil, "not with another code")
+expect(linkBox.flatMap { try? LinkPairing.open($0, mine: LinkPairing.newKey(), theirs: macKey.publicKey.rawRepresentation, code: "123456") } == nil,
+       "not by one who recorded the pairing and tries the right code: the phone's own private key is needed")
+
+// MARK: The live link: a job as the phone follows it
+
+var jobLine = LinkLine.mac("job")
+jobLine.id = "J1"
+jobLine.state = "running"
+jobLine.kind = "install"
+jobLine.target = "device"
+jobLine.titleId = title.lowercased()
+jobLine.game = "Starfall Tactics"
+jobLine.title = "Installing on iPhone"
+var unknownState = jobLine
+unknownState.state = "paused"
+expect(BuildProgress(LinkLine.mac("hello")) == nil && BuildProgress(unknownState) == nil, "another line, or a state this build does not know, is no job")
+let stageLines = [
+    #"{"ev": "stage_end", "k": 1, "name": "rewrite", "ok": true, "summary": "9 modules", "elapsed": 14.2}"#,
+    #"{"ev": "stage_end", "k": 2, "name": "iOS shaders", "ok": true, "summary": "cached", "elapsed": 3.1}"#,
+    #"{"ev": "stage", "k": 3, "n": 7, "name": "sign for the device", "step": "", "t": 20.0}"#,
+]
+func apply(_ lines: [String], to job: inout BuildProgress) {
+    for line in lines {
+        if case .event(let event)? = LinkMessage.parse(line) { job.apply(event) }
+    }
+}
+if var followed = BuildProgress(jobLine) {
+    expect(followed.isRunning && followed.isInstall && followed.titleId == title && followed.fraction == nil, "a job line: a running install, its title ID in upper case, no progress yet")
+    apply(stageLines, to: &followed)
+    expect(followed.stageIndex == 3 && followed.stageCount == 7 && followed.stageName == "sign for the device" && followed.finished.map(\.index) == [1, 2],
+           "Step 3 of 7: sign for the device, two stages behind it")
+    expect(followed.fraction.map { abs($0 - 2.0 / 7.0) < 0.0001 } == true, "two stages of seven done")
+    apply([#"{"ev": "progress", "k": 3, "name": "sign for the device", "step": "", "done": 1, "total": 2, "frac": 0.5, "eta": 40}"#], to: &followed)
+    expect(followed.fraction.map { abs($0 - 2.5 / 7.0) < 0.0001 } == true && followed.eta == 40, "and half of the third")
+    apply([#"{"ev": "say", "msg": "[12:00:03] [RED] signing failed: no team"}"#, #"{"ev": "a later event", "x": 1}"#], to: &followed)
+    expect(followed.failure == "signing failed: no team" && followed.lastMessage == "[RED] signing failed: no team" && followed.stageIndex == 3,
+           "a [RED] line is why it stopped; an event this build does not know changes nothing")
+    var endedLine = jobLine
+    endedLine.state = "failed"
+    endedLine.message = "The install stopped."
+    followed.update(endedLine)
+    expect(followed.state == .failed && followed.failure == "The install stopped." && followed.stageIndex == 3, "the job's end: the Mac's own words for why, what the events built kept")
+    endedLine.id = "J2"
+    endedLine.state = "succeeded"
+    followed.update(endedLine)
+    expect(followed.state == .failed, "another job's line changes nothing")
+} else {
+    expect(false, "a job line makes a job")
+}
+
+// MARK: The live link: the phone's end with a scripted Mac (no connection; link_check.swift has the real one)
+
+// MacLink lives on the main actor, and this file's top level is not async: the main thread says so itself.
+MainActor.assumeIsolated {
+    let scripted = MacLink(store: MemoryPairingStore(), phoneID: "P1", deviceName: "iPhone", deviceKind: "iPhone")
+    var endedJobs: [BuildProgress] = []
+    scripted.onJobEnded = { endedJobs.append($0) }
+    expect(!scripted.isConnected && scripted.status == .off && !scripted.requestInstall(titleId: title), "no Mac: nothing to ask")
+    scripted.play([#"{"link": "hello", "format": 1, "mac": "M1", "name": "Studio Mac", "app": "1.1.0"}"#, jobLine.encoded()] + stageLines, from: "A Mac")
+    expect(scripted.status == .connected("Studio Mac") && scripted.job?.stageIndex == 3 && scripted.job?.game == "Starfall Tactics", "the Mac's name from its hello, its job and where it is")
+    expect(scripted.requestInstall(titleId: title.lowercased()) && scripted.answers[title]?.state == "asked", "an install asked of the scripted Mac")
+    var succeededLine = jobLine
+    succeededLine.state = "succeeded"
+    scripted.play([succeededLine.encoded(), succeededLine.encoded()], from: "A Mac")
+    expect(scripted.job?.state == .succeeded && endedJobs.map(\.id) == ["J1"], "a job that ends while it is followed is announced, once")
+    scripted.dismissJob()
+    expect(scripted.job == nil, "a job that ended is put away")
+}
 
 print("companion check: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

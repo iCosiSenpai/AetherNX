@@ -1,5 +1,6 @@
 # AetherNX Companion, the iPhone and iPad app (docs/companion.md). XcodeGen project, as dm/ios's: companion/build.sh generates
-# AetherNXCompanion.xcodeproj from it (not committed). Phase 1 needs no entitlement: the library is a folder the person picks.
+# AetherNXCompanion.xcodeproj from it (not committed). No entitlement is needed: the library is a folder the person picks, and the live link
+# with the Mac uses the local network, which takes two Info.plist keys and the person's consent.
 name: AetherNXCompanion
 options:
   bundleIdPrefix: io.github.icosisenpai
@@ -35,6 +36,11 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UIFileSharingEnabled: true            # the demo library, in Documents, visible in the Files app
         LSSupportsOpeningDocumentsInPlace: true
+        # The live link with AetherNX Studio on the Mac (docs/companion.md, How it talks to the Mac): iOS asks for the local network with this
+        # sentence the first time the Mac's page looks for it, and lets the app browse only for the services named here
+        NSLocalNetworkUsageDescription: AetherNX finds AetherNX on your Mac on the local network, to follow its builds and installs and to ask for an install.
+        NSBonjourServices:
+          - _aethernx._tcp
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: io.github.icosisenpai.aethernx.companion
       PRODUCT_NAME: AetherNXCompanion

@@ -93,6 +93,7 @@ struct DevicesPage: View {
                     }
                 }
             }
+            CompanionCard()
         }
     }
 }

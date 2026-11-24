@@ -37,6 +37,7 @@ enum Pref {
     static let cloudSavesFolder = "cloudSavesFolder"
     static let cloudSavesGoogleDrive = "cloudSavesGoogleDrive"
     static let cloudSavesFallback = "cloudSavesFallback"
+    static let companionLink = "companionLink"
 
     static func register() {
         UserDefaults.standard.register(defaults: [
@@ -186,6 +187,8 @@ final class AppModel {
     let updates = UpdateCenter()
     let playLog = PlayLog()
     let devices = DeviceCenter()
+    /// The live link with AetherNX Companion on the local network (CompanionLink.swift); off until the person turns it on.
+    let companion = CompanionHost()
     /// What each game takes on disk, by kind, for its Danger Zone; measured when its page opens, forgotten at each scan.
     private(set) var removalPlans: [Game.ID: RemovalPlan] = [:]
     @ObservationIgnored private var measuring: Set<Game.ID> = []
@@ -209,6 +212,7 @@ final class AppModel {
                 consoleRequested = true
             }
         }
+        companion.attach(self)
     }
 
     var selectedGame: Game? {
@@ -227,6 +231,8 @@ final class AppModel {
         let gameID: String
         let gameName: String
         let target: BuildTarget
+        /// The device an install goes to when it is not the one of Settings → iPhone & iPad: its UDID (an install a companion asked for).
+        var device: String?
     }
     private(set) var buildQueue: [QueuedBuild] = []
     private var pendingDeviceBuild: Game.ID?
@@ -250,7 +256,7 @@ final class AppModel {
                 log(String(localized: "\(next.gameName) is not in the library any more: its queued build is skipped."), kind: .error)
                 continue
             }
-            build(game, target: next.target)
+            build(game, target: next.target, onDevice: next.device)
         }
     }
 
@@ -547,12 +553,13 @@ final class AppModel {
 
     // MARK: Jobs
 
-    func build(_ game: Game, target: BuildTarget) {
+    /// `udid` names the device an install goes to, in place of the one of Settings → iPhone & iPad (an install a companion asked for).
+    func build(_ game: Game, target: BuildTarget, onDevice udid: String? = nil) {
         guard let engine, game.isBuildable, removingGameID != game.id else { return }
         if target == .device && pendingDeviceBuild == game.id { return }
         if job?.isRunning == true || pendingDeviceBuild != nil {
             guard !buildQueue.contains(where: { $0.gameID == game.id && $0.target == target }) else { return }
-            buildQueue.append(QueuedBuild(gameID: game.id, gameName: game.name, target: target))
+            buildQueue.append(QueuedBuild(gameID: game.id, gameName: game.name, target: target, device: udid))
             log(String(localized: "Queued: \(game.name), \(String(localized: target.queueTitle)). It starts when the running job ends."), kind: .info)
             return
         }
@@ -561,7 +568,7 @@ final class AppModel {
             devices.refresh(engine: engine) { [weak self] in
                 guard let self else { return }
                 pendingDeviceBuild = nil
-                if let current = games.first(where: { $0.id == game.id }) { build(current, target: target) }
+                if let current = games.first(where: { $0.id == game.id }) { build(current, target: target, onDevice: udid) }
                 startNextQueued()
             }
             return
@@ -589,7 +596,7 @@ final class AppModel {
                         let ok = await Storage.thinLocalSnapshots()
                         let after = Storage.space(at: game.workDir ?? game.folder)?.free ?? 0
                         self.log(String(localized: "\(after.fileSize) free now."), kind: ok ? .info : .error)
-                        if after >= game.firstBuildSpace { self.startBuild(game, target: target) } else {
+                        if after >= game.firstBuildSpace { self.startBuild(game, target: target, onDevice: udid) } else {
                             self.errorMessage = String(localized: "There is still not enough room: \(after.fileSize) free of about \(need) needed.")
                         }
                     }
@@ -599,17 +606,18 @@ final class AppModel {
             }
             return
         }
-        startBuild(game, target: target)
+        startBuild(game, target: target, onDevice: udid)
     }
 
-    private func startBuild(_ game: Game, target: BuildTarget) {
+    private func startBuild(_ game: Game, target: BuildTarget, onDevice udid: String? = nil) {
         guard canStartJob, let engine else { return }
         let defaults = UserDefaults.standard
         var install: InstallOptions?
         var deviceName = ""
         var environment: [String: String] = [:]
         if target == .device {
-            guard let device = devices.selectedDevice else {
+            // A device named by the caller is that one or none: an install asked for one device never lands on another
+            guard let device = udid == nil ? devices.selectedDevice : devices.devices.first(where: { $0.udid == udid }) else {
                 errorMessage = devices.error ?? String(localized: "Choose the iPhone or iPad to install on in Settings → iPhone & iPad. Connect it with a cable, unlock it and choose Trust if it is not listed.")
                 return
             }
@@ -640,7 +648,7 @@ final class AppModel {
             return
         }
         let job = Job(title: target == .device ? String(localized: "Installing on \(deviceName)") : target.jobTitle, gameID: game.id, target: target)
-        job.retry = { [weak self] in self?.build(game, target: target) }
+        job.retry = { [weak self] in self?.build(game, target: target, onDevice: udid) }
         if defaults.bool(forKey: Pref.notifyBuilds) { Notifier.requestPermission() }
         startJob(job, executable: engine.appending(path: "aethernx"), arguments: args, directory: engine, environment: environment) { [weak self] ok in
             guard let self else { return }
@@ -782,10 +790,12 @@ final class AppModel {
         do {
             try runner.start(onLine: { [weak self, weak job] line, isError in
                 guard let self, let job else { return }
+                if !isError { self.companion.forward(line, of: job) }   // a paired phone follows the same events (docs/companion.md)
                 if let text = job.handle(line: line, isError: isError) { self.log(text, kind: isError ? .error : .output) }
             }, onExit: { [weak self, weak job] status in
                 guard let self, let job else { return }
                 job.finish(status: status)
+                self.companion.jobEnded(job)
                 let ok = job.state == .succeeded
                 if let gameID = job.gameID {
                     // A failure stays on the game's page until it is dismissed; a success or a stop leaves nothing behind
@@ -810,6 +820,7 @@ final class AppModel {
                 completion?(ok)
                 self.rescan()
             })
+            companion.jobStarted(job)
         } catch {
             job.state = .failed
             job.failureMessage = error.localizedDescription

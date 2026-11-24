@@ -4,7 +4,9 @@ import UIKit
 /// The games of the library folder, as cards: more columns as the screen grows (an iPad, an iPhone turned).
 struct LibraryView: View {
     @Environment(LibraryStore.self) private var store
+    @Environment(MacLink.self) private var link
     @State private var picking = false
+    @State private var showsMac = false
     @State private var path: [GameFolder.ID] = []
 
     var body: some View {
@@ -14,6 +16,7 @@ struct LibraryView: View {
                     empty
                 } else {
                     VStack(alignment: .leading, spacing: 16) {
+                        if let job = link.job { JobBanner(job: job) { showsMac = true } }
                         summary
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 158, maximum: 240), spacing: 16)], spacing: 16) {
                             ForEach(store.games) { game in
@@ -30,6 +33,9 @@ struct LibraryView: View {
             .navigationTitle(store.title)
             .navigationDestination(for: GameFolder.ID.self) { id in GameView(id: id) }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showsMac = true } label: { Label("Mac", systemImage: link.isConnected ? "macbook.and.iphone" : "macbook") }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button { Task { await store.reload() } } label: { Label("Read Again", systemImage: "arrow.clockwise") }
@@ -56,6 +62,7 @@ struct LibraryView: View {
         .fileImporter(isPresented: $picking, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result { store.choose(url) }
         }
+        .sheet(isPresented: $showsMac) { MacView() }
     }
 
     private var summary: some View {

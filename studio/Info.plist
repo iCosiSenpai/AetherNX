@@ -35,6 +35,12 @@
     <string>© 2026 Alessio Cosi. MIT License.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_aethernx._tcp</string>
+    </array>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>AetherNX Companion on your iPhone or iPad finds this Mac on the local network to follow its builds and installs.</string>
     <key>NSUbiquitousContainers</key>
     <dict>
         <key>iCloud.io.github.icosisenpai.horizonnative</key>

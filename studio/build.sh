@@ -25,6 +25,7 @@ xcrun swiftc \
   -target arm64-apple-macos26.0 \
   -module-name AetherNXStudio \
   "$studio"/Sources/*.swift "$root/dm/ios/Sources/CloudFolders.swift" \
+  "$root/companion/Sources/Core/LinkWire.swift" "$root/companion/Sources/Core/LinkTransport.swift" \
   -o "$app/Contents/MacOS/AetherNX"
 
 if [ -n "$identity" ]; then

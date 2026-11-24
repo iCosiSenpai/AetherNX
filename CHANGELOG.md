@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **A live link between Studio and AetherNX Companion** (first version, not yet tried on a device). Turn on AetherNX Companion on Studio's Devices page and pair an iPhone or iPad with the six digits it shows: the companion then follows the Mac's builds and installs as they run ("Step 3 of 7: Signing for your device"), and its *Install from the Mac* asks the Mac to install a game on that device. The Mac asks for your OK, until you choose Always Allow for that device. The link stays on the local network (Bonjour, TLS with a pre-shared key) and is off until you turn it on ([the companion](docs/companion.md#the-links-first-version)).
 - **Restore a backup from the companion.** In AetherNX Companion, each backup in a game's Saves has **Restore**: it puts the backup back as the save in iCloud Drive, after copying the save it replaces to Backups. The engine takes a restored save for a change made at the time of the restore, so a device's own save no longer replaces it for having newer files: each device brings it in at the game's next start and keeps its own in its backups, and a device with progress it has not sent asks which one to play. The rule is in game apps built from this version on.
 
 ## 1.1.0

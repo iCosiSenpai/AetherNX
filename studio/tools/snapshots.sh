@@ -8,7 +8,8 @@ out="${1:-$root/docs/images/studio}"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 target=arm64-apple-macos26.0
 xcrun swiftc -emit-library -enable-testing -parse-as-library -swift-version 5 -target "$target" -module-name AetherNXStudio -emit-module \
-  -emit-module-path "$work/AetherNXStudio.swiftmodule" "$studio"/Sources/*.swift -o "$work/libAetherNXStudio.dylib"
+  -emit-module-path "$work/AetherNXStudio.swiftmodule" "$studio"/Sources/*.swift "$root/dm/ios/Sources/CloudFolders.swift" \
+  "$root/companion/Sources/Core/LinkWire.swift" "$root/companion/Sources/Core/LinkTransport.swift" -o "$work/libAetherNXStudio.dylib"
 # A version of its own (no bundle ID: it must not write into the app's preferences), the release before this one, so the Updates page shows an update
 printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleShortVersionString</key><string>%s</string></dict></plist>\n' "${SNAPSHOT_VERSION:-0.2.0}" > "$work/Info.plist"
 xcrun swiftc -swift-version 5 -target "$target" -I "$work" -L "$work" -lAetherNXStudio -Xlinker -rpath -Xlinker "$work" \
