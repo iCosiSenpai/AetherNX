@@ -66,7 +66,7 @@
 #   RUN = {"exit": code or -signal or null (stopped by the harness), "crash": {"line", "type", "signal"} or null, "hang_at_s", "hang_sample" (file name or null), "hang_dump" (the log holds the host's state dump), "first_frame_s", "max_frame", "reached",
 #          "prepare_s", "prebuild": {"secs", "pairs", "built", "archived", "failed", "done", "hang"}, "fps", "frame_p50", "frame_p99", "frame_max", "dropped", "over_budget",
 #          "peak_footprint_mb", "red": {normalized text: count}, "shots": {<s>: {"dhash"}}, "secs", "modules", "host",
-#          "pipeline": {"depth_profile": "gl"|"zero", "depth_runtime": ["gl"|"zero"], "stamp_mismatch": bool} (NVN only; no depth observation = [])}
+#          "pipeline": {"depth_profile": "gl"|"zero", "depth_runtime": ["gl"|"zero"], "stamp_mismatch": bool} (NVN only; the last depth mode the log shows, no depth observation = [])}
 #   status per game, worst first: ERROR (the harness could not check it), NEW-FAIL (something that worked in the baseline fails: a shader, a shader that builds but lost more than in the
 #   baseline (a deleted bindless access, extra entry points: shader_regressions.losses), the interface check, a crash, a hang, the frame not reached), REGRESSION (new [RED] lines, a screenshot beyond the tolerance, frame time, memory or prepare time worse beyond it), CHANGED (MSL or numbers differ, nothing worse),
 #   PASS. "known" lists failures the baseline has too (they do not fail the check).
@@ -941,9 +941,11 @@ def read_log(text):
 
 def pipeline_status(text, zero):
     """The depth selected by NVN versus the profile's archive input, and a bundled archive whose stamp was rejected (issue #758).
+    The mode is the last one the log shows, as the packing script reads a log (build_ipa_from_nsp.py depth_in_log, profile_guess.py depth_signal): a game may set one mode and
+    then another while it sets its device up, and the bases are made for the one it ends on (Skyward Sword HD: near=0, near=-w, near=0, all before its first frame).
     No depth line means unknown, not GL: a route that never initializes NVN gives no evidence about the game's mode."""
     modes = re.findall(r'\[(?:nvn-mtl|nvn)\] depth mode:? near=(0|-w)\b', text)
-    return {'depth_profile': 'zero' if zero else 'gl', 'depth_runtime': list(dict.fromkeys('zero' if m == '0' else 'gl' for m in modes)),
+    return {'depth_profile': 'zero' if zero else 'gl', 'depth_runtime': ['zero' if modes[-1] == '0' else 'gl'] if modes else [],
             'stamp_mismatch': bool(re.search(r'pipeline archive bundled with the app: made for [^\n]*, this run needs ', text))}
 
 
@@ -1005,8 +1007,8 @@ def save_digest(d):
 def smoke_context(g, art, route, a, hardware):
     """Reuse a baseline only for the same route, save bytes, build artifacts, machine and run settings. Old records without this context are recorded again."""
     env = {k: v for k, v in os.environ.items() if k.startswith(('DM_', 'DMSH_', 'XLATE_')) and not k.startswith('DM_SAVE_SYNC')}   # cloud saves are off in every run (run_env)
-    # Version 2 also records pipeline_status: older cached runs cannot establish whether the profile matched runtime depth.
-    return json.loads(json.dumps({'checks': 2, 'route': route, 'save': save_digest(save_source(g, route)), 'host': art['host_key'], 'modules': art['modules_key'], 'chain': art['manifest']['key'],
+    # Version 2 also records pipeline_status: older cached runs cannot establish whether the profile matched runtime depth. Version 3: its depth is the last mode the log shows.
+    return json.loads(json.dumps({'checks': 3, 'route': route, 'save': save_digest(save_source(g, route)), 'host': art['host_key'], 'modules': art['modules_key'], 'chain': art['manifest']['key'],
                                  'profile': digest(sorted(art['profile'].glob('*.tsv'))), 'machine': hardware, 'tools': a.tools_fp, 'env': env, 'overrides': a.env,
                                  'no_hud': a.no_hud, 'runs': a.runs, 'prebuild_limit': a.prebuild_limit, 'prebuild_hang': a.prebuild_hang}))
 
