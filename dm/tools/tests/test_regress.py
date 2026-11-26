@@ -547,6 +547,7 @@ out = Path(sys.argv[2]) / 'b-v'; out.mkdir(parents=True, exist_ok=True)
     def test_smoke_detects_archive_profile_mismatches(self):
         # The harness makes its own archive, so a profile/runtime mismatch must also fail without a bundled archive.
         depth = '[dm] [nvn-mtl] depth mode: near=0, vertex shaders use the main0_z entry\n'
+        gl = '[dm] [nvn-mtl] depth mode: near=-w (GL), vertex shaders use the main0 entry\n[dm] [nvn] depth mode near=-w (GL)\n'
         rejected = ('[dm] [nvn-mtl] pipeline archive bundled with the app: made for chain b3ca4b7c621f; depth near=-w; '
                     'pairs 255241 f6cf106d01da3da8, this run needs chain b3ca4b7c621f; depth near=0; pairs 255241 f6cf106d01da3da8: '
                     'the device builds the bases it does not hold (the game\'s depth mode is not the one built for: the profile key depth_mode)\n')
@@ -556,7 +557,9 @@ out = Path(sys.argv[2]) / 'b-v'; out.mkdir(parents=True, exist_ok=True)
                  (True, depth + rejected.replace('depth near=-w', 'depth near=0').replace('made for chain b3ca4b7c621f', 'made for chain old'), 'bundled pipeline archive stamp'),
                  (True, depth + '[dm] [nvn-mtl] pipeline archive bundled with the app: made for (no prebuilt.tsv), this run needs chain current; depth near=0: the device builds the bases it does not hold\n', 'bundled pipeline archive stamp'),
                  (False, '', None), (False, '[dm] [nvn] depth mode near=-w (GL)\n', None),
-                 (True, depth + '[dm] [nvn-mtl] pipeline archive bundled with the app: holds the bases of every shader pair (16 of 16 probed bases found, 26.0 ms)\n', None)]
+                 (True, depth + '[dm] [nvn-mtl] pipeline archive bundled with the app: holds the bases of every shader pair (16 of 16 probed bases found, 26.0 ms)\n', None),
+                 # A game that sets one mode and then another while it sets its device up runs on the last (Skyward Sword HD: near=0, near=-w, near=0 before its first frame)
+                 (True, depth + gl + depth, None), (True, depth + gl, 'profile depth_mode zero'), (False, gl + depth, 'profile depth_mode gl'), (False, depth + gl, None)]
         route = dict(secs=10, quick=10, prebuild='off', keys='', reach=None, shots=[], hang=20)
         for zero, text, failure in cases:
             with self.subTest(zero=zero, text=text), tempfile.TemporaryDirectory() as td:
