@@ -5,6 +5,11 @@ import SwiftUI
 // Pictures of AetherNX Studio's pages for the README and the website, drawn offscreen from the app's own views with the library and settings of this
 // Mac (no window on screen, so it also runs while the screen is locked). studio/tools/snapshots.sh builds and runs it.
 //   snapshots <output folder> [light|dark] [width] [height]
+//
+// It reads the library and writes none of it (Library.isReadOnly): no game folder, note, game.json or picture in the cloud folders, no setting of a
+// game's app, no artwork fetched, so it draws the artwork Studio has already stored on this Mac. What it does write: the pictures, its own
+// preferences domain (named after the program, since it has no bundle ID), a scratch link folder it removes, and what the Updates page's check
+// writes, a `git fetch` in the checkout it is run from.
 
 let arguments = CommandLine.arguments
 let out = URL(filePath: arguments.count > 1 ? arguments[1] : ".")
@@ -49,6 +54,8 @@ MainActor.assumeIsolated {
     NSApplication.shared.setActivationPolicy(.prohibited)
     try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
 
+    // Before the model: its first scan is what would write (a start of Studio prepares every game's cloud folder and its app's settings)
+    Library.isReadOnly = true
     let model = AppModel()
     model.snapshotMode = true
     model.showsSetupAssistant = false

@@ -117,6 +117,14 @@ struct Confirmation: Identifiable {
     var action: @MainActor () -> Void
 }
 
+/// A run that reads this Mac's library and writes none of it. studio/tools/snapshots.swift sets it before it makes the model; Studio never does.
+/// What a start and a scan otherwise write is then left as it is: the cloud folders (a game's folder, its Mods and Cheats, its note, its game.json and
+/// picture, a folder named by its title ID renamed after the game), the settings of the games' apps (cloud saves, mods, cheats), and the artwork
+/// store, which also asks nothing of the internet. Each function that writes one of them returns at once.
+enum Library {
+    static var isReadOnly = false
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -677,6 +685,7 @@ final class AppModel {
 
     /// The library's cloud folder reaches every built game that has no choice of its own (CloudSaves.applyLibraryFolder).
     func applyCloudSavesFolder() {
+        guard !Library.isReadOnly else { return }
         let defaults = UserDefaults.standard
         let automatic = CloudSaves.preferredICloud()
         let folder = defaults.string(forKey: Pref.cloudSavesFolder) ?? automatic

@@ -74,7 +74,7 @@ enum CloudSaves {
 
     /// Never create a replacement mount path when its provider is unavailable.
     static func prepareRoot(_ root: String) {
-        guard !root.isEmpty, root != automaticFolder() else { return }
+        guard !Library.isReadOnly, !root.isEmpty, root != automaticFolder() else { return }
         let url = URL(fileURLWithPath: root, isDirectory: true)
         guard CloudFolders.accessible(url.deletingLastPathComponent()),
               !FileManager.default.fileExists(atPath: root),
@@ -85,6 +85,7 @@ enum CloudSaves {
     }
 
     static func routes(domain: String, primary: String?, fallback: String?) {
+        guard !Library.isReadOnly else { return }
         let key = domain as CFString
         CFPreferencesSetAppValue(primaryRootKey as CFString, primary.map { $0 as CFString }, key)
         CFPreferencesSetAppValue(fallbackRootKey as CFString, fallback.map { $0 as CFString }, key)
@@ -170,6 +171,7 @@ enum CloudSaves {
     }
 
     private static func write(_ folder: String?, inherited: Bool, domain: String) {
+        guard !Library.isReadOnly else { return }
         let domain = domain as CFString
         CFPreferencesSetAppValue(folderKey as CFString, folder.map { $0 as CFString }, domain)
         CFPreferencesSetAppValue(inheritedKey as CFString, inherited ? kCFBooleanTrue : nil, domain)

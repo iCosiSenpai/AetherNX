@@ -80,7 +80,7 @@ final class ArtworkStore {
     /// Looks the game up once (again a week after a miss); the views ask for every game they show. Nothing is asked before the Setup Assistant is
     /// done (or skipped): its Preferences step is where the player first sees that the title ID or the name goes to nlib.cc and Wikipedia.
     func request(_ game: Game) {
-        guard Self.isEnabled, Self.setupIsDone, game.isBuildable, let id = game.titleId, !queued.contains(id) else { return }
+        guard !Library.isReadOnly, Self.isEnabled, Self.setupIsDone, game.isBuildable, let id = game.titleId, !queued.contains(id) else { return }
         if let entry = art[id], entry.source != nil || Date().timeIntervalSince(entry.fetched) < Self.retryAfter { return }
         queued.insert(id)
         queue.append((id, game.name))
