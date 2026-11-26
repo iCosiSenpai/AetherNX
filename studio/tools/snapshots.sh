@@ -1,6 +1,7 @@
 #!/bin/bash
 # Pictures of AetherNX Studio's pages (studio/tools/snapshots.swift), into docs/images/studio/ by default: the app's sources as a library, then the program.
 #   studio/tools/snapshots.sh [output folder] [light|dark] [width] [height]
+# The program reads this Mac's library and Studio's settings and writes none of them (its header says what it does write).
 set -euo pipefail
 studio="$(cd "$(dirname "$0")/.." && pwd -P)"
 root="$(cd "$studio/.." && pwd -P)"
@@ -14,7 +15,4 @@ xcrun swiftc -emit-library -enable-testing -parse-as-library -swift-version 5 -t
 printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleShortVersionString</key><string>%s</string></dict></plist>\n' "${SNAPSHOT_VERSION:-0.2.0}" > "$work/Info.plist"
 xcrun swiftc -swift-version 5 -target "$target" -I "$work" -L "$work" -lAetherNXStudio -Xlinker -rpath -Xlinker "$work" \
   -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$work/Info.plist" "$studio/tools/snapshots.swift" -o "$work/snapshots"
-# The app's string tables beside the program, as the app has them in its bundle: the scan then knows a game folder's note under its name in every
-# language (GameExtras.noteNames). Without them this program, always in English, wrote "Read me.txt" beside the note of a Studio in another language.
-cp -R "$studio"/Resources/*.lproj "$work/"
 AETHERNX_ROOT="$root" "$work/snapshots" "$out" "${2:-dark}" "${3:-1440}" "${4:-900}" -AppleLanguages "(en)" -AppleLocale en_US

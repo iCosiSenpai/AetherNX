@@ -57,7 +57,7 @@ enum GameManifest {
     @discardableResult
     static func write(_ item: Item) -> Bool {
         let fm = FileManager.default
-        guard (try? fm.createDirectory(atPath: item.folder, withIntermediateDirectories: true)) != nil else { return false }
+        guard !Library.isReadOnly, (try? fm.createDirectory(atPath: item.folder, withIntermediateDirectories: true)) != nil else { return false }
         var contents = item.contents
         var changed = false
         if let source = item.iconSource, let picture = try? Data(contentsOf: URL(filePath: source)), !picture.isEmpty {
@@ -86,6 +86,7 @@ extension AppModel {
     /// The game.json of every game with a folder in iCloud Drive › AetherNX, written off the main thread (a file iCloud has not downloaded yet makes
     /// its read wait).
     func publishManifests(_ only: [Game]? = nil) {
+        guard !Library.isReadOnly else { return }
         let library = UserDefaults.standard.string(forKey: Pref.cloudSavesFolder) ?? ""
         var items: [GameManifest.Item] = []
         for game in only ?? games {

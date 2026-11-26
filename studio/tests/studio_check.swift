@@ -329,6 +329,29 @@ if let tables = Bundle(path: "\(root)/strings") {
     expect(false, "Studio's string tables beside the fixtures")
 }
 
+// A read-only run (studio/tools/snapshots.swift sets Library.isReadOnly before it makes the model): what a start and a scan write is left as it is
+let quiet = "\(root)/read-only"
+try? fm.createDirectory(atPath: quiet, withIntermediateDirectories: true)
+let quietDomain = "io.github.icosisenpai.aethernx.studio-check.read-only.\(UUID().uuidString)"
+let quietManifest = GameManifest.Item(folder: "\(quiet)/AetherNX/Stray", contents: .init(format: GameManifest.format, name: "Stray", titleId: title),
+                                      iconSource: nil)
+Library.isReadOnly = true
+GameExtras.prepare(folder: "\(quiet)/\(title)", game: game)
+CloudSaves.prepareRoot("\(quiet)/AetherNX")
+let wroteWhileReadOnly = GameManifest.write(quietManifest)
+expect(entries(quiet).isEmpty && !wroteWhileReadOnly, "a read-only run makes no folder, note or game.json \(entries(quiet))")
+CloudSaves.routes(domain: quietDomain, primary: "/c/primary", fallback: "/c/fallback")
+CloudSaves.choose("/c/Saves", domain: quietDomain)
+CloudSaves.followLibrary("/c/Saves", domain: quietDomain)
+GameExtras.set(["/c/mod/romfs"], for: GameExtras.foldersKey, domain: quietDomain)
+expect(CloudSaves.setting(domain: quietDomain) == .unset && CloudSaves.savedRoots(domain: quietDomain).isEmpty
+       && GameExtras.strings(GameExtras.foldersKey, domain: quietDomain).isEmpty, "and changes no setting of a game's app")
+Library.isReadOnly = false
+GameExtras.prepare(folder: "\(quiet)/\(title)", game: game)
+CloudSaves.prepareRoot("\(quiet)/AetherNX")
+expect(GameManifest.write(quietManifest) && Set(entries(quiet)) == [title, "AetherNX"] && entries("\(quiet)/AetherNX/Stray") == [GameManifest.fileName],
+       "the same calls write when it is off \(entries(quiet))")
+
 // Mods/mods.json: the order and the mods off for every device, written by Studio and the companion (docs/companion.md)
 let modDomain = "io.github.icosisenpai.aethernx.studio-check.mods.\(UUID().uuidString)"
 GameExtras.set(["A Skin"], for: GameExtras.ordersKey, domain: modDomain)

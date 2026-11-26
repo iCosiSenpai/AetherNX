@@ -115,7 +115,7 @@ enum GameExtras {
 
     /// Makes the Mods and Cheats folders of a game's folder, with a note on what goes where (once, in the language Studio runs in then).
     static func prepare(folder: String, game: Game, strings: Bundle = .main) {
-        guard let id = game.titleId else { return }
+        guard !Library.isReadOnly, let id = game.titleId else { return }
         let base = isOwnFolder(folder, titleID: id) ? folder : (folder as NSString).appendingPathComponent(id)
         let fm = FileManager.default
         try? fm.createDirectory(atPath: modsFolder(in: base), withIntermediateDirectories: true)
@@ -180,6 +180,7 @@ enum GameExtras {
     }
 
     static func set(_ value: Any?, for key: String, domain: String) {
+        guard !Library.isReadOnly else { return }
         CFPreferencesSetAppValue(key as CFString, value as CFPropertyList?, domain as CFString)
         CFPreferencesAppSynchronize(domain as CFString)
     }
@@ -193,7 +194,7 @@ enum GameExtras {
 extension AppModel {
     /// Writes what the game's Mac app reads at its next start: its mods on, in order, and its cheats folder.
     func refreshExtras(_ game: Game) {
-        guard let id = game.titleId, let domain = CloudSaves.domain(for: game), let base = GameExtras.folder(for: game) else { return }
+        guard !Library.isReadOnly, let id = game.titleId, let domain = CloudSaves.domain(for: game), let base = GameExtras.folder(for: game) else { return }
         let folder = GameExtras.modsFolder(in: base)
         let state = GameExtras.modState(modsFolder: folder, domain: domain)
         let mods = GameExtras.mods(in: folder, order: state.order, titleID: id)
