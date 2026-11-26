@@ -56,7 +56,7 @@ Checked at `ef70782a` on a Mac17,3 (Apple M5, 16 GB) with macOS 27.2.1. That Mac
 - Gamepads: [A controller GameController does not list gets no input](reference/services.md#a-controller-gamecontroller-does-not-list-gets-no-input).
 - Fire Emblem Engage: [its note's open items](../dm/games/0100A6301214E000/README.md#open), with what a run must capture.
 - Tears of the Kingdom: [its note's open items](../dm/games/0100F2C0115B6000/README.md#open), with what a run must capture.
-- `scripts/regress.py list` found one Mac build on that Mac, of a game with no profile or route here, so no `validated.tsv` was recorded; the three recorded games stay on older chains.
+- `scripts/regress.py list` found one Mac build on that Mac, of a game with no profile or route here, so no `validated.tsv` was recorded that day; the three recorded games stay on older chains. The first record on the current chain came on 2026-11-26, from a package added since: [Skyward Sword HD](../dm/games/01002DA013484000/README.md#mac-routes), on a route to its file list.
 
 ## Periodic review
 
