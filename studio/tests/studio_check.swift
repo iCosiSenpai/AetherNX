@@ -306,6 +306,29 @@ try? fm.createDirectory(atPath: "\(root)/mods-check/Cheats", withIntermediateDir
 try? "[Infinite HP]\n04000000 00000000 00000063\n{Master}\n[Max Gold]\n".write(toFile: "\(root)/mods-check/Cheats/0123456789ABCDEF.txt", atomically: true, encoding: .utf8)
 expect(GameExtras.cheatFiles(in: "\(root)/mods-check/Cheats", titleID: title).map(\.cheats) == [3], "a cheat file and how many cheats it has")
 
+// The note of a game's folder, once in whatever language: its names come from Studio's own string tables, which test_studio.py copies beside the fixtures
+func entries(_ folder: String) -> [String] { ((try? fm.contentsOfDirectory(atPath: folder)) ?? []).sorted() }
+if let tables = Bundle(path: "\(root)/strings") {
+    let english = "Read me.txt"
+    let noteNames = GameExtras.noteNames(in: tables)
+    expect(noteNames.contains(english) && noteNames.count > 1, "the note's name in English and in Studio's other languages \(noteNames.sorted())")
+    let fresh = "\(root)/note/\(title)"
+    GameExtras.prepare(folder: fresh, game: game, strings: tables)
+    expect(entries(fresh) == ["Cheats", "Mods", english], "a game's folder gets Mods, Cheats and the note \(entries(fresh))")
+    GameExtras.prepare(folder: fresh, game: game, strings: tables)
+    expect(entries(fresh) == ["Cheats", "Mods", english], "and nothing more the next time")
+    for name in noteNames.subtracting([english]).sorted() {
+        let other = "\(root)/note in another language/\(title)"
+        try? fm.removeItem(atPath: other)
+        try? fm.createDirectory(atPath: other, withIntermediateDirectories: true)
+        try? "written in another language\n".write(toFile: "\(other)/\(name)", atomically: true, encoding: .utf8)
+        GameExtras.prepare(folder: other, game: game, strings: tables)
+        expect(entries(other) == ["Cheats", "Mods", name].sorted(), "a folder with the note Studio wrote in another language (\(name)) gets no second one \(entries(other))")
+    }
+} else {
+    expect(false, "Studio's string tables beside the fixtures")
+}
+
 // Mods/mods.json: the order and the mods off for every device, written by Studio and the companion (docs/companion.md)
 let modDomain = "io.github.icosisenpai.aethernx.studio-check.mods.\(UUID().uuidString)"
 GameExtras.set(["A Skin"], for: GameExtras.ordersKey, domain: modDomain)

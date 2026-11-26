@@ -101,15 +101,27 @@ enum GameExtras {
         (base as NSString).appendingPathComponent(base.hasPrefix(home + "/Library/Application Support/HorizonNative/") ? "cheats" : "Cheats")
     }
 
-    /// Makes the Mods and Cheats folders of a game's folder, with a note on what goes where (once).
-    static func prepare(folder: String, game: Game) {
+    /// The note's file name in every language Studio has (the string tables of `strings`) and in the one it runs in. A note written while Studio ran
+    /// in another language is the note too: looked for under one name only, each language added its own note to every game's folder.
+    static func noteNames(in strings: Bundle = .main) -> Set<String> {
+        let key = "Read me.txt"
+        var names: Set<String> = [key, String(localized: "Read me.txt")]
+        for language in strings.localizations {
+            guard let path = strings.path(forResource: language, ofType: "lproj"), let table = Bundle(path: path) else { continue }
+            names.insert(table.localizedString(forKey: key, value: key, table: nil))
+        }
+        return names
+    }
+
+    /// Makes the Mods and Cheats folders of a game's folder, with a note on what goes where (once, in the language Studio runs in then).
+    static func prepare(folder: String, game: Game, strings: Bundle = .main) {
         guard let id = game.titleId else { return }
         let base = isOwnFolder(folder, titleID: id) ? folder : (folder as NSString).appendingPathComponent(id)
         let fm = FileManager.default
         try? fm.createDirectory(atPath: modsFolder(in: base), withIntermediateDirectories: true)
         try? fm.createDirectory(atPath: cheatsFolder(in: base), withIntermediateDirectories: true)
+        guard !noteNames(in: strings).contains(where: { fm.fileExists(atPath: (base as NSString).appendingPathComponent($0)) }) else { return }
         let note = (base as NSString).appendingPathComponent(String(localized: "Read me.txt"))
-        guard !fm.fileExists(atPath: note) else { return }
         let text = String(localized: """
         \(game.name) (\(id)), kept by AetherNX.
 

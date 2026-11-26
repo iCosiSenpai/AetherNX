@@ -192,6 +192,8 @@ class StudioTests(unittest.TestCase):
             make_library(fixtures / 'dz')
             make_volumes(fixtures / 'parts')
             make_archives(fixtures / 'archives')
+            for table in (STUDIO / 'Resources').glob('*.lproj'):   # the app's own string tables: the names it gives a game folder's note
+                shutil.copytree(table, fixtures / 'strings' / table.name)
             library = self.library
             check = tmp / 'studio_check'
             result = subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-target', TARGET, *self.cache, '-I', str(library), '-L', str(library), '-lAetherNXStudio',
