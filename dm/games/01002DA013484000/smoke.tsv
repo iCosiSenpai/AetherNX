@@ -1,0 +1,14 @@
+# Boot smoke route for scripts/regress.py (docs/development.md, The regression harness): key <TAB> value
+# Fresh save: A at frame 420 (about 9 s) skips the opening movie, and the title is up from about 12 s (left alone it goes back to the movie after about 30 s). A at frame 900
+# (about 17 s) makes the save data ("Creating save data", "… has been created") and opens the file list: Quest Logs with No Autosave Data and three New Adventure rows, over
+# Skyloft drifting in haze. The list has settled by about 24 s and stays; screenshots only from then on. The route stops there: a new file asks Link's name on the software
+# keyboard (DM_KBD), which a smoke route cannot set. Frames: 900 at 17 s, 2400 at 43 s, 3400 at 60 s (M5, 2026-11-26, window on screen; the full mode's prebuild takes about 19 s
+# before the run and does not move them).
+save	new
+keys	f420:A,f900:A~f24
+secs	75
+quick	70
+reach	2400@55
+window	35	30
+shots	45,60
+hang	20

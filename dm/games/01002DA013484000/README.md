@@ -30,6 +30,7 @@ The work folder is `<NSP folder>/01002DA013484000-work`, with `boot.sh`, `ctl.sh
 - A fresh save needs `DM_KBD=Link` for headless runs: the name entry is the software keyboard, and without an answer it counts as cancelled and the file list comes back.
 - `A` or `Plus` skips the opening movie. At the title, `A~0.4`. Wait for the file list to settle (about 5 s; a press during its fade does nothing), then `LDown~0.25` and `A~0.3`: the stick moves the highlight, and it fades when the stick lets go, so send them one right after the other.
 - From there `A` skips through the cutscenes to Link's room, about 4 minutes. The academy's way out is the carved double door behind the round carpet in the hall. The autosave reaches `save_ref` in Skyloft, outside that door.
+- The smoke route ([`smoke.tsv`](smoke.tsv)) is the first two steps from a fresh save, by frame number: `A` at frame 420 skips the movie, `A` at frame 900 at the title makes the save data and opens the file list, where it stays (75 s, the pipeline prebuild before it in the full mode). It covers the boot, the start of the opening movie, the title's sky and the file list over Skyloft, on the Mac; no file is started, since Link's name needs `DM_KBD`, so nothing of the play above is in it.
 
 ## Found on this game
 
