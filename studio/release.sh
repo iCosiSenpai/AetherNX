@@ -6,7 +6,9 @@
 #   AETHERNX_SIGN_IDENTITY="Developer ID Application: <name> (<team ID>)" studio/release.sh
 #
 # Notarization uses a notarytool keychain profile, NOTARY unless AETHERNX_NOTARY_PROFILE names another
-# (xcrun notarytool store-credentials NOTARY --key <AuthKey.p8> --key-id <id> --issuer <issuer>).
+# (xcrun notarytool store-credentials NOTARY --key <AuthKey.p8> --key-id <id> --issuer <issuer>). Or it uses the App Store Connect API key itself:
+# AETHERNX_NOTARY_KEY=<AuthKey_<id>.p8> AETHERNX_NOTARY_ISSUER=<issuer> (AETHERNX_NOTARY_KEY_ID when the file's name does not carry the key ID).
+# The key needs no keychain item, which notarytool cannot read while the Mac's screen is locked (a release run through a remote session).
 set -euo pipefail
 
 studio="$(cd "$(dirname "$0")" && pwd -P)"
@@ -21,12 +23,24 @@ dmgbuild="${AETHERNX_DMGBUILD:-dmgbuild}"
 command -v "$dmgbuild" >/dev/null || { echo "install dmgbuild 1.6.7 to create the installer" >&2; exit 1; }
 app="$root/build/AetherNX.app"
 
-# Fail in seconds, not after the build, when the profile does not authenticate.
-xcrun notarytool history --keychain-profile "$profile" > /dev/null
+if [ -n "${AETHERNX_NOTARY_KEY:-}" ]; then
+  key_id="${AETHERNX_NOTARY_KEY_ID:-}"
+  if [ -z "$key_id" ]; then
+    key_id="$(basename "$AETHERNX_NOTARY_KEY" .p8)"
+    key_id="${key_id#AuthKey_}"
+  fi
+  [ -n "$key_id" ] || { echo "set AETHERNX_NOTARY_KEY_ID: the key file's name does not carry its ID" >&2; exit 1; }
+  notary=(--key "$AETHERNX_NOTARY_KEY" --key-id "$key_id" --issuer "${AETHERNX_NOTARY_ISSUER:?set AETHERNX_NOTARY_ISSUER to the issuer ID of the API key}")
+else
+  notary=(--keychain-profile "$profile")
+fi
+
+# Fail in seconds, not after the build, when the credentials do not authenticate.
+xcrun notarytool history "${notary[@]}" > /dev/null
 
 notarize() {   # submit a file, wait, and stop unless Apple accepted it
   local result status
-  result="$(xcrun notarytool submit "$1" --keychain-profile "$profile" --wait --output-format json)"
+  result="$(xcrun notarytool submit "$1" "${notary[@]}" --wait --output-format json)"
   status="$(python3 -c 'import json, sys; print(json.load(sys.stdin).get("status", ""))' <<< "$result")"
   if [ "$status" != "Accepted" ]; then
     echo "notarization of $(basename "$1"): $status" >&2
