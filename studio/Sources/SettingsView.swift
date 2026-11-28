@@ -39,6 +39,7 @@ struct SettingsPage: View {
                         }
                     }
                     .listStyle(.sidebar)
+                    .plainForSnapshots(model.snapshotMode)
                     .frame(width: 220)
                     Divider()
                     pane(model.settingsPane)
