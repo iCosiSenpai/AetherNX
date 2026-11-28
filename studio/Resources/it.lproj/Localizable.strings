@@ -788,4 +788,5 @@
 "Always Allow %@" = "Consenti sempre a %@";
 "Don't Install" = "Non installare";
 "AetherNX Companion: %@ is paired with this Mac." = "AetherNX Companion: %@ è abbinato a questo Mac.";
+"AetherNX Companion: the link's file could not be read. It is kept as %@, and each device has to pair again." = "AetherNX Companion: il file del collegamento non si legge. È conservato come %@ e ogni dispositivo deve abbinarsi di nuovo.";
 "AetherNX Companion: %@ asks to install %@ on %@." = "AetherNX Companion: %1$@ chiede di installare %2$@ su %3$@.";

@@ -115,6 +115,8 @@ final class MacLink {
     /// Stops the search for the Mac a connection is about to be made to; nil when none runs.
     @ObservationIgnored private var stopLocating: (() -> Void)?
     @ObservationIgnored private var searches = 0
+    /// The Mac the connection being made is for, from the Bonjour lookup on: connectedMac is set only once that Mac has said hello.
+    @ObservationIgnored private var connectingMac: String?
     @ObservationIgnored private var failures = 0
     @ObservationIgnored private var requests: [String: String] = [:]
     @ObservationIgnored private var retry: Task<Void, Never>?
@@ -196,6 +198,7 @@ final class MacLink {
         for channel in old { channel?.close() }   // their callbacks find another channel in their place and say nothing
         stopLocating?()
         stopLocating = nil
+        connectingMac = nil
         searches += 1   // an answer on its way finds another search in its place and says nothing
     }
 
@@ -276,8 +279,14 @@ final class MacLink {
 
     private func connect(_ mac: FoundMac, _ pairing: MacPairing) {
         status = .connecting(mac.name)
+        connectingMac = pairing.mac
         locate(mac) { [weak self] endpoint in
-            guard let self, self.pairings.contains(pairing) else { return }
+            guard let self else { return }
+            guard self.pairings.contains(pairing) else {   // forgotten while it was looked up
+                self.connectingMac = nil
+                self.status = self.isLooking ? .looking : .off
+                return
+            }
             guard let endpoint else {
                 self.lost(nil, wasReady: false, notFound: true)
                 return
@@ -322,6 +331,7 @@ final class MacLink {
                 problem = nil
                 let name = line.name ?? pairing.name
                 connectedMac = pairing.mac
+                connectingMac = nil
                 status = .connected(name)
                 if let index = pairings.firstIndex(where: { $0.mac == pairing.mac }), pairings[index].name != name {
                     pairings[index].name = name
@@ -340,7 +350,10 @@ final class MacLink {
             case "job":
                 jobLine(line)
             case "answer":
-                if let id = line.id, let title = requests[id], let state = line.state { answers[title] = Answer(state: state, why: line.why) }
+                if let id = line.id, let title = requests[id], let state = line.state {
+                    answers[title] = Answer(state: state, why: line.why)
+                    if state != "asked" { requests[id] = nil }   // a final answer: nothing more comes for this request
+                }
             default:
                 break
             }
@@ -369,6 +382,7 @@ final class MacLink {
     private func lost(_ error: NWError?, wasReady: Bool, notFound: Bool = false) {
         let wasConnected = isConnected
         connectedMac = nil
+        connectingMac = nil
         status = isLooking ? .looking : .off
         guard failures < Self.maxFailures else { return }   // refused: the Mac said why
         failures += 1
@@ -494,10 +508,14 @@ final class MacLink {
     func forget(_ mac: String) {
         pairings.removeAll { $0.mac == mac }
         store.save(pairings)
-        if connectedMac == mac {
+        if connectedMac == mac || connectingMac == mac {   // connected, or still connecting: the handshake must not end in a hello from a Mac forgotten
             let old = channel
             channel = nil
             old?.close()
+            stopLocating?()
+            stopLocating = nil
+            searches += 1
+            connectingMac = nil
             connectedMac = nil
             status = isLooking ? .looking : .off
         }

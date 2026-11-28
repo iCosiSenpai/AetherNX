@@ -158,7 +158,9 @@ expect(CompanionHost.device(named: "iPhone", kind: "iPad", chosen: list.devices[
 var third = two[0]
 third.udid = "U3"
 third.name = "Other Phone"
-expect(CompanionHost.device(named: "iPhone", kind: "iPhone", chosen: two[1], among: two + [third])?.udid == "U2", "two reachable devices of its kind: the one chosen in Settings")
+expect(CompanionHost.device(named: "iPhone", kind: "iPhone", chosen: third, among: two + [third])?.udid == "U3", "two reachable devices of its kind: the one chosen in Settings")
+expect(CompanionHost.device(named: "iPhone", kind: "iPhone", chosen: two[1], among: two + [third]) == nil,
+       "two reachable devices of its kind and an iPad chosen in Settings: none, the iPad is not the device that asked")
 expect(CompanionHost.device(named: nil, kind: nil, chosen: nil, among: two) == nil && CompanionHost.device(named: "Tablet", kind: "iPad", chosen: nil, among: list.devices) == nil,
        "nothing to go by, or a device that is not reachable, and none chosen: none")
 

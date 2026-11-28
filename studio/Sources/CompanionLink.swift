@@ -77,16 +77,22 @@ final class CompanionHost {
         }
         let file = stand?.identityFile ?? Self.identityFile
         let identity: LinkIdentity
-        switch LinkIdentity.load(file) {
-        case .identity(let kept):
+        let loaded = LinkIdentity.load(file)
+        if case .identity(let kept) = loaded {
             identity = kept
-        case .later(let format):
-            // A newer AetherNX wrote it: it is kept beside the new one, for that AetherNX to find again
-            let aside = file.deletingPathExtension().appendingPathExtension("format\(format).json")
-            try? FileManager.default.removeItem(at: aside)
-            try? FileManager.default.moveItem(at: file, to: aside)
-            fallthrough
-        case .none:
+        } else {
+            if case .later(let format) = loaded {
+                // A newer AetherNX wrote it: it is kept beside the new one, for that AetherNX to find again
+                let aside = file.deletingPathExtension().appendingPathExtension("format\(format).json")
+                try? FileManager.default.removeItem(at: aside)
+                try? FileManager.default.moveItem(at: file, to: aside)
+            } else if loaded == .damaged {
+                // Unreadable: kept beside the new one for a look. The phones paired with it have to pair again
+                let aside = file.deletingPathExtension().appendingPathExtension("damaged.json")
+                try? FileManager.default.removeItem(at: aside)
+                try? FileManager.default.moveItem(at: file, to: aside)
+                model?.log(String(localized: "AetherNX Companion: the link's file could not be read. It is kept as \(aside.lastPathComponent), and each device has to pair again."), kind: .error)
+            }
             identity = LinkIdentity.new()
             identity.save(file)
         }
@@ -131,6 +137,7 @@ final class CompanionHost {
     }
 
     func remove(_ phone: PairedPhone) {
+        if let asked = request, asked.phone.id == phone.id { decline(asked) }   // its alert goes too: a phone that is no longer paired installs nothing
         server?.remove(phone: phone.id)
     }
 
@@ -180,8 +187,8 @@ final class CompanionHost {
     // MARK: Requests
 
     /// The device a phone's request means, among those this Mac installs on: the reachable one with the phone's name; else the only reachable one
-    /// of its kind; else the device chosen in Settings → iPhone & iPad. iOS gives an app the device's own name only with an entitlement, and
-    /// "iPhone" without it, so the name alone often decides nothing.
+    /// of its kind; else the device chosen in Settings → iPhone & iPad, when it is of that kind (an iPad's request never goes to the chosen iPhone).
+    /// iOS gives an app the device's own name only with an entitlement, and "iPhone" without it, so the name alone often decides nothing.
     nonisolated static func device(named name: String?, kind: String?, chosen: AppleDevice?, among devices: [AppleDevice]) -> AppleDevice? {
         let reachable = devices.filter(\.isReachable)
         if let name, !name.isEmpty {
@@ -191,6 +198,7 @@ final class CompanionHost {
         if let kind, !kind.isEmpty {
             let ofKind = reachable.filter { $0.kind == kind }
             if ofKind.count == 1 { return ofKind[0] }
+            if let chosen, chosen.kind != kind { return nil }
         }
         return chosen
     }
@@ -279,6 +287,7 @@ final class CompanionHost {
     func approve(_ asked: InstallRequest, always: Bool) {
         guard resolved.insert(asked.id).inserted else { return }
         if request?.id == asked.id { request = nil }
+        guard phones.contains(where: { $0.id == asked.phone.id }) else { return }   // removed while its alert was open
         if always { server?.setInstallsWithoutAsking(true, phone: asked.phone.id) }
         start(asked, line: requestLine(asked))
     }
