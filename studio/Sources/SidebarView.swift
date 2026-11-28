@@ -60,7 +60,12 @@ struct SidebarView: View {
                 }
                 .tag(SidebarItem.page(.devices))
                 PageRow(title: "Updates", systemImage: "arrow.down.circle") {
-                    if model.updates.hasUpdates { Circle().fill(.tint).frame(width: 8, height: 8).help("An update is ready") }
+                    if model.updates.hasUpdates {
+                        Circle().fill(.tint).frame(width: 8, height: 8)
+                            .help("An update is ready")
+                            .accessibilityElement()
+                            .accessibilityLabel("An update is ready")   // VoiceOver reads the dot, which shows no text of its own
+                    }
                 }
                 .tag(SidebarItem.page(.updates))
                 PageRow(title: "Settings", systemImage: "gearshape") { EmptyView() }
@@ -68,6 +73,7 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .plainForSnapshots(model.snapshotMode)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             SidebarFooter()
         }
@@ -282,5 +288,26 @@ enum IconCache {
             backdrops.removeObject(forKey: key as NSString)
         }
         keys = keys.filter { !$0.hasPrefix(prefix) }
+    }
+}
+
+extension View {
+    /// The pictures of studio/tools/snapshots.swift are drawn offscreen by `cacheDisplay(in:to:)`, which leaves out Core Animation's filters. A
+    /// sidebar's text and icons are vibrant: drawn in a base colour that the window server's filter makes readable, so in a dark picture they came
+    /// out near-black. In those pictures only, a sidebar list draws them in the plain label colours; on screen nothing changes.
+    @ViewBuilder
+    func plainForSnapshots(_ isOn: Bool) -> some View {
+        if isOn {
+            foregroundStyle(Color(nsColor: .labelColor)).labelStyle(PlainIconLabelStyle())
+        } else {
+            self
+        }
+    }
+}
+
+/// The list's own label layout, with the icon in a plain colour instead of a vibrant one.
+private struct PlainIconLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Label { configuration.title } icon: { configuration.icon.foregroundStyle(Color(nsColor: .secondaryLabelColor)) }
     }
 }

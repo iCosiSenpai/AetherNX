@@ -19,6 +19,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -294,6 +295,7 @@ def stream(cmd, on_line, log=None, env=None):
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, errors='replace', env=env, start_new_session=True)
     lines, out = [], open(log, 'w') if log else None   # noqa: SIM115 (closed below, after the tool has ended)
     assert proc.stdout is not None
+    previous = hold_sigterm(interrupt)   # a SIGTERM that comes first stops the tool as Ctrl-C does, instead of ending this process and leaving the tool running
     try:
         for raw in proc.stdout:
             for line in raw.rstrip('\n').split('\r'):   # devicectl redraws its progress with carriage returns
@@ -305,16 +307,33 @@ def stream(cmd, on_line, log=None, env=None):
         stop_group(proc)
         raise
     finally:
+        hold_sigterm(previous)
         proc.stdout.close()
         if out: out.close()
 
 
-def stop_group(proc):   # the tool and what it started (xcodebuild's compilers, the build script's tools): its own process group
-    for sig, wait in ((signal.SIGINT, 8), (signal.SIGTERM, 4), (signal.SIGKILL, 2)):
-        try: os.killpg(proc.pid, sig)
-        except (ProcessLookupError, PermissionError): return
-        try: proc.wait(timeout=wait); return
-        except subprocess.TimeoutExpired: continue
+def interrupt(signum, frame): raise KeyboardInterrupt
+
+
+def hold_sigterm(handler):
+    """Sets SIGTERM's handler and returns the one it replaces (None off the main thread, where Python cannot set one, and for a None handler)"""
+    if handler is None or threading.current_thread() is not threading.main_thread(): return None
+    previous = signal.signal(signal.SIGTERM, handler)
+    return signal.SIG_DFL if previous is None else previous
+
+
+def stop_group(proc):
+    """Ends the tool and what it started (xcodebuild's compilers, the build script's tools): its own process group, SIGINT, then SIGTERM, then SIGKILL.
+    Studio sends this process SIGINT and, 5 s later, SIGTERM: that second signal is ignored here until the group is gone, or the tool would outlive us"""
+    previous = hold_sigterm(signal.SIG_IGN)
+    try:
+        for sig, wait in ((signal.SIGINT, 8), (signal.SIGTERM, 4), (signal.SIGKILL, 2)):
+            try: os.killpg(proc.pid, sig)
+            except (ProcessLookupError, PermissionError): return
+            try: proc.wait(timeout=wait); return
+            except subprocess.TimeoutExpired: continue
+    finally:
+        hold_sigterm(previous)
 
 
 # ---- install ----

@@ -187,7 +187,6 @@
 "Installed %@" = "Installato %@";
 "Installed on a device this Mac does not list now" = "Installati su un dispositivo che questo Mac ora non vede";
 "Installing %@" = "Installazione di %@";
-"Installing Python packages" = "Installazione pacchetti Python";
 "Installing on the device" = "Installazione sul dispositivo";
 "Installing what the builds need" = "Installazione di ciò che serve alle build";
 "Installs go here" = "Le installazioni vanno qui";
@@ -789,3 +788,4 @@
 "Don't Install" = "Non installare";
 "AetherNX Companion: %@ is paired with this Mac." = "AetherNX Companion: %@ è abbinato a questo Mac.";
 "AetherNX Companion: %@ asks to install %@ on %@." = "AetherNX Companion: %1$@ chiede di installare %2$@ su %3$@.";
+"AetherNX Companion: the link's file could not be read. It is kept as %@, and each device has to pair again." = "AetherNX Companion: il file del collegamento non si legge. È conservato come %@ e ogni dispositivo deve abbinarsi di nuovo.";

@@ -158,7 +158,9 @@ expect(CompanionHost.device(named: "iPhone", kind: "iPad", chosen: list.devices[
 var third = two[0]
 third.udid = "U3"
 third.name = "Other Phone"
-expect(CompanionHost.device(named: "iPhone", kind: "iPhone", chosen: two[1], among: two + [third])?.udid == "U2", "two reachable devices of its kind: the one chosen in Settings")
+expect(CompanionHost.device(named: "iPhone", kind: "iPhone", chosen: third, among: two + [third])?.udid == "U3", "two reachable devices of its kind: the one chosen in Settings")
+expect(CompanionHost.device(named: "iPhone", kind: "iPhone", chosen: two[1], among: two + [third]) == nil,
+       "two reachable devices of its kind and an iPad chosen in Settings: none, the iPad is not the device that asked")
 expect(CompanionHost.device(named: nil, kind: nil, chosen: nil, among: two) == nil && CompanionHost.device(named: "Tablet", kind: "iPad", chosen: nil, among: list.devices) == nil,
        "nothing to go by, or a device that is not reachable, and none chosen: none")
 
@@ -223,8 +225,11 @@ expect(CloudSaves.shortened(sentTo, folder: CloudSaves.automaticFolder(home: clo
        "a log line names the cloud folder as the Finder does")
 expect(CloudSaves.shortened("kept in \(cloudHome)/Library/x", folder: "/c", home: cloudHome) == "kept in ~/Library/x", "and the home folder as ~")
 
-// The store: a throwaway preferences domain, removed afterwards
-let cloudDomain = "io.github.icosisenpai.aethernx.studio-check.\(UUID().uuidString)"
+// The store: throwaway preferences domains named by a path in the fixtures folder, so their files go with it. A domain named like an app's
+// leaves a file in ~/Library/Preferences even when emptied: cfprefsd keeps one, and writes it again if it is removed while the check runs.
+let checkPreferences = "\(root)/preferences"
+try? FileManager.default.createDirectory(atPath: checkPreferences, withIntermediateDirectories: true)
+let cloudDomain = "\(checkPreferences)/studio-check.cloud"
 let otherDomain = cloudDomain + ".other"
 func forget(_ domain: String) {
     for key in [CloudSaves.folderKey, CloudSaves.inheritedKey] { CFPreferencesSetAppValue(key as CFString, nil, domain as CFString) }
@@ -332,7 +337,7 @@ if let tables = Bundle(path: "\(root)/strings") {
 // A read-only run (studio/tools/snapshots.swift sets Library.isReadOnly before it makes the model): what a start and a scan write is left as it is
 let quiet = "\(root)/read-only"
 try? fm.createDirectory(atPath: quiet, withIntermediateDirectories: true)
-let quietDomain = "io.github.icosisenpai.aethernx.studio-check.read-only.\(UUID().uuidString)"
+let quietDomain = "\(checkPreferences)/studio-check.read-only"
 let quietManifest = GameManifest.Item(folder: "\(quiet)/AetherNX/Stray", contents: .init(format: GameManifest.format, name: "Stray", titleId: title),
                                       iconSource: nil)
 Library.isReadOnly = true
@@ -353,7 +358,7 @@ expect(GameManifest.write(quietManifest) && Set(entries(quiet)) == [title, "Aeth
        "the same calls write when it is off \(entries(quiet))")
 
 // Mods/mods.json: the order and the mods off for every device, written by Studio and the companion (docs/companion.md)
-let modDomain = "io.github.icosisenpai.aethernx.studio-check.mods.\(UUID().uuidString)"
+let modDomain = "\(checkPreferences)/studio-check.mods"
 GameExtras.set(["A Skin"], for: GameExtras.ordersKey, domain: modDomain)
 expect(GameExtras.modState(modsFolder: modsRoot, domain: modDomain) == .init(order: ["A Skin"], off: []), "without mods.json, the preference keys")
 GameExtras.saveState(.init(order: ["D Both", "B Music"], off: ["B Music", "B Music"]), modsFolder: modsRoot, domain: modDomain)

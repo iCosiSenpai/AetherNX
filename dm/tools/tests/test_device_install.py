@@ -5,7 +5,11 @@ import importlib.util
 import io
 import json
 import os
+import signal
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -420,6 +424,27 @@ class Install(unittest.TestCase):
         self.assertEqual(code, 0)
         sign = json.loads(self.called('xcodebuild')[0])
         self.assertEqual(sign[sign.index('-authenticationKeyID') + 1], 'ABC123DEF4'); self.assertEqual(sign[sign.index('-authenticationKeyIssuerID') + 1], 'issuer-1')
+
+
+class Stop(unittest.TestCase):
+    """Studio's Stop sends SIGINT, then SIGTERM 5 s later: the tool's process group must be gone when the install is, whichever signal came last"""
+
+    def test_sigterm_during_the_stop_does_not_leave_the_tool_running(self):
+        child = (f"import importlib.util, sys; spec = importlib.util.spec_from_file_location('device_install', {str(REPO / 'scripts/device_install.py')!r}); "
+                 "di = importlib.util.module_from_spec(spec); spec.loader.exec_module(di)\n"
+                 "try: di.stream(['sh', '-c', 'trap \"\" INT; echo $$; while :; do sleep 0.1; done'], lambda line: print(line, flush=True))\n"
+                 "except KeyboardInterrupt: print('stopped', flush=True)\n")
+        proc = subprocess.Popen([sys.executable, '-c', child], stdout=subprocess.PIPE, text=True)
+        assert proc.stdout is not None
+        tool = int(proc.stdout.readline())   # the tool ignores SIGINT, as a busy xcodebuild may for a while
+        try:
+            proc.send_signal(signal.SIGINT); time.sleep(1); proc.send_signal(signal.SIGTERM)
+            self.assertEqual(proc.wait(timeout=30), 0)
+            self.assertIn('stopped', proc.stdout.read())
+            with self.assertRaises(ProcessLookupError): os.kill(tool, 0)
+        finally:
+            with contextlib.suppress(ProcessLookupError): os.killpg(tool, signal.SIGKILL)
+            proc.stdout.close()
 
 
 if __name__ == '__main__': unittest.main()

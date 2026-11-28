@@ -120,7 +120,10 @@ private struct GameFacts: View {
         var built: [String] = []
         if game.macApp != nil { built.append("Mac") }
         if game.ipa != nil { built.append("IPA") }
-        if game.deviceInstall != nil { built.append(game.deviceInstall?.deviceName ?? "iPhone") }
+        if let install = game.deviceInstall {   // the kind of device, short enough for the strip; its name is on the row of the install below
+            let kind = model.devices.devices.first { $0.udid == install.device }?.kind
+            built.append(kind ?? (install.deviceName?.localizedCaseInsensitiveContains("iPad") == true ? "iPad" : "iPhone"))
+        }
         out.append(Fact(label: String(localized: "Built for"), value: built.isEmpty ? String(localized: "Nothing yet") : built.joined(separator: " · "),
                         systemImage: "hammer"))
         if let success = model.lastSuccess[game.id] {
@@ -577,8 +580,8 @@ private struct DeviceRow: View {
                 Text(detail)
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    .lineLimit(2)   // one line cut the device's name and the date in the middle ("iPhone 1…13, 2026")
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             RowButton("Devices", systemImage: "iphone.gen3") { model.sidebarSelection = .page(.devices) }

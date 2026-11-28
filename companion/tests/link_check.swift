@@ -38,6 +38,9 @@ let laterFile = folder.appending(path: "link/later.json")
 try? Data(#"{"format": 2, "id": "x", "something": "new"}"#.utf8).write(to: laterFile)
 expect(LinkIdentity.load(laterFile) == .later(2) && LinkIdentity.load(folder.appending(path: "link/none.json")) == LinkIdentity.Loaded.none,
        "a file of a later format is told apart from no file")
+let damagedFile = folder.appending(path: "link/damaged.json")
+try? Data("{not json".utf8).write(to: damagedFile)
+expect(LinkIdentity.load(damagedFile) == .damaged, "a file that is there and cannot be read is told apart from no file: it is kept aside, not written over")
 
 // MARK: Listening
 
@@ -170,6 +173,14 @@ let outsider = MacLink(store: MemoryPairingStore([MacPairing(mac: identity.id, n
 outsider.look(at: [mac(pairing: false)])
 expect(await wait { outsider.problem == .keyRefused }, "without the link's key the handshake fails \(String(describing: outsider.problem))")
 outsider.stop()
+
+let forgetful = MacLink(store: MemoryPairingStore(phone.pairings), phoneID: "PHONE-1", deviceName: "Test iPhone", deviceKind: "iPhone")
+forgetful.look(at: [mac(pairing: false)])
+forgetful.forget(identity.id)   // while its connection is still being made
+try? await Task.sleep(for: .seconds(2))
+expect(!forgetful.isConnected && forgetful.status == .looking && forgetful.pairings.isEmpty,
+       "a Mac forgotten while the phone connects to it: the connection stops, and no hello makes it connected \(forgetful.status)")
+forgetful.stop()
 
 server.remove(phone: "PHONE-1")
 expect(await wait(15) { again.problem == .unpaired }, "a phone removed on the Mac is refused when it comes back \(String(describing: again.problem))")

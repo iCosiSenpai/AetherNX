@@ -32,6 +32,7 @@ import struct
 import subprocess
 import sys
 import time
+import zipfile
 from pathlib import Path
 from xml.parsers.expat import ExpatError
 
@@ -113,6 +114,16 @@ def archives_in(folder, depth=0):
 
 def is_game_file(path):
     return not path.name.startswith('._') and path.suffix.lower() in (*PACKAGE_SUFFIXES, '.nup') and path.is_file()
+
+
+def ipa_title(path):
+    """The title ID an IPA was built from: DMTitleID in its app's Info.plist (dm/ios/project.yml writes it), or '' when it has none or cannot be read"""
+    try:
+        with zipfile.ZipFile(path) as z:
+            name = next((n for n in z.namelist() if re.fullmatch(r'Payload/[^/]+\.app/Info\.plist', n)), None)
+            info = plistlib.loads(z.read(name)) if name else None
+    except (OSError, ValueError, zipfile.BadZipFile, ExpatError): return ''
+    return str(info.get('DMTitleID', '')).upper() if isinstance(info, dict) else ''
 
 
 def built_apps(folder, tid):
@@ -677,7 +688,8 @@ def cmd_move_build(args):
     if dst == src:
         rep.say(f'the build of {g["name"]} is in {dst} already'); return 0
     if not reachable(dst): raise CliError(f'{volume_of(dst).name} is not connected')
-    beside = [Path(a) for a in g['mac_apps'] + g['ipas'] if Path(a).parent == src.parent]
+    # The apps and IPAs built from this game: a library folder can hold IPAs of other games beside its packages (the scan lists every one there)
+    beside = [Path(a) for a in g['mac_apps'] if Path(a).parent == src.parent] + [Path(a) for a in g['ipas'] if Path(a).parent == src.parent and ipa_title(a) == tid]
     moves = [(src, dst)] + [(a, dst.parent / a.name) for a in beside]
     for a, b in moves:
         if b.exists() or b.is_symlink(): raise CliError(f'{b} is there already: remove it, or move the build somewhere else')

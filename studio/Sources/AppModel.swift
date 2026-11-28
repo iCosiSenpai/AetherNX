@@ -781,14 +781,6 @@ final class AppModel {
                  executable: engine.appending(path: "aethernx"), arguments: ["lift", game.folder], directory: engine)
     }
 
-    func installPythonPackages() {
-        guard canStartJob, let engine else { return }
-        startJob(Job(title: String(localized: "Installing Python packages"), gameID: nil, target: nil),
-                 executable: engine.appending(path: "aethernx"), arguments: ["setup"], directory: engine) { [weak self] _ in
-            self?.runSetupCheck()
-        }
-    }
-
     private func startJob(_ job: Job, executable: URL, arguments: [String], directory: URL?, environment: [String: String] = [:],
                           completion: (@MainActor (Bool) -> Void)? = nil) {
         guard self.job?.isRunning != true else { return }

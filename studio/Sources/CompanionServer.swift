@@ -34,21 +34,24 @@ struct LinkIdentity: Codable, Equatable, Sendable {
 
     enum Loaded: Equatable {
         case identity(LinkIdentity)
-        /// No file, or one that is not this format's: a new identity takes its place.
+        /// No file: a new identity takes its place.
         case none
         /// A file of a later format, which a newer AetherNX wrote: it is kept aside, never written over.
         case later(Int)
+        /// A file that is there but cannot be read as this format's: it is kept aside for a look, and a new identity takes its place.
+        case damaged
     }
 
     static func load(_ url: URL) -> Loaded {
-        guard let data = try? Data(contentsOf: url) else { return .none }
+        guard FileManager.default.fileExists(atPath: url.path) else { return .none }
+        guard let data = try? Data(contentsOf: url) else { return .damaged }
         if let identity = try? JSONDecoder().decode(LinkIdentity.self, from: data), identity.format == currentFormat, identity.key.count == 32, !identity.id.isEmpty {
             return .identity(identity)
         }
         if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let format = object["format"] as? Int, format > currentFormat {
             return .later(format)
         }
-        return .none
+        return .damaged
     }
 
     /// Writes the file whole, readable by its owner alone from the start (a temporary file made with that mode, then renamed over the old one).
@@ -256,9 +259,9 @@ final class CompanionServer {
             guard let self, let session else { return }
             self.received(text, from: session)
         }
-        session.channel.onClose = { [weak self, weak session] _, wasReady in
+        session.channel.onClose = { [weak self, weak session] error, wasReady in
             guard let self, let session else { return }
-            self.closed(session, wasReady: wasReady)
+            self.closed(session, error: error, wasReady: wasReady)
         }
         session.channel.start(timeout: 15)
         Task { [weak self, weak session] in
@@ -268,10 +271,20 @@ final class CompanionServer {
         }
     }
 
-    private func closed(_ session: Session, wasReady: Bool) {
+    /// A connection that ended before it was ready because its TLS handshake failed: a pre-shared key (a code) that did not match. A timeout, a
+    /// connection closed here or a network that went away is no try of a code.
+    nonisolated static func isFailedHandshake(_ error: NWError?) -> Bool {
+        switch error {
+        case .tls?: return true
+        case .posix(let code)?: return code == .ECONNRESET || code == .EPIPE || code == .ENOTCONN || code == .ECONNABORTED
+        default: return false
+        }
+    }
+
+    private func closed(_ session: Session, error: NWError?, wasReady: Bool) {
         sessions.removeAll { $0 === session }
-        if session.pairing, !wasReady, pairingCode != nil {
-            // a handshake that failed while a code shows: someone typed another code, or tried one
+        if session.pairing, !wasReady, pairingCode != nil, Self.isFailedHandshake(error) {
+            // a handshake that failed while a code shows: someone typed another code, or tried one (not a connection that timed out or was closed here)
             pairingTries += 1
             if pairingTries >= LinkWire.codeTries {
                 endPairing()
@@ -470,6 +483,7 @@ final class CompanionServer {
             lastProgress = line
         case "stage_end":
             finishedStages.append(line)
+            lastStage = nil   // a phone that connects before the next stage starts must not see this one start again
             lastProgress = nil
         default:
             break
