@@ -1,13 +1,13 @@
 # The website (https://icosisenpai.github.io/AetherNX/): site/tools/build.py makes it from site/, the game gallery (docs/images/gallery.tsv and its captures)
-# and Studio's pages (docs/images/studio), and GitHub Pages serves the result. Nothing built is committed. A release rebuilds it, since the download button names VERSION.
+# and Studio's pages (docs/images/studio), and GitHub Pages serves the result. Nothing built is committed. The download button names VERSION, so the
+# push that changes VERSION on main rebuilds it. A published release does not: the run would be on the release's tag, which the github-pages
+# environment does not let deploy (v1.2.0's run was refused), and it would build the same site.
 name: pages
 
 on:
   push:
     branches: [main]
     paths: [site/**, docs/images/**, VERSION, .github/workflows/pages.yml]
-  release:
-    types: [published]
   workflow_dispatch:
 
 permissions:
