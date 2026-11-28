@@ -18,6 +18,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -38,6 +39,12 @@ def app(path, title_id=None):
     info = {'CFBundleIdentifier': f'com.example.{path.stem.lower()}'}
     if title_id: info['DMTitleID'] = title_id
     with open(path / 'Contents/Info.plist', 'wb') as f: plistlib.dump(info, f)
+
+
+def ipa(path, title_id):   # an IPA as the build makes it: Payload/<name>.app/Info.plist with DMTitleID
+    with zipfile.ZipFile(path, 'w') as z:
+        z.writestr(f'Payload/{path.stem}.app/Info.plist', plistlib.dumps({'CFBundleIdentifier': f'com.example.{path.stem.lower()}', 'DMTitleID': title_id}))
+        z.writestr(f'Payload/{path.stem}.app/main', b'x' * 1000)
 
 
 def run(*argv):   # (exit code, stdout, stderr) of the tool, in this process
@@ -310,6 +317,17 @@ class Builds(Base):   # a builds folder (AETHERNX_BUILDS, Studio's Settings → 
         (work / 'logs').mkdir(); os.symlink('../extract', work / 'logs/link')
         app(self.folder / 'My Game.app', self.TID); (self.folder / 'My Game.app/Contents/MacOS').mkdir(); (self.folder / 'My Game.app/Contents/MacOS/host').write_bytes(b'x' * 5000)
         return work
+
+    def test_move_build_takes_only_this_games_ipas(self):   # a library folder can hold the IPAs of other games beside this one's packages
+        work = self.folder / f'{self.TID}_build'
+        (work / 'extract/v0').mkdir(parents=True); (work / 'extract/v0/RomFS.img').write_bytes(os.urandom(1000))
+        ipa(self.folder / 'MyGame.ipa', self.TID); ipa(self.folder / 'OtherGame.ipa', '0100000000AA0000'); (self.folder / 'Broken.ipa').write_bytes(b'not a zip')
+        self.assertEqual((cli.ipa_title(self.folder / 'MyGame.ipa'), cli.ipa_title(self.folder / 'Broken.ipa')), (self.TID, ''))
+        code, _, err = run('move-build', str(self.folder))
+        self.assertEqual(code, 0, err)
+        self.assertTrue((self.drive / 'My_ Game' / 'MyGame.ipa').is_file()); self.assertFalse((self.folder / 'MyGame.ipa').exists())
+        self.assertTrue((self.folder / 'OtherGame.ipa').is_file()); self.assertTrue((self.folder / 'Broken.ipa').is_file())
+        self.assertFalse((self.drive / 'My_ Game' / 'OtherGame.ipa').exists())
 
     def test_a_new_build_goes_to_the_builds_folder(self):
         g = self.game()
