@@ -60,7 +60,12 @@ struct SidebarView: View {
                 }
                 .tag(SidebarItem.page(.devices))
                 PageRow(title: "Updates", systemImage: "arrow.down.circle") {
-                    if model.updates.hasUpdates { Circle().fill(.tint).frame(width: 8, height: 8).help("An update is ready") }
+                    if model.updates.hasUpdates {
+                        Circle().fill(.tint).frame(width: 8, height: 8)
+                            .help("An update is ready")
+                            .accessibilityElement()
+                            .accessibilityLabel("An update is ready")   // VoiceOver reads the dot, which shows no text of its own
+                    }
                 }
                 .tag(SidebarItem.page(.updates))
                 PageRow(title: "Settings", systemImage: "gearshape") { EmptyView() }

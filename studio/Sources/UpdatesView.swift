@@ -133,12 +133,16 @@ private struct AppUpdateCard: View {
         }
     }
 
-    /// The release's notes as written (Markdown), with its headings as plain lines.
+    /// The release's notes as written (Markdown), with its headings as plain lines, its list items as bullets and its rules left out: the inline
+    /// syntax read here would show "- " and "---" as they are.
     static func notes(_ markdown: String) -> AttributedString {
-        let cleaned = markdown.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+        let cleaned = markdown.split(separator: "\n", omittingEmptySubsequences: false).compactMap { line -> String? in
             var l = String(line)
             while l.hasPrefix("#") { l.removeFirst() }
-            return l.trimmingCharacters(in: .whitespaces)
+            l = l.trimmingCharacters(in: .whitespaces)
+            if l.count >= 3, l.allSatisfy({ $0 == "-" || $0 == "*" || $0 == "_" }) { return nil }
+            if l.hasPrefix("- ") || l.hasPrefix("* ") { l = "• " + l.dropFirst(2) }
+            return l
         }.joined(separator: "\n")
         return (try? AttributedString(markdown: cleaned, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(cleaned)
     }
