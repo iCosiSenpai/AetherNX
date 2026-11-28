@@ -1,9 +1,18 @@
 # Changelog
 
-## Unreleased
+## 1.2.0
+
+The first download since 1.0.0: 1.1.0 was prepared but never published, so its changes (below) reach you with this one. New here: a live link between Studio and AetherNX Companion, Restore in the companion, and the fixes of an audit of the app.
 
 - **A live link between Studio and AetherNX Companion** (first version, not yet tried on a device). Turn on AetherNX Companion on Studio's Devices page and pair an iPhone or iPad with the six digits it shows: the companion then follows the Mac's builds and installs as they run ("Step 3 of 7: Signing for your device"), and its *Install from the Mac* asks the Mac to install a game on that device. The Mac asks for your OK, until you choose Always Allow for that device. The link stays on the local network (Bonjour, TLS with a pre-shared key) and is off until you turn it on ([the companion](docs/companion.md#the-links-first-version)).
 - **Restore a backup from the companion.** In AetherNX Companion, each backup in a game's Saves has **Restore**: it puts the backup back as the save in iCloud Drive, after copying the save it replaces to Backups. The engine takes a restored save for a change made at the time of the restore, so a device's own save no longer replaces it for having newer files: each device brings it in at the game's next start and keeps its own in its backups, and a device with progress it has not sent asks which one to play. The rule is in game apps built from this version on.
+
+- **Two more games validated on the current shader chain** (`a5e7fb6e4fa4`): The Legend of Zelda: Skyward Sword HD and Tears of the Kingdom, quick and full runs on an M5 Mac ([Skyward Sword HD](dm/games/01002DA013484000/README.md), [Tears of the Kingdom](dm/games/0100F2C0115B6000/README.md)).
+- **Stop during an install stops it all.** Stopping an install from Studio could leave xcodebuild, the build script or devicectl running and writing to the build folder after the job said it had stopped; the next queued job then started on the same folder.
+- **Moving a build moves only that game's IPAs.** `move-build` (and *Move* on a game's page) also took the IPAs of other games kept in the same library folder.
+- **A game's page reads whole.** The iPhone or iPad install line wraps instead of cutting the device's name and the date in the middle, and *Built for* says iPhone or iPad. Release notes on the Updates page show bullets.
+- **One note in a game's folder**, whatever language Studio was in when it wrote it (an Italian Studio and an English one each added theirs).
+- **Releases can be notarized with an App Store Connect API key** (`studio/release.sh`, `AETHERNX_NOTARY_KEY`), which also works while the Mac's screen is locked.
 
 ## 1.1.0
 
